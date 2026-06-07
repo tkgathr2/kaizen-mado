@@ -1,6 +1,8 @@
 "use client";
 
 import { Suspense, useEffect, useRef, useState } from "react";
+// 二重送信ガード：React state は非同期更新のため、連打で状態更新前に再発火し得る。
+// ref は同期更新なので「実行中」を確実にブロックでき、重複起票/重複送信を防ぐ。
 import { useSearchParams } from "next/navigation";
 import { resolveSystem } from "@/lib/systems";
 import type { ChatMessage, Ticket } from "@/lib/types";
@@ -27,6 +29,7 @@ function KaizenMado() {
   const [doneId, setDoneId] = useState<string>("");
   const [error, setError] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
+  const inFlightRef = useRef(false); // send/submit 実行中フラグ（同期・二重発火防止）
 
   // 初期挨拶（ローカル生成。履歴の一部としてモデルにも渡る）
   useEffect(() => {
@@ -41,7 +44,8 @@ function KaizenMado() {
 
   async function send() {
     const text = input.trim();
-    if (!text || busy || status !== "chatting") return;
+    if (!text || busy || status !== "chatting" || inFlightRef.current) return;
+    inFlightRef.current = true;
     setError("");
     setInput("");
     const next: ChatMessage[] = [...messages, { role: "user", content: text }];
@@ -72,11 +76,13 @@ function KaizenMado() {
       ]);
     } finally {
       setBusy(false);
+      inFlightRef.current = false;
     }
   }
 
   async function submit() {
-    if (!ticket || status !== "chatting") return;
+    if (!ticket || status !== "chatting" || inFlightRef.current) return;
+    inFlightRef.current = true;
     setStatus("submitting");
     setError("");
     try {
@@ -96,6 +102,8 @@ function KaizenMado() {
     } catch (e) {
       setError((e as Error).message);
       setStatus("chatting");
+    } finally {
+      inFlightRef.current = false;
     }
   }
 

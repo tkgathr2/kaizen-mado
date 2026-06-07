@@ -63,9 +63,11 @@ export function fallbackTurn(system: string | null, history: ChatMessage[]): Tur
   const combined = userTexts.join(" / ");
   const type = guessType(combined);
   const importance = guessImportance(combined);
+  // 件名は「最初の実質的な発話」を優先（最後の発話は「はい送って」等で件名に不適切なため）。
+  const titleSource =
+    userTexts.find((t) => t.replace(/\s+/g, "").length >= 4) || userTexts[0] || lastUser;
   const title =
-    (lastUser || userTexts[0] || "改善のご要望").replace(/\s+/g, " ").slice(0, 28) ||
-    "改善のご要望";
+    (titleSource || "改善のご要望").replace(/\s+/g, " ").slice(0, 28) || "改善のご要望";
   const detail = `${sys}についてのご意見。${userTexts
     .map((t, i) => `(${i + 1}) ${t}`)
     .join(" ")}`.slice(0, 1500);
