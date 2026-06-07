@@ -206,8 +206,14 @@ function KaizenMado() {
             rows={1}
             disabled={busy || status === "submitting"}
           />
-          <button className="send" onClick={send} disabled={busy || !input.trim()}>
-            送信
+          <button
+            className="send"
+            onClick={send}
+            disabled={busy || !input.trim()}
+            aria-label="送信"
+            title="送信"
+          >
+            ↑
           </button>
         </div>
       )}
