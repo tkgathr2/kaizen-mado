@@ -1,0 +1,89 @@
+// ── POST /api/process ── 受付 → 議論中 → GO待ち（第2段=内部処理） ──
+// 「受付」状態のチケットを順に処理し、CTO Agent Lab の議論結果をページに追記して
+// 「GO待ち」へ進める。誰にも送信しない（GO伺いはドラフト生成まで／実送信しない）。
+// CRON_SECRET が設定されていれば x-cron-secret 一致を要求（内部/cron保護）。
+import { NextRequest, NextResponse } from "next/server";
+import {
+  fetchTicketsByState,
+  updateTicketState,
+  appendDiscussionBlocks,
+  setTicketAssignee,
+} from "@/lib/tickets";
+import { discussTicket } from "@/lib/discuss";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+function checkSecret(req: NextRequest): boolean {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) {
+    // 本番で未設定＝fail-closed。このルートは Anthropic 呼び出し（課金）と
+    // Notion 書き換えを誘発するため、本番では鍵未設定の野ざらしを許さない。
+    // 開発（NODE_ENV!==production）では未設定でも通す。
+    return process.env.NODE_ENV !== "production";
+  }
+  return req.headers.get("x-cron-secret") === secret;
+}
+
+export async function POST(req: NextRequest) {
+  if (!checkSecret(req)) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
+  let limit = 5;
+  try {
+    const body = await req.json().catch(() => ({}));
+    if (body && typeof body.limit === "number" && body.limit > 0) {
+      limit = Math.floor(body.limit);
+    }
+  } catch {
+    // body 任意：なくてよい
+  }
+
+  try {
+    const tickets = await fetchTicketsByState("受付", limit);
+    const processed: { ticketId: string; recommendation: string; source: string }[] = [];
+    const errors: { ticketId: string; error: string }[] = [];
+
+    for (const ticket of tickets) {
+      try {
+        // 議論中へ → 議論 → 結果追記 → 担当付与 → GO待ちへ
+        await updateTicketState(ticket.pageId, "議論中");
+        const d = await discussTicket(ticket);
+        await appendDiscussionBlocks(ticket.pageId, [
+          { heading: "方針", body: d.houshin },
+          { heading: "工数見積", body: d.kousuu },
+          { heading: "リスク", body: d.risks.length ? d.risks.map((r) => `・${r}`).join("\n") : "（特になし）" },
+          { heading: "推奨", body: d.recommendation },
+          { heading: "GO伺いドラフト（未送信）", body: d.goDraft },
+        ]);
+        await setTicketAssignee(ticket.pageId, "CTO Agent Lab");
+        await updateTicketState(ticket.pageId, "GO待ち");
+        processed.push({
+          ticketId: ticket.ticketId,
+          recommendation: d.recommendation,
+          source: d.source,
+        });
+      } catch (err) {
+        // 1件失敗しても他を続行する
+        errors.push({
+          ticketId: ticket.ticketId,
+          error: (err as Error).message,
+        });
+      }
+    }
+
+    return NextResponse.json({
+      ok: true,
+      count: processed.length,
+      processed,
+      ...(errors.length ? { errors } : {}),
+    });
+  } catch (err) {
+    console.error("[process] failed:", (err as Error).message);
+    return NextResponse.json(
+      { ok: false, error: "処理に失敗しました。" },
+      { status: 500 }
+    );
+  }
+}
