@@ -1,15 +1,20 @@
+/* カイゼン窓口 — Claude (claude.ai) 風デザイン
+   温かいクリーム背景／クレイ(コーラル)アクセント／アシスタントはバブル無しのプレーンテキスト
+   ／ニュートラルなユーザーバブル／丸く広い入力欄／セリフ見出し */
 :root {
-  --bg: #f4f6f8;
-  --panel: #ffffff;
-  --ink: #1f2733;
-  --muted: #6b7785;
-  --brand: #2f6df0;
+  --bg: #faf9f5;          /* 温かいオフホワイト（Claudeのキャンバス） */
+  --panel: transparent;   /* 会話エリアは背景に溶け込ませる */
+  --ink: #2b2924;         /* 純黒でなく温かいダークブラウン */
+  --muted: #83807a;       /* くすんだグレー */
+  --brand: #d97757;       /* Claudeのクレイ／コーラル */
+  --brand-hover: #c45f3f;
   --brand-ink: #ffffff;
-  --bot: #eef2f7;
-  --line: #e3e8ee;
-  --ok: #16a34a;
-  --warn: #b45309;
-  --shadow: 0 6px 24px rgba(20, 33, 56, 0.08);
+  --user-bubble: #ece9e0; /* ユーザー発言のニュートラルな温かいバブル */
+  --line: #e7e3d9;        /* 罫線 */
+  --field: #ffffff;
+  --ok: #3f7a3f;
+  --warn: #9a5a16;
+  --shadow: 0 1px 2px rgba(60, 50, 35, 0.04), 0 8px 24px rgba(60, 50, 35, 0.06);
 }
 
 * { box-sizing: border-box; }
@@ -19,50 +24,57 @@ html, body {
   padding: 0;
   background: var(--bg);
   color: var(--ink);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Kaku Gothic ProN",
-    "Yu Gothic", Meiryo, sans-serif;
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "Hiragino Kaku Gothic ProN", "Yu Gothic", Meiryo, sans-serif;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 .app {
-  max-width: 720px;
+  max-width: 740px;
   margin: 0 auto;
   min-height: 100dvh;
   display: flex;
   flex-direction: column;
-  padding: 0 12px;
+  padding: 0 20px;
 }
 
+/* ───── ヘッダー ───── */
 .header {
-  padding: 18px 8px 12px;
+  padding: 26px 4px 16px;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
 }
 .header .logo {
-  width: 38px; height: 38px; border-radius: 10px;
+  width: 40px; height: 40px; border-radius: 11px;
   background: var(--brand); color: var(--brand-ink);
   display: grid; place-items: center; font-size: 20px; flex: none;
+  box-shadow: 0 2px 8px rgba(217, 119, 87, 0.28);
 }
-.header h1 { font-size: 17px; margin: 0; line-height: 1.2; }
-.header .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.header h1 {
+  font-family: "Tiempos Text", "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", Georgia, serif;
+  font-size: 21px; margin: 0; line-height: 1.2; font-weight: 600; letter-spacing: 0.01em;
+}
+.header .sub { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
 .header .pill {
   margin-left: auto; font-size: 12px; color: var(--brand);
-  background: #eaf1fe; border: 1px solid #d6e4fd; padding: 4px 10px; border-radius: 999px;
-  white-space: nowrap;
+  background: #fbeee8; border: 1px solid #f1d9cd; padding: 5px 12px; border-radius: 999px;
+  white-space: nowrap; font-weight: 500;
 }
 
+/* ───── 会話エリア ───── */
 .chat {
   flex: 1;
   background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  box-shadow: var(--shadow);
-  padding: 16px;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 10px 0 20px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 22px;
 }
 
 .row { display: flex; }
@@ -70,62 +82,103 @@ html, body {
 .row.assistant { justify-content: flex-start; }
 
 .bubble {
-  max-width: 84%;
-  padding: 10px 14px;
-  border-radius: 14px;
-  font-size: 15px;
-  line-height: 1.6;
+  font-size: 16px;
+  line-height: 1.75;
   white-space: pre-wrap;
   word-break: break-word;
 }
-.row.assistant .bubble { background: var(--bot); border-bottom-left-radius: 4px; }
-.row.user .bubble { background: var(--brand); color: var(--brand-ink); border-bottom-right-radius: 4px; }
 
-.typing { color: var(--muted); font-size: 14px; padding: 6px 4px; }
-
-.confirm-card {
-  border: 1px dashed var(--brand);
-  background: #f7faff;
-  border-radius: 12px;
-  padding: 12px 14px;
-  font-size: 14px;
+/* アシスタント＝バブル無しのプレーンテキスト（Claude流） */
+.row.assistant .bubble {
+  max-width: 100%;
+  background: transparent;
+  color: var(--ink);
+  padding: 2px 2px;
 }
-.confirm-card dl { margin: 0; display: grid; grid-template-columns: 76px 1fr; gap: 4px 10px; }
+
+/* ユーザー＝ニュートラルな温かいバブル（青を使わない） */
+.row.user .bubble {
+  max-width: 80%;
+  background: var(--user-bubble);
+  color: var(--ink);
+  padding: 12px 16px;
+  border-radius: 18px;
+  border-bottom-right-radius: 6px;
+}
+
+.typing { color: var(--muted); font-size: 14px; padding: 2px 2px; font-style: italic; }
+
+/* ───── 確認カード ───── */
+.confirm-card {
+  border: 1px solid var(--line);
+  background: #fffdf8;
+  border-radius: 14px;
+  padding: 16px 18px;
+  font-size: 14.5px;
+  box-shadow: var(--shadow);
+}
+.confirm-card dl { margin: 0; display: grid; grid-template-columns: 76px 1fr; gap: 8px 14px; }
 .confirm-card dt { color: var(--muted); }
 .confirm-card dd { margin: 0; }
 
+/* ───── 完了 ───── */
 .done {
-  border: 1px solid #bbf7d0; background: #f0fdf4; color: #14532d;
-  border-radius: 12px; padding: 14px; font-size: 15px; text-align: center;
+  border: 1px solid #d8e8d2; background: #f3f8f0; color: #2c4a2c;
+  border-radius: 14px; padding: 18px; font-size: 15px; text-align: center;
 }
-.done .kz { font-weight: 700; font-size: 18px; }
+.done .kz { font-weight: 700; font-size: 19px; color: var(--brand); }
 
+/* ───── 入力欄（Claude流の丸く広いコンポーザー） ───── */
 .composer {
-  display: flex; gap: 8px; padding: 12px 4px 18px; align-items: flex-end;
+  display: flex; gap: 10px; padding: 10px 0 22px; align-items: flex-end;
 }
 .composer textarea {
-  flex: 1; resize: none; border: 1px solid var(--line); border-radius: 12px;
-  padding: 11px 13px; font-size: 15px; font-family: inherit; line-height: 1.5;
-  max-height: 140px; background: #fff; color: var(--ink);
+  flex: 1; resize: none; border: 1px solid var(--line); border-radius: 20px;
+  padding: 14px 18px; font-size: 16px; font-family: inherit; line-height: 1.55;
+  max-height: 160px; background: var(--field); color: var(--ink);
+  box-shadow: var(--shadow);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-.composer textarea:focus { outline: 2px solid #cfe0fd; border-color: var(--brand); }
+.composer textarea::placeholder { color: #aaa69e; }
+.composer textarea:focus {
+  outline: none; border-color: var(--brand);
+  box-shadow: 0 0 0 3px rgba(217, 119, 87, 0.14), var(--shadow);
+}
 
-button.send, button.primary {
+button.send {
   border: none; background: var(--brand); color: #fff; font-weight: 600;
-  padding: 11px 18px; border-radius: 12px; font-size: 15px; cursor: pointer; flex: none;
+  width: 48px; height: 48px; border-radius: 50%; font-size: 19px; cursor: pointer; flex: none;
+  display: grid; place-items: center; line-height: 1;
+  transition: background 0.15s ease, transform 0.05s ease;
+  box-shadow: 0 2px 8px rgba(217, 119, 87, 0.3);
 }
-button.send:disabled, button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
+button.send:hover:not(:disabled) { background: var(--brand-hover); }
+button.send:active:not(:disabled) { transform: scale(0.94); }
+
+button.primary {
+  border: none; background: var(--brand); color: #fff; font-weight: 600;
+  padding: 12px 22px; border-radius: 999px; font-size: 15px; cursor: pointer; flex: none;
+  transition: background 0.15s ease;
+}
+button.primary:hover:not(:disabled) { background: var(--brand-hover); }
+button.send:disabled, button.primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
 button.ghost {
   border: 1px solid var(--line); background: #fff; color: var(--muted);
-  padding: 11px 16px; border-radius: 12px; font-size: 15px; cursor: pointer;
+  padding: 12px 20px; border-radius: 999px; font-size: 15px; cursor: pointer;
+  transition: background 0.15s ease;
 }
+button.ghost:hover:not(:disabled) { background: #f5f3ec; }
 
-.send-actions { display: flex; gap: 8px; padding: 8px 4px; align-items: center; }
+.send-actions { display: flex; gap: 10px; padding: 10px 0; align-items: center; }
 .reporter {
-  display: flex; align-items: center; gap: 8px; padding: 4px 4px 0; font-size: 13px; color: var(--muted);
+  display: flex; align-items: center; gap: 10px; padding: 6px 0 0; font-size: 13px; color: var(--muted);
 }
 .reporter input {
-  border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 14px;
+  border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; font-size: 14px;
+  background: var(--field); color: var(--ink);
 }
-.error { color: #b91c1c; font-size: 13px; padding: 4px; }
-.footer { text-align: center; color: var(--muted); font-size: 11px; padding: 8px 0 14px; }
+.reporter input:focus { outline: none; border-color: var(--brand); }
+
+.error { color: #b4452b; font-size: 13px; padding: 6px 2px; }
+.footer { text-align: center; color: var(--muted); font-size: 11.5px; padding: 10px 0 18px; }
