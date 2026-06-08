@@ -1,8 +1,10 @@
 // ── POST /api/submit ── confirm 済みの ticket を受けて Notion 起票
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@/auth";
 import { createTicket } from "@/lib/notion";
 import { memorizeToKnowhow } from "@/lib/knowhow";
 import { normalizeSystemForTicket } from "@/lib/systems";
+import { isAuthEnabled } from "@/lib/authz";
 import type { Ticket, TicketType, Importance } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -38,7 +40,14 @@ export async function POST(req: NextRequest) {
   if (!ticket) {
     return NextResponse.json({ error: "ticket is required" }, { status: 400 });
   }
-  const reporter = typeof body?.reporter === "string" ? body.reporter : null;
+  // 起票者はサーバ側でセッションから確定（クライアント入力より優先・なりすまし防止）。
+  // fail-safe：鍵未投入（認証OFF）時は auth() を呼ばず従来どおり body.reporter or null。
+  // これにより鍵が無い間も起票は確実に動く（auth() の例外で窓口を壊さない）。
+  let reporter = typeof body?.reporter === "string" ? body.reporter : null;
+  if (isAuthEnabled()) {
+    const session = await auth();
+    reporter = session?.user?.name || session?.user?.email || reporter;
+  }
 
   try {
     const result = await createTicket(ticket, reporter);
