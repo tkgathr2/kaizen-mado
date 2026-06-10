@@ -1,14 +1,15 @@
 # ── カイゼン実行ワークフロー（対象システムを実際に直す） ──
 # kaizen-mado の /api/execute から repository_dispatch(event_type: kaizen_execute) で起動。
-# client_payload を受けて、対象リポを Claude で改修 → PR → 3条件ゲート → 自動マージ → ヘルス → callback。
+# client_payload を受けて、対象リポを Claude で改修 → PR作成 → callback。
+# 【PRレビュー型】AIはPRを作るところまで。本番マージは人（社長）が差分を見て1クリック。
 #
-# 必要なシークレット（社長の一手）:
+# 必要なシークレット:
 #   ANTHROPIC_API_KEY   … Claude 実装用
-#   TARGET_REPO_PAT     … 対象リポ(tkgathr2/*)へ push / PR / merge できる PAT（repo, workflow スコープ）
+#   TARGET_REPO_PAT     … 対象リポ(tkgathr2/*)へ push / PR できる PAT（repo, workflow スコープ）
 #   CRON_SECRET         … kaizen-mado /api/execute/callback の認証（kaizen-mado と同値）
 #
-# 安全：autoマージは「diff<50行 かつ 禁止パス非接触 かつ CI green」の3条件を満たした時だけ。
-# 1つでも欠ければ needs-review ラベルを付けて人の確認へ回す（callback result=review）。
+# 安全：AIは本番に自動マージしない。差分が小さく安全でも必ずPRで止め、人がレビューしてマージ。
+# Post-gate は参考情報（差分行数・禁止パス接触）をPR本文に残すために使う。
 name: kaizen-execute
 
 on:
@@ -111,53 +112,24 @@ jobs:
             --body "カイゼンくん自動改修（${TICKET_ID}）。判定: ${DETAIL}")
           echo "url=$PR_URL" >> "$GITHUB_OUTPUT"
 
-      - name: CI green 待ち＋自動マージ（autoのみ）
-        id: merge
-        if: steps.gate.outputs.verdict == 'auto'
-        env:
-          GH_TOKEN: ${{ secrets.TARGET_REPO_PAT }}
-          PR_URL: ${{ steps.pr.outputs.url }}
-        run: |
-          # CIがあれば green を待つ。無ければそのままマージ。失敗・タイムアウトは review に落とす。
-          set +e
-          gh pr checks "$PR_URL" --repo "$TARGET_REPO" --watch --interval 20 --fail-fast
-          CHECK=$?
-          set -e
-          if [ "$CHECK" -ne 0 ]; then
-            echo "verdict=review" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          gh pr merge "$PR_URL" --repo "$TARGET_REPO" --squash --delete-branch
-          echo "verdict=merged" >> "$GITHUB_OUTPUT"
+      # ── PRレビュー型：本番への自動マージ・自動デプロイはしない ──
+      # AIが直してPRを作るところまで。マージ＝本番反映は人（社長）が差分を見て1クリック。
+      # （将来フル自動へ昇格する場合のみ、ここに gh pr merge ＋ヘルス確認のステップを足す）
 
-      - name: Health check（任意）
-        if: steps.merge.outputs.verdict == 'merged' && env.HEALTH_URL != ''
-        run: |
-          for i in $(seq 1 15); do
-            CODE=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" || echo 000)
-            echo "health try $i: $CODE"
-            [ "$CODE" = "200" ] && exit 0
-            sleep 20
-          done
-          echo "health not 200（デプロイ反映待ちの可能性）"
-
-      - name: Callback to kaizen-mado
+      - name: Callback to kaizen-mado（PRレビュー型）
         if: always()
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
-          MERGE_VERDICT: ${{ steps.merge.outputs.verdict }}
           GATE_VERDICT: ${{ steps.gate.outputs.verdict }}
           PR_URL: ${{ steps.pr.outputs.url }}
           DETAIL: ${{ steps.gate.outputs.detail }}
         run: |
-          # 最終判定：merged > review > failed
-          VERDICT="$MERGE_VERDICT"
-          [ -z "$VERDICT" ] && VERDICT="$GATE_VERDICT"
-          case "$VERDICT" in
-            merged) RESULT="merged" ;;
-            auto|review) RESULT="review" ;;
-            *) RESULT="failed" ;;
-          esac
+          # PRが作れたら必ず review（人のレビュー待ち・PR URL付き）。変更ゼロ/失敗は failed。
+          if [ "$GATE_VERDICT" = "failed" ] || [ -z "$PR_URL" ]; then
+            RESULT="failed"
+          else
+            RESULT="review"
+          fi
           curl -s -X POST "$CALLBACK_URL" \
             -H "content-type: application/json" \
             -H "x-cron-secret: $CRON_SECRET" \
