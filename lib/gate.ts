@@ -1,0 +1,60 @@
+// ── 実行前ゲート（preGate）＝自動で着手してよいか判定する ──
+// 設計v0.1 §5/§10：ハイブリッド＝作るのは自動だが、危険なものは「社長案件」へエスカレ。
+// 1つでもエスカレ要因があれば mode="escalate"（②本番投入GO＝社長判断で止める）。
+// ここで弾けるのは "着手前に分かる" 危険（対象未確定・自動未許可・PII/金額の気配・新機能の大物）。
+// diff行数やCI green、禁止パス接触は "コード生成後" にActionsワークフロー側のゲートで判定する。
+import type { TicketRow } from "./tickets";
+import type { TargetMeta } from "./targets";
+
+export interface GateDecision {
+  mode: "auto" | "escalate";
+  reasons: string[];
+}
+
+// 件名・内容にこれが含まれたら、機微（金額・個人情報・破壊的操作）として人の確認へ。
+const SENSITIVE_KEYWORDS = [
+  "金額",
+  "支払",
+  "請求",
+  "入金",
+  "振込",
+  "決済",
+  "課金",
+  "個人情報",
+  "氏名",
+  "電話",
+  "メールアドレス",
+  "パスワード",
+  "認証",
+  "ログイン",
+  "削除",
+  "全消し",
+  "本番db",
+  "マイグレーション",
+];
+
+/** 着手前ゲート。自動可なら "auto"、危険要因があれば "escalate"（理由つき）。 */
+export function preGate(ticket: TicketRow, target: TargetMeta | null): GateDecision {
+  const reasons: string[] = [];
+
+  if (!target) {
+    reasons.push("対象システムが未定義（マッピングなし）");
+    return { mode: "escalate", reasons };
+  }
+  if (!target.autoEligible) {
+    reasons.push(`「${target.system}」は自動実行が未許可（段階リリース・既定OFF）`);
+  }
+  if (!target.repo) {
+    reasons.push(`「${target.system}」のリポジトリが未確定`);
+  }
+  if (ticket.type === "新機能") {
+    reasons.push("新機能は影響範囲が大きいため人の確認を推奨");
+  }
+  const hay = `${ticket.title}\n${ticket.detail}`.toLowerCase();
+  const hit = SENSITIVE_KEYWORDS.find((k) => hay.includes(k.toLowerCase()));
+  if (hit) {
+    reasons.push(`機微キーワード「${hit}」を含む（金額/個人情報/破壊的操作の可能性）`);
+  }
+
+  return reasons.length > 0 ? { mode: "escalate", reasons } : { mode: "auto", reasons: [] };
+}

@@ -1,0 +1,160 @@
+# ── カイゼン実行ワークフロー（対象システムを実際に直す） ──
+# kaizen-mado の /api/execute から repository_dispatch(event_type: kaizen_execute) で起動。
+# client_payload を受けて、対象リポを Claude で改修 → PR → 3条件ゲート → 自動マージ → ヘルス → callback。
+#
+# 必要なシークレット（社長の一手）:
+#   ANTHROPIC_API_KEY   … Claude 実装用
+#   TARGET_REPO_PAT     … 対象リポ(tkgathr2/*)へ push / PR / merge できる PAT（repo, workflow スコープ）
+#   CRON_SECRET         … kaizen-mado /api/execute/callback の認証（kaizen-mado と同値）
+#
+# 安全：autoマージは「diff<50行 かつ 禁止パス非接触 かつ CI green」の3条件を満たした時だけ。
+# 1つでも欠ければ needs-review ラベルを付けて人の確認へ回す（callback result=review）。
+name: kaizen-execute
+
+on:
+  repository_dispatch:
+    types: [kaizen_execute]
+
+# 同時実行は1チケット1本に直列化（取り違え防止）。
+concurrency:
+  group: kaizen-execute-${{ github.event.client_payload.ticketId }}
+  cancel-in-progress: false
+
+jobs:
+  execute:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      TICKET_ID: ${{ github.event.client_payload.ticketId }}
+      PAGE_ID: ${{ github.event.client_payload.pageId }}
+      SYSTEM: ${{ github.event.client_payload.system }}
+      TARGET_REPO: ${{ github.event.client_payload.targetRepo }}
+      HEALTH_URL: ${{ github.event.client_payload.healthUrl }}
+      CALLBACK_URL: ${{ github.event.client_payload.callbackUrl }}
+      SPEC: ${{ github.event.client_payload.spec }}
+      FORBIDDEN: ${{ join(github.event.client_payload.forbiddenPaths, ',') }}
+    steps:
+      - name: Checkout target repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.TARGET_REPO }}
+          token: ${{ secrets.TARGET_REPO_PAT }}
+          fetch-depth: 0
+
+      - name: Create work branch
+        id: branch
+        run: |
+          BR="kaizen/${TICKET_ID,,}-$(date +%s)"
+          git config user.name "kaizen-bot"
+          git config user.email "kaizen-bot@users.noreply.github.com"
+          git checkout -b "$BR"
+          echo "branch=$BR" >> "$GITHUB_OUTPUT"
+
+      - name: Implement with Claude
+        uses: anthropics/claude-code-base-action@beta
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            次の「カイゼン実装指示」に従って、このリポジトリに最小差分の変更を加えてください。
+            禁止パス（${{ env.FORBIDDEN }}）には触れないでください。テスト・型・lintを壊さないこと。
+            変更後はビルド/テストが通る状態にしてください。
+
+            ${{ env.SPEC }}
+
+      - name: Post-gate（3条件のうち diff行数・禁止パスを判定）
+        id: gate
+        run: |
+          git add -A
+          # 変更が無ければ failed 扱い
+          if git diff --cached --quiet; then
+            echo "verdict=failed" >> "$GITHUB_OUTPUT"
+            echo "detail=変更が生成されませんでした" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          LINES=$(git diff --cached --numstat | awk '{a+=$1; d+=$2} END {print a+d}')
+          echo "diff lines: $LINES"
+          TOUCHED=$(git diff --cached --name-only)
+          HIT=""
+          IFS=',' read -ra PATHS <<< "$FORBIDDEN"
+          for p in "${PATHS[@]}"; do
+            [ -z "$p" ] && continue
+            if echo "$TOUCHED" | grep -qi -- "$p"; then HIT="$HIT $p"; fi
+          done
+          if [ -n "$HIT" ]; then
+            echo "verdict=review" >> "$GITHUB_OUTPUT"
+            echo "detail=禁止パス接触:$HIT" >> "$GITHUB_OUTPUT"
+          elif [ "${LINES:-0}" -ge 50 ]; then
+            echo "verdict=review" >> "$GITHUB_OUTPUT"
+            echo "detail=差分が大きい（${LINES}行 >= 50）" >> "$GITHUB_OUTPUT"
+          else
+            echo "verdict=auto" >> "$GITHUB_OUTPUT"
+            echo "detail=diff ${LINES}行・禁止パス非接触" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit & push & PR
+        id: pr
+        if: steps.gate.outputs.verdict == 'auto' || steps.gate.outputs.verdict == 'review'
+        env:
+          GH_TOKEN: ${{ secrets.TARGET_REPO_PAT }}
+        run: |
+          git commit -q -m "fix(kaizen): ${TICKET_ID} 自動改修
+
+          ${{ steps.gate.outputs.detail }}"
+          git push -u origin "${{ steps.branch.outputs.branch }}"
+          PR_URL=$(gh pr create --repo "$TARGET_REPO" \
+            --head "${{ steps.branch.outputs.branch }}" \
+            --title "fix(kaizen): ${TICKET_ID} 自動改修" \
+            --body "カイゼンくん自動改修（${TICKET_ID}）。判定: ${{ steps.gate.outputs.detail }}")
+          echo "url=$PR_URL" >> "$GITHUB_OUTPUT"
+
+      - name: CI green 待ち＋自動マージ（autoのみ）
+        id: merge
+        if: steps.gate.outputs.verdict == 'auto'
+        env:
+          GH_TOKEN: ${{ secrets.TARGET_REPO_PAT }}
+        run: |
+          # CIがあれば green を待つ。無ければそのままマージ。失敗・タイムアウトは review に落とす。
+          set +e
+          gh pr checks "${{ steps.pr.outputs.url }}" --repo "$TARGET_REPO" --watch --interval 20 --fail-fast
+          CHECK=$?
+          set -e
+          if [ "$CHECK" -ne 0 ]; then
+            echo "verdict=review" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          gh pr merge "${{ steps.pr.outputs.url }}" --repo "$TARGET_REPO" --squash --delete-branch
+          echo "verdict=merged" >> "$GITHUB_OUTPUT"
+
+      - name: Health check（任意）
+        if: steps.merge.outputs.verdict == 'merged' && env.HEALTH_URL != ''
+        run: |
+          for i in $(seq 1 15); do
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" || echo 000)
+            echo "health try $i: $CODE"
+            [ "$CODE" = "200" ] && exit 0
+            sleep 20
+          done
+          echo "health not 200（デプロイ反映待ちの可能性）"
+
+      - name: Callback to kaizen-mado
+        if: always()
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          # 最終判定：merged > review > failed
+          VERDICT="${{ steps.merge.outputs.verdict }}"
+          [ -z "$VERDICT" ] && VERDICT="${{ steps.gate.outputs.verdict }}"
+          case "$VERDICT" in
+            merged) RESULT="merged" ;;
+            auto|review) RESULT="review" ;;
+            *) RESULT="failed" ;;
+          esac
+          PR_URL="${{ steps.pr.outputs.url }}"
+          DETAIL="${{ steps.gate.outputs.detail }}"
+          curl -s -X POST "$CALLBACK_URL" \
+            -H "content-type: application/json" \
+            -H "x-cron-secret: $CRON_SECRET" \
+            -d "$(jq -n --arg t "$TICKET_ID" --arg p "$PAGE_ID" --arg s "$SYSTEM" \
+                   --arg r "$RESULT" --arg u "$PR_URL" --arg d "$DETAIL" \
+                   '{ticketId:$t,pageId:$p,system:$s,result:$r,prUrl:$u,detail:$d}')"
