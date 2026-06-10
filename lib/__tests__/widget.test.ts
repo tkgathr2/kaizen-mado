@@ -37,6 +37,16 @@ describe("widget.js", () => {
     expect(src).toContain("https://kaizen.takagi.bz");
   });
 
+  it("マスコット画像（フクロウ博士）は窓口と同じオリジンから読む", () => {
+    expect(src).toContain('origin + "/kaizen-kun.png"');
+  });
+
+  it("middleware がマスコット画像を認証除外している（埋め込み先でアイコンが消える事故防止）", () => {
+    const mw = readFileSync(path.resolve(__dirname, "../../middleware.ts"), "utf-8");
+    expect(mw).toContain("kaizen-kun.png");
+    expect(mw).toContain("widget.js");
+  });
+
   it("新しいタブで開く導線がある（iframe内で認証が通らない環境のフォールバック）", () => {
     expect(src).toContain('target="_blank"');
     expect(src).toContain('rel="noopener noreferrer"');
