@@ -9,6 +9,7 @@ export const SYSTEMS: { slug: string; name: string }[] = [
   { slug: "indeed", name: "Indeed応募通知" },
   { slug: "cast-meibo", name: "キャスト名簿くん" },
   { slug: "rakuraku", name: "らくらく契約くん" },
+  { slug: "kaizen", name: "カイゼンくん本体" },
   { slug: "other", name: "その他" },
 ];
 
