@@ -4,6 +4,7 @@
 // 3) postback（ボタン）or text（「GO KZ-12」）を解析 → 該当チケットへ applyGoAction
 // LINEには常に200を返す（個別イベントの失敗でwebhook全体は失敗にしない＝再送ループ防止）。
 import { NextRequest, NextResponse } from "next/server";
+import { waitUntil } from "@vercel/functions";
 import {
   verifyLineSignature,
   parsePostback,
@@ -18,6 +19,12 @@ import {
   fetchTicketsByState,
 } from "@/lib/tickets";
 import { applyGoAction } from "@/lib/govote";
+import { kickEndpoint } from "@/lib/trigger";
+
+// GO適用の結果が「着手」になったら、即 /api/execute を起こして実改修へ進める（応答はブロックしない）。
+function kickIfStarted(newState?: string) {
+  if (newState === "着手") waitUntil(kickEndpoint("/api/execute"));
+}
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -71,6 +78,7 @@ async function handleEvent(ev: any): Promise<void> {
       return;
     }
     const r = await applyGoAction(p.action, ticket);
+    kickIfStarted(r.newState);
     if (replyToken) await replyText(replyToken, r.reply);
     return;
   }
@@ -104,6 +112,7 @@ async function handleEvent(ev: any): Promise<void> {
       return;
     }
     const r = await applyGoAction(cmd.action, ticket);
+    kickIfStarted(r.newState);
     if (replyToken) await replyText(replyToken, r.reply);
     return;
   }
