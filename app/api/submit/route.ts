@@ -1,10 +1,12 @@
 // ── POST /api/submit ── confirm 済みの ticket を受けて Notion 起票
 import { NextRequest, NextResponse } from "next/server";
+import { waitUntil } from "@vercel/functions";
 import { auth } from "@/auth";
 import { createTicket } from "@/lib/notion";
 import { memorizeToKnowhow } from "@/lib/knowhow";
 import { normalizeSystemForTicket } from "@/lib/systems";
 import { isAuthEnabled } from "@/lib/authz";
+import { kickEndpoint } from "@/lib/trigger";
 import type { Ticket, TicketType, Importance } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -53,6 +55,9 @@ export async function POST(req: NextRequest) {
     const result = await createTicket(ticket, reporter);
     // デュアルライト：声を knowhow にも貯める（従・失敗してもユーザーには成功を返す）
     const memorized = await memorizeToKnowhow(ticket, result.ticketId, reporter);
+    // イベント駆動：起票直後に /api/process を起こし、議論→GO待ち→LINE提案まで即進める。
+    // 応答はブロックしない（after で後処理）。鍵未投入なら kickEndpoint は no-op。
+    waitUntil(kickEndpoint("/api/process"));
     return NextResponse.json({ ok: true, ...result, memorized });
   } catch (err) {
     console.error("[submit] Notion create failed:", (err as Error).message);
