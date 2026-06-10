@@ -183,6 +183,39 @@ button.ghost:hover:not(:disabled) { background: #f5f3ec; }
 .error { color: #b4452b; font-size: 13px; padding: 6px 2px; }
 .footer { text-align: center; color: var(--muted); font-size: 11.5px; padding: 10px 0 18px; }
 
+/* ───── 成長ダッシュボード（/dashboard） ───── */
+.dash { max-width: 860px; margin: 0 auto; min-height: 100dvh; padding: 0 20px 20px; }
+.dash-logo { width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--line); background: #fff; flex: none; }
+.dash-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin: 6px 0 10px; }
+.dash-card { background: #fffdf8; border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; box-shadow: var(--shadow); }
+.dash-card-label { font-size: 12.5px; color: var(--muted); }
+.dash-card-value { font-size: 30px; font-weight: 700; margin-top: 4px; color: var(--ink); }
+.dash-card-value small { font-size: 13px; font-weight: 500; color: var(--muted); margin-left: 3px; }
+.dash-section { margin: 22px 0; }
+.dash-section h2 {
+  font-family: "Tiempos Text", "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", Georgia, serif;
+  font-size: 16.5px; font-weight: 600; margin: 0 0 12px;
+}
+.dash-bars { display: flex; align-items: flex-end; gap: 10px; padding: 8px 4px 0; }
+.dash-bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; }
+.dash-bar { width: 100%; max-width: 56px; background: var(--brand); border-radius: 6px 6px 2px 2px; opacity: 0.85; }
+.dash-bar-num { font-size: 12.5px; color: var(--brand); font-weight: 600; min-height: 17px; }
+.dash-bar-label { font-size: 10.5px; color: var(--muted); white-space: nowrap; }
+.dash-funnel { display: flex; gap: 10px; flex-wrap: wrap; }
+.dash-funnel-item { flex: 1; min-width: 110px; background: #fffdf8; border: 1px solid var(--line); border-radius: 12px; padding: 12px; text-align: center; }
+.dash-funnel-count { font-size: 24px; font-weight: 700; }
+.dash-funnel-stage { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.dash-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.dash-table th, .dash-table td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; }
+.dash-table th { color: var(--muted); font-weight: 500; font-size: 12.5px; }
+.dash-table .num { text-align: right; }
+.dash-recent { display: flex; flex-direction: column; }
+.dash-recent-row { display: flex; gap: 12px; align-items: baseline; padding: 9px 2px; border-bottom: 1px solid var(--line); font-size: 14px; }
+.dash-recent-date { color: var(--muted); font-size: 12.5px; flex: none; width: 36px; }
+.dash-recent-state { flex: none; font-size: 12.5px; font-weight: 600; width: 56px; }
+.dash-recent-title { min-width: 0; }
+.dash-recent-title small { display: block; color: var(--muted); font-size: 11.5px; margin-top: 1px; }
+
 /* ───── 埋め込みモード（widget.js の iframe 内 / ?embed=1） ─────
    ヘッダー・フッターはJSX側で出さない。狭いパネルに収まるよう余白と文字を少し詰める。
    高さは iframe にピッタリ固定（height:100dvh + overflow:hidden）。外側スクロールを
