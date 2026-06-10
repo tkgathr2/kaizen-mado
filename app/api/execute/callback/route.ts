@@ -5,23 +5,22 @@
 //  - failed    → 「差し戻し」へ。実装失敗。理由をLINEで知らせる。
 // 認証は CRON_SECRET（x-cron-secret）を流用。鍵未設定なら本番fail-closed。
 import { NextRequest, NextResponse } from "next/server";
-import { updateTicketState, appendDiscussionBlocks } from "@/lib/tickets";
+import {
+  updateTicketState,
+  appendDiscussionBlocks,
+  fetchTicketByPageId,
+} from "@/lib/tickets";
 import { returnLearningFromCompleted } from "@/lib/learn";
 import { pushText } from "@/lib/line";
+import { checkCronSecret } from "@/lib/cronAuth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function checkSecret(req: NextRequest): boolean {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return process.env.NODE_ENV !== "production";
-  return req.headers.get("x-cron-secret") === secret;
-}
-
 type Result = "merged" | "review" | "failed";
 
 export async function POST(req: NextRequest) {
-  if (!checkSecret(req)) {
+  if (!checkCronSecret(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -41,6 +40,23 @@ export async function POST(req: NextRequest) {
 
   if (!pageId || (result !== "merged" && result !== "review" && result !== "failed")) {
     return NextResponse.json({ error: "missing pageId/result" }, { status: 400 });
+  }
+
+  // 状態ガード：実行中(実装中)のチケットにだけ結果を反映する。
+  // 偽callback・リプレイで任意pageIdを「完了」に書き換えるのを防ぐ（CRON_SECRETに加えた多層防御）。
+  let current;
+  try {
+    current = await fetchTicketByPageId(pageId);
+  } catch (e) {
+    console.error("[execute/callback] チケット取得失敗", (e as Error).message);
+    return NextResponse.json({ ok: false, error: "ticket fetch failed" }, { status: 502 });
+  }
+  if (!current) {
+    return NextResponse.json({ error: "ticket not found" }, { status: 404 });
+  }
+  if (current.state !== "実装中") {
+    // 既に確定済み or 想定外状態 → 何もしない（冪等）。
+    return NextResponse.json({ ok: true, skipped: true, state: current.state });
   }
 
   try {
