@@ -37,6 +37,11 @@ describe("widget.js", () => {
     expect(src).toContain("https://kaizen.takagi.bz");
   });
 
+  it("埋め込み元の window.kaizenUser を reporter として窓口へ引き継ぐ", () => {
+    expect(src).toContain("window.kaizenUser");
+    expect(src).toContain('"&reporter=" + encodeURIComponent');
+  });
+
   it("マスコット画像（フクロウ博士）は窓口と同じオリジンから読む", () => {
     expect(src).toContain('origin + "/kaizen-kun.png"');
   });
