@@ -38,42 +38,30 @@
   var tabUrl = origin + "/" + (sys ? "?sys=" + encodeURIComponent(sys) : "");
 
   var BRAND = "#d97757";
-  var BRAND_HOVER = "#c45f3f";
   var Z = 2147483000; // ホストサイトのどの要素より前面（最大値近辺だが拡張等と譲り合う）
 
   var css =
     ":host{all:initial}" +
-    ".kz-btn{position:fixed;right:20px;bottom:20px;z-index:" + Z + ";width:56px;height:56px;border-radius:50%;border:none;cursor:pointer;background:" + BRAND + ";color:#fff;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 16px rgba(217,119,87,.45);transition:transform .12s ease,background .15s ease;-webkit-tap-highlight-color:transparent}" +
-    ".kz-btn:hover{background:" + BRAND_HOVER + ";transform:scale(1.06)}" +
+    ".kz-btn{position:fixed;right:20px;bottom:20px;z-index:" + Z + ";width:56px;height:56px;border-radius:50%;border:1px solid rgba(0,0,0,.08);cursor:pointer;background:#fff;padding:0;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 16px rgba(60,50,35,.3);transition:transform .12s ease,box-shadow .15s ease;-webkit-tap-highlight-color:transparent}" +
+    ".kz-btn:hover{transform:scale(1.06);box-shadow:0 6px 20px rgba(60,50,35,.38)}" +
     ".kz-btn:active{transform:scale(.95)}" +
-    ".kz-btn svg{width:32px;height:32px;pointer-events:none}" +
+    ".kz-btn img{width:52px;height:52px;border-radius:50%;pointer-events:none}" +
     ".kz-tip{position:fixed;right:84px;bottom:34px;z-index:" + Z + ";background:#2b2924;color:#fff;font:12.5px/1 ui-sans-serif,-apple-system,'Segoe UI','Hiragino Kaku Gothic ProN',Meiryo,sans-serif;padding:7px 11px;border-radius:8px;white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .15s ease}" +
     ".kz-btn:hover+.kz-tip{opacity:.92}" +
     ".kz-panel{position:fixed;right:20px;bottom:88px;z-index:" + Z + ";width:400px;max-width:calc(100vw - 32px);height:min(620px,calc(100vh - 120px));height:min(620px,calc(100dvh - 120px));background:#faf9f5;border-radius:16px;box-shadow:0 12px 48px rgba(60,50,35,.28);display:none;flex-direction:column;overflow:hidden}" +
     ".kz-panel.open{display:flex}" +
     ".kz-bar{flex:none;display:flex;align-items:center;gap:8px;padding:10px 12px;background:" + BRAND + ";color:#fff;font:600 14px/1.3 ui-sans-serif,-apple-system,'Segoe UI','Hiragino Kaku Gothic ProN',Meiryo,sans-serif}" +
     ".kz-bar .kz-title{flex:1;display:flex;align-items:center;gap:7px}" +
+    ".kz-bar .kz-title img{width:22px;height:22px;border-radius:50%;background:#fff;flex:none}" +
     ".kz-bar a,.kz-bar button.kz-x{flex:none;display:flex;align-items:center;justify-content:center;width:28px;height:28px;border:none;border-radius:7px;background:rgba(255,255,255,.16);color:#fff;cursor:pointer;text-decoration:none;transition:background .15s ease}" +
     ".kz-bar a:hover,.kz-bar button.kz-x:hover{background:rgba(255,255,255,.32)}" +
     ".kz-bar svg{width:15px;height:15px}" +
     ".kz-frame{flex:1;width:100%;border:none;background:#faf9f5}" +
     "@media (max-width:480px){.kz-panel{right:8px;left:8px;bottom:84px;width:auto;height:min(560px,calc(100dvh - 100px))}.kz-btn{right:16px;bottom:16px}}";
 
-  // カイゼンくん（マスコット顔）：白いロボ顔＋アンテナ＋鉢巻（カイゼン魂）。
-  // 色は currentColor ではなく固定（ボタン＝コーラル地に白顔、顔のパーツはコーラル）。
-  var KAIZEN_KUN =
-    '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
-    '<circle cx="12" cy="3" r="1.1" fill="#fff"/>' +
-    '<line x1="12" y1="4.1" x2="12" y2="6" stroke="#fff" stroke-width="1.6"/>' +
-    '<rect x="5" y="6" width="14" height="11.5" rx="4" fill="#fff"/>' +
-    '<rect x="5" y="7.4" width="14" height="2.2" fill="' + BRAND + '" opacity=".9"/>' +
-    '<path d="M19 8.2l2.4-1.3M19 8.6l2.2 1.5" stroke="' + BRAND + '" stroke-width="1.4" stroke-linecap="round"/>' +
-    '<circle cx="9" cy="12.4" r="1.3" fill="' + BRAND + '"/>' +
-    '<circle cx="15" cy="12.4" r="1.3" fill="' + BRAND + '"/>' +
-    '<circle cx="7.2" cy="14.2" r=".9" fill="' + BRAND + '" opacity=".35"/>' +
-    '<circle cx="16.8" cy="14.2" r=".9" fill="' + BRAND + '" opacity=".35"/>' +
-    '<path d="M9.2 14.6q2.8 2 5.6 0" stroke="' + BRAND + '" stroke-width="1.6" stroke-linecap="round"/>' +
-    "</svg>";
+  // カイゼンくん＝フクロウ博士（社長決定 2026-06-10・ナノバナナ生成のマスコットPNG）。
+  // 画像は窓口と同じオリジンから配信（middlewareで認証除外済み）。
+  var ICON = origin + "/kaizen-kun.png";
   var EXTERNAL =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14L21 3"/></svg>';
   var CLOSE =
@@ -93,7 +81,7 @@
     btn.type = "button";
     btn.setAttribute("aria-label", "カイゼンくんに相談する");
     btn.setAttribute("aria-expanded", "false");
-    btn.innerHTML = KAIZEN_KUN;
+    btn.innerHTML = '<img src="' + ICON + '" alt="">';
     root.appendChild(btn);
 
     var tip = document.createElement("div");
@@ -107,7 +95,7 @@
     panel.setAttribute("aria-label", "カイゼン窓口");
     panel.innerHTML =
       '<div class="kz-bar">' +
-      '<span class="kz-title">' + KAIZEN_KUN + "カイゼンくん</span>" +
+      '<span class="kz-title"><img src="' + ICON + '" alt="">カイゼンくん</span>' +
       '<a href="' + tabUrl + '" target="_blank" rel="noopener noreferrer" title="新しいタブで開く" aria-label="新しいタブで開く">' + EXTERNAL + "</a>" +
       '<button class="kz-x" type="button" title="閉じる" aria-label="閉じる">' + CLOSE + "</button>" +
       "</div>";

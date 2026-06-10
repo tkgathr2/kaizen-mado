@@ -34,3 +34,8 @@ next-env.d.ts
 # OMC（オーケストレーション層）のセッション状態 — リポに含めない
 .omc/
 .claude/
+
+# ローカル作業用（キャラ生成・デモ）
+.kaizen-chara/
+.widget-demo/
+.claude/
