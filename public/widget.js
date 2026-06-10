@@ -102,11 +102,17 @@
     root.appendChild(panel);
 
     var frame = null;
+    // 埋め込み元がログイン済みユーザー名を window.kaizenUser に入れておくと、
+    // 窓口へ reporter として引き継がれ「お名前」欄の入力が不要になる（パネル初回オープン時に評価）。
+    function reporterParam() {
+      var u = window.kaizenUser;
+      return typeof u === "string" && u.trim() ? "&reporter=" + encodeURIComponent(u.trim()) : "";
+    }
     function ensureFrame() {
       if (frame) return;
       frame = document.createElement("iframe");
       frame.className = "kz-frame";
-      frame.src = madoUrl;
+      frame.src = madoUrl + reporterParam();
       frame.title = "カイゼン窓口チャット";
       frame.setAttribute("allow", "clipboard-write");
       panel.appendChild(frame);

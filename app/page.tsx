@@ -22,13 +22,16 @@ function KaizenMado() {
   // 埋め込みモード（widget.js の iframe 内）：ヘッダー/フッターを畳んでチャットに集中させる。
   // パネルのタイトルバー・閉じるボタンは widget.js 側（親ページ）が持つ。
   const embed = isEmbed(params.get("embed"));
+  // 埋め込み元のログイン済みユーザー名（widget.js が window.kaizenUser から引き継ぐ）。
+  // ある場合は「お名前」入力欄を出さず、そのまま起票の reporter に使う。
+  const reporterParam = (params.get("reporter") ?? "").trim();
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [phase, setPhase] = useState<"clarify" | "confirm">("clarify");
   const [ticket, setTicket] = useState<Ticket | null>(null);
-  const [reporter, setReporter] = useState("");
+  const [reporter, setReporter] = useState(reporterParam);
   const [status, setStatus] = useState<"chatting" | "submitting" | "done">("chatting");
   const [doneId, setDoneId] = useState<string>("");
   const [error, setError] = useState("");
@@ -41,10 +44,15 @@ function KaizenMado() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sysRaw]);
 
+  // 会話の自動追従：新着メッセージ・確認カード表示・送信完了のたびに最下部へスクロール。
+  // DOM反映後に確実に追従させるため requestAnimationFrame を1枚挟む。
   useEffect(() => {
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, busy, status]);
+    const id = requestAnimationFrame(() => {
+      const el = scrollRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    });
+    return () => cancelAnimationFrame(id);
+  }, [messages, busy, status, phase, ticket]);
 
   async function send() {
     const text = input.trim();
@@ -172,16 +180,18 @@ function KaizenMado() {
 
       {showConfirm && (
         <>
-          <div className="reporter">
-            <label htmlFor="reporter">お名前（任意）</label>
-            <input
-              id="reporter"
-              value={reporter}
-              onChange={(e) => setReporter(e.target.value)}
-              placeholder="例：高木"
-              maxLength={40}
-            />
-          </div>
+          {!reporterParam && (
+            <div className="reporter">
+              <label htmlFor="reporter">お名前（任意）</label>
+              <input
+                id="reporter"
+                value={reporter}
+                onChange={(e) => setReporter(e.target.value)}
+                placeholder="例：高木"
+                maxLength={40}
+              />
+            </div>
+          )}
           <div className="send-actions">
             <button className="primary" onClick={submit} disabled={status === "submitting"}>
               {status === "submitting" ? "送信中…" : "この内容で送る"}
