@@ -112,6 +112,29 @@ export async function fetchTicketsByState(
   );
 }
 
+/** pageIdで1件取得（webhookでGO時に現在状態を確認＝冪等化のため）。無ければnull。 */
+export async function fetchTicketByPageId(pageId: string): Promise<TicketRow | null> {
+  const { token } = getAuth();
+  const res = await fetch(`https://api.notion.com/v1/pages/${pageId}`, {
+    method: "GET",
+    headers: headers(token),
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`Notion get error ${res.status}: ${t.slice(0, 300)}`);
+  }
+  const page = await res.json();
+  return parseRow(page);
+}
+
+/** ticketId（例 KZ-12）でGO待ちチケットを探す（テキスト返信「GO KZ-12」用）。 */
+export async function findGoMachiByTicketId(ticketId: string): Promise<TicketRow | null> {
+  const rows = await fetchTicketsByState("GO待ち", 25);
+  const norm = ticketId.toUpperCase().replace(/\s/g, "");
+  return rows.find((r) => r.ticketId.toUpperCase().replace(/\s/g, "") === norm) ?? null;
+}
+
 /** 完了済みかつ未学習（FGSリンク空）のチケットを取得 */
 export async function fetchCompletedUnlearned(limit = 10): Promise<TicketRow[]> {
   return queryDatabase(

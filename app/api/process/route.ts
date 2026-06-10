@@ -1,6 +1,7 @@
 // ── POST /api/process ── 受付 → 議論中 → GO待ち（第2段=内部処理） ──
 // 「受付」状態のチケットを順に処理し、CTO Agent Lab の議論結果をページに追記して
-// 「GO待ち」へ進める。誰にも送信しない（GO伺いはドラフト生成まで／実送信しない）。
+// 「GO待ち」へ進める。GO待ちにしたら、GO伺いを高木さん本人のLINEへpushする
+// （対外・対人告知ではなく、社長への承認伺い1通。LINE鍵が未設定なら静かにスキップ）。
 // CRON_SECRET が設定されていれば x-cron-secret 一致を要求（内部/cron保護）。
 import { NextRequest, NextResponse } from "next/server";
 import {
@@ -10,6 +11,7 @@ import {
   setTicketAssignee,
 } from "@/lib/tickets";
 import { discussTicket } from "@/lib/discuss";
+import { pushProposal } from "@/lib/line";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -42,7 +44,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const tickets = await fetchTicketsByState("受付", limit);
-    const processed: { ticketId: string; recommendation: string; source: string }[] = [];
+    const processed: { ticketId: string; recommendation: string; source: string; notified: boolean }[] = [];
     const errors: { ticketId: string; error: string }[] = [];
 
     for (const ticket of tickets) {
@@ -59,10 +61,17 @@ export async function POST(req: NextRequest) {
         ]);
         await setTicketAssignee(ticket.pageId, "CTO Agent Lab");
         await updateTicketState(ticket.pageId, "GO待ち");
+        // GO伺いを高木さん本人のLINEへpush（GO/修正/却下のボタン付き）。
+        // LINE鍵未設定なら pushProposal は false を返すだけ（ループは止めない）。
+        const pushed = await pushProposal(
+          { ...ticket, state: "GO待ち" },
+          d
+        );
         processed.push({
           ticketId: ticket.ticketId,
           recommendation: d.recommendation,
           source: d.source,
+          notified: pushed,
         });
       } catch (err) {
         // 1件失敗しても他を続行する
