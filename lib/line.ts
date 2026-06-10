@@ -192,18 +192,28 @@ export async function replyText(replyToken: string, text: string): Promise<boole
   });
 }
 
-/** GO伺い本文を組み立てる（チケット＋議論結果から）。 */
+/** GO伺い本文を組み立てる（チケット＋議論結果から）。
+ * 複数提案が連続で届いてもLINEのquick replyボタンは"最新メッセージ"にしか付かないため、
+ * 各提案を「ID付きテキスト返信（GO KZ-3 等）」で個別に答えられる形にする（前の提案にも返信可）。 */
 export function buildProposalText(ticket: TicketRow, d: DiscussResult): string {
   const risks = d.risks.length ? d.risks.map((r) => `・${r}`).join("\n") : "・特になし";
+  const id = ticket.ticketId;
   return (
-    `🔁 カイゼンGO伺い（${ticket.ticketId}）\n` +
-    `対象: ${ticket.system || "未特定"} / ${ticket.type || "改善"} / 重要度${ticket.importance || "中"}\n` +
-    `件名: ${ticket.title || "改善のご要望"}\n` +
-    `─\n方針: ${d.houshin}\n` +
-    `工数: ${d.kousuu}\n` +
-    `リスク:\n${risks}\n` +
-    `推奨: ${d.recommendation}\n─\n` +
-    `この内容で着手してよろしいですか？（下のボタン、または「GO ${ticket.ticketId}」と返信）`
+    `🔁 カイゼン提案 ${id}\n` +
+    `━━━━━━━━━━\n` +
+    `対象：${ticket.system || "未特定"}（${ticket.type || "改善"}・重要度${ticket.importance || "中"}）\n` +
+    `件名：${ticket.title || "改善のご要望"}\n` +
+    `\n` +
+    `方針：${d.houshin}\n` +
+    `工数：${d.kousuu}\n` +
+    `リスク：\n${risks}\n` +
+    `推奨：${d.recommendation}\n` +
+    `━━━━━━━━━━\n` +
+    `▼ 返信でお答えください（複数届いてもIDで区別できます）\n` +
+    `　✅ 着手 → 「GO ${id}」\n` +
+    `　✏️ 修正 → 「修正 ${id}」\n` +
+    `　🚫 却下 → 「却下 ${id}」\n` +
+    `※下の3ボタンは“最新の提案”だけに付きます。前の提案にはこの「GO ${id}」のようにIDで返信してください。`
   );
 }
 
