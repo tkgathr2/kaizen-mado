@@ -5,6 +5,7 @@ import { Suspense, useEffect, useRef, useState } from "react";
 // ref は同期更新なので「実行中」を確実にブロックでき、重複起票/重複送信を防ぐ。
 import { useSearchParams } from "next/navigation";
 import { resolveSystem } from "@/lib/systems";
+import { isEmbed } from "@/lib/embed";
 import type { ChatMessage, Ticket } from "@/lib/types";
 
 function greeting(systemName: string | null): string {
@@ -18,6 +19,9 @@ function KaizenMado() {
   const params = useSearchParams();
   const sysRaw = params.get("sys");
   const systemName = resolveSystem(sysRaw);
+  // 埋め込みモード（widget.js の iframe 内）：ヘッダー/フッターを畳んでチャットに集中させる。
+  // パネルのタイトルバー・閉じるボタンは widget.js 側（親ページ）が持つ。
+  const embed = isEmbed(params.get("embed"));
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -117,15 +121,17 @@ function KaizenMado() {
   const showConfirm = phase === "confirm" && ticket && status !== "done";
 
   return (
-    <div className="app">
-      <header className="header">
-        <div className="logo">🛠️</div>
-        <div>
-          <h1>カイゼン窓口</h1>
-          <div className="sub">高木産業グループ カイゼンくん</div>
-        </div>
-        <div className="pill">{systemName ? `対象：${systemName}` : "対象：未指定"}</div>
-      </header>
+    <div className={embed ? "app embed" : "app"}>
+      {!embed && (
+        <header className="header">
+          <div className="logo">🛠️</div>
+          <div>
+            <h1>カイゼン窓口</h1>
+            <div className="sub">高木産業グループ カイゼンくん</div>
+          </div>
+          <div className="pill">{systemName ? `対象：${systemName}` : "対象：未指定"}</div>
+        </header>
+      )}
 
       <div className="chat" ref={scrollRef}>
         {messages.map((m, i) => (
@@ -218,7 +224,9 @@ function KaizenMado() {
         </div>
       )}
 
-      <div className="footer">カイゼンくん 第1段・カイゼン窓口 ／ 入力内容はNotionの改善チケットに記録されます</div>
+      {!embed && (
+        <div className="footer">カイゼンくん 第1段・カイゼン窓口 ／ 入力内容はNotionの改善チケットに記録されます</div>
+      )}
     </div>
   );
 }

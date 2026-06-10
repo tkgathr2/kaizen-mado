@@ -34,7 +34,9 @@ export default function middleware(req: NextRequest, ev: NextFetchEvent) {
 
 export const config = {
   // 保護対象＝ページとユーザー操作API。cron系・auth系・静的は除外。
+  // widget.js は他システムのページから <script> で読まれる埋め込みウィジェット本体。
+  // 認証ON時にリダイレクトされると全システムでアイコンが消えるため必ず除外する。
   matcher: [
-    "/((?!api/auth|api/process|api/learn|_next/static|_next/image|favicon.ico).*)",
+    "/((?!api/auth|api/process|api/learn|widget.js|_next/static|_next/image|favicon.ico).*)",
   ],
 };
