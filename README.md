@@ -50,6 +50,23 @@ npm run dev                  # http://localhost:3000/?sys=prorepo
 
 スラッグ・正式名どちらでも受け付ける（`lib/systems.ts`）。
 
+## 埋め込みフローティングウィジェット（widget.js）
+
+各システムのHTMLに**1行**入れるだけで、画面右下にカイゼンくんのフローティングボタンが常駐し、
+押すとその場にカイゼン窓口チャットのパネルが開く。
+
+```html
+<script src="https://kaizen.takagi.bz/widget.js" data-sys="prorepo" defer></script>
+```
+
+- `data-sys`：対象システムのslug（上表と同じ。省略すると会話で特定）
+- `data-origin`：窓口オリジンの上書き（通常不要・ローカル検証用）
+- Shadow DOM で描画するため埋め込み先のCSSと衝突しない。z-index は最前面級。
+- パネル内は `/?embed=1&sys=…`（ヘッダー/フッターを畳んだコンパクト表示）
+- パネル上部バーに「新しいタブで開く」「閉じる」あり。認証ON環境で iframe 内ログインが
+  できない場合も新しいタブから利用できる。
+- `middleware.ts` は `/widget.js` を認証対象から除外している（埋め込み先で読めなくなるため）。
+
 ## 構成
 ```
 app/
