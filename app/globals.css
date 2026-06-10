@@ -184,10 +184,13 @@ button.ghost:hover:not(:disabled) { background: #f5f3ec; }
 .footer { text-align: center; color: var(--muted); font-size: 11.5px; padding: 10px 0 18px; }
 
 /* ───── 埋め込みモード（widget.js の iframe 内 / ?embed=1） ─────
-   ヘッダー・フッターはJSX側で出さない。狭いパネルに収まるよう余白と文字を少し詰める。 */
-.app.embed { max-width: none; padding: 0 14px; }
-.app.embed .chat { padding-top: 14px; gap: 16px; }
+   ヘッダー・フッターはJSX側で出さない。狭いパネルに収まるよう余白と文字を少し詰める。
+   高さは iframe にピッタリ固定（height:100dvh + overflow:hidden）。外側スクロールを
+   発生させず、入力欄が下に切れないことを保証する（スクロールは .chat 内部だけ）。 */
+.app.embed { max-width: none; padding: 0 14px; height: 100dvh; min-height: 0; overflow: hidden; }
+.app.embed .chat { padding-top: 14px; gap: 16px; min-height: 0; }
 .app.embed .bubble { font-size: 14.5px; line-height: 1.65; }
-.app.embed .composer { padding-bottom: 12px; }
+.app.embed .composer { padding: 8px 0 10px; }
 .app.embed .composer textarea { font-size: 14.5px; padding: 11px 14px; }
 .app.embed button.send { width: 42px; height: 42px; font-size: 17px; }
+.app.embed .footer { display: none; }

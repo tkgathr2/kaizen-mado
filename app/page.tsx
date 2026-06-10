@@ -208,7 +208,7 @@ function KaizenMado() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKey}
-            placeholder="メッセージを入力（Enterで送信 / Shift+Enterで改行）"
+            placeholder={embed ? "メッセージを入力" : "メッセージを入力（Enterで送信 / Shift+Enterで改行）"}
             rows={1}
             disabled={busy || status === "submitting"}
           />
