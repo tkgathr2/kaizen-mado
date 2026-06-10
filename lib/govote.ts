@@ -22,7 +22,9 @@ export async function applyGoAction(
     return {
       ok: false,
       skipped: true,
-      reply: `「${ticket.ticketId}」は現在「${ticket.state}」のため操作できません（GO待ちのみ受付）。`,
+      reply:
+        `（${ticket.ticketId}）は今「${ticket.state}」のため、ここでは操作できません。\n` +
+        `GO待ちの提案にだけ「GO ${ticket.ticketId}」のように返信してください。`,
     };
   }
 
@@ -34,7 +36,9 @@ export async function applyGoAction(
     return {
       ok: true,
       newState: "着手",
-      reply: `✅ 着手します（${ticket.ticketId}）。実装が本番反映できたら、またLINEで報告します。`,
+      reply:
+        `✅ GO、受け取りました（${ticket.ticketId}）。\n` +
+        `カイゼンくんが内容を確認して進めます。結果（PR作成 or 社長案件）はまたここでお知らせします。`,
     };
   }
 
@@ -46,7 +50,9 @@ export async function applyGoAction(
     return {
       ok: true,
       newState: "差し戻し",
-      reply: `✏️ 「${ticket.ticketId}」を差し戻しました。修正を反映して再提案します。`,
+      reply:
+        `✏️ 修正ですね（${ticket.ticketId}）。\n` +
+        `議論に戻して、直し方を見直してから改めて提案します。`,
     };
   }
 
@@ -58,6 +64,6 @@ export async function applyGoAction(
   return {
     ok: true,
     newState: "却下",
-    reply: `🚫 「${ticket.ticketId}」を却下しました。`,
+    reply: `🚫 却下しました（${ticket.ticketId}）。今回は見送ります。`,
   };
 }

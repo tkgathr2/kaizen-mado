@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
         { heading: "本番反映 完了", body: `自動改修→マージ→デプロイ完了。${prUrl}` },
       ]);
       await pushText(
-        `✅ 直しました（${ticketId}）\n対象: ${system}\n本番反映まで完了しました。\n${prUrl}`
+        `✅ 直して本番に反映しました（${ticketId}）\n対象：${system}\n${prUrl}`
       );
       // 学び還元（KNOWHOW_ENABLED時のみ実働。OFFなら no-op）。
       const learn = await returnLearningFromCompleted(5).catch(() => ({ memorized: 0 }));
@@ -74,13 +74,16 @@ export async function POST(req: NextRequest) {
     }
 
     if (result === "review") {
+      // PRレビュー型では「review」が通常の成功（AIがPRを作って人の確認待ち）。
       await updateTicketState(pageId, "レビュー");
       await appendDiscussionBlocks(pageId, [
-        { heading: "人の確認待ち（ゲート不通過）", body: `${detail}\nPR: ${prUrl}` },
+        { heading: "PR作成（レビュー待ち）", body: `${detail}\nPR: ${prUrl}` },
       ]);
       await pushText(
-        `🟡 レビューが必要です（${ticketId}）\n対象: ${system}\n` +
-          `自動ゲートを通らなかったため、PRを残しました。確認をお願いします。\n${prUrl}`
+        `✅ 直して、PR（修正の差分）を作りました（${ticketId}）\n` +
+          `対象：${system}\n` +
+          `${detail ? `内容：${detail}\n` : ""}` +
+          `下のリンクで差分を確認して、よければ「Merge」を押せば本番に反映されます。\n${prUrl}`
       );
       return NextResponse.json({ ok: true, state: "レビュー" });
     }
@@ -91,7 +94,9 @@ export async function POST(req: NextRequest) {
       { heading: "実装失敗（差し戻し）", body: detail || "(理由不明)" },
     ]);
     await pushText(
-      `🔴 実装に失敗しました（${ticketId}）\n対象: ${system}\n理由: ${detail || "不明"}\n差し戻しました。`
+      `🔴 うまく直せませんでした（${ticketId}）\n` +
+        `対象：${system}\n理由：${detail || "不明"}\n` +
+        `議論に戻したので、内容を見直してまた提案できます。`
     );
     return NextResponse.json({ ok: true, state: "差し戻し" });
   } catch (err) {

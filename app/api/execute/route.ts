@@ -60,10 +60,10 @@ export async function POST(req: NextRequest) {
         ]);
         await pushText(
           `🛑 これは社長案件です（${ticket.ticketId}）\n` +
-            `対象: ${ticket.system} / ${ticket.type} / 重要度${ticket.importance}\n` +
-            `件名: ${ticket.title}\n` +
-            `理由:\n${decision.reasons.map((r) => `・${r}`).join("\n")}\n` +
-            `自動では直しません。本番投入の可否をご判断ください。`
+            `対象：${ticket.system}（${ticket.type}・重要度${ticket.importance}）\n` +
+            `件名：${ticket.title}\n\n` +
+            `この理由で、カイゼンくんは自動で直しません：\n${decision.reasons.map((r) => `・${r}`).join("\n")}\n\n` +
+            `慎重に扱うべき内容です。どう進めるかは社長がご判断ください。`
         );
         escalated.push(ticket.ticketId);
         continue;
@@ -78,8 +78,14 @@ export async function POST(req: NextRequest) {
       if (ok) {
         await updateTicketState(ticket.pageId, "実装中");
         await appendDiscussionBlocks(ticket.pageId, [
-          { heading: "自動着手", body: `実行ワークフローを起動（${target.repo}）。PR→ゲート→マージ→デプロイ→報告。` },
+          { heading: "自動着手", body: `実行ワークフローを起動（${target.repo}）。AIが改修→PR作成→レビュー待ち（PRレビュー型）。` },
         ]);
+        // GOからPR完成までの間、動いていることが伝わるよう「着手」を通知。
+        await pushText(
+          `🔧 着手しました（${ticket.ticketId}）\n` +
+            `対象：${ticket.system}\n` +
+            `カイゼンくんが直して、確認用のPR（差分）を作っています。できたらまた連絡します。`
+        );
         dispatched.push(ticket.ticketId);
       } else {
         skipped.push({ ticketId: ticket.ticketId, reason: "dispatch失敗" });
