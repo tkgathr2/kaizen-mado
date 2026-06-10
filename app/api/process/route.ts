@@ -2,7 +2,7 @@
 // 「受付」状態のチケットを順に処理し、CTO Agent Lab の議論結果をページに追記して
 // 「GO待ち」へ進める。GO待ちにしたら、GO伺いを高木さん本人のLINEへpushする
 // （対外・対人告知ではなく、社長への承認伺い1通。LINE鍵が未設定なら静かにスキップ）。
-// CRON_SECRET が設定されていれば x-cron-secret 一致を要求（内部/cron保護）。
+// CRON_SECRET が設定されていれば認証を要求（x-cron-secret または Vercel Cron の Bearer）。
 import { NextRequest, NextResponse } from "next/server";
 import {
   fetchTicketsByState,
@@ -12,23 +12,18 @@ import {
 } from "@/lib/tickets";
 import { discussTicket } from "@/lib/discuss";
 import { pushProposal } from "@/lib/line";
+import { checkCronSecret } from "@/lib/cronAuth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function checkSecret(req: NextRequest): boolean {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) {
-    // 本番で未設定＝fail-closed。このルートは Anthropic 呼び出し（課金）と
-    // Notion 書き換えを誘発するため、本番では鍵未設定の野ざらしを許さない。
-    // 開発（NODE_ENV!==production）では未設定でも通す。
-    return process.env.NODE_ENV !== "production";
-  }
-  return req.headers.get("x-cron-secret") === secret;
+// Vercel Cron は GET で叩く。手動/自前cronは POST。どちらも同じ処理。
+export async function GET(req: NextRequest) {
+  return POST(req);
 }
 
 export async function POST(req: NextRequest) {
-  if (!checkSecret(req)) {
+  if (!checkCronSecret(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 

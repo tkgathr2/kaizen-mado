@@ -14,18 +14,18 @@ import { findTarget } from "@/lib/targets";
 import { preGate } from "@/lib/gate";
 import { dispatchExecution, dispatchEnabled } from "@/lib/orchestrate";
 import { pushText } from "@/lib/line";
+import { checkCronSecret } from "@/lib/cronAuth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function checkSecret(req: NextRequest): boolean {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return process.env.NODE_ENV !== "production";
-  return req.headers.get("x-cron-secret") === secret;
+// Vercel Cron は GET で叩く。手動/自前cronは POST。
+export async function GET(req: NextRequest) {
+  return POST(req);
 }
 
 export async function POST(req: NextRequest) {
-  if (!checkSecret(req)) {
+  if (!checkCronSecret(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 

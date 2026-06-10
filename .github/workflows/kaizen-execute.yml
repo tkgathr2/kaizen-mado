@@ -97,15 +97,18 @@ jobs:
         if: steps.gate.outputs.verdict == 'auto' || steps.gate.outputs.verdict == 'review'
         env:
           GH_TOKEN: ${{ secrets.TARGET_REPO_PAT }}
+          # ${{ }} は env で受けてから $VAR で使う（run内への直接展開＝シェルインジェクションを避ける）
+          DETAIL: ${{ steps.gate.outputs.detail }}
+          BRANCH: ${{ steps.branch.outputs.branch }}
         run: |
           git commit -q -m "fix(kaizen): ${TICKET_ID} 自動改修
 
-          ${{ steps.gate.outputs.detail }}"
-          git push -u origin "${{ steps.branch.outputs.branch }}"
+          ${DETAIL}"
+          git push -u origin "$BRANCH"
           PR_URL=$(gh pr create --repo "$TARGET_REPO" \
-            --head "${{ steps.branch.outputs.branch }}" \
+            --head "$BRANCH" \
             --title "fix(kaizen): ${TICKET_ID} 自動改修" \
-            --body "カイゼンくん自動改修（${TICKET_ID}）。判定: ${{ steps.gate.outputs.detail }}")
+            --body "カイゼンくん自動改修（${TICKET_ID}）。判定: ${DETAIL}")
           echo "url=$PR_URL" >> "$GITHUB_OUTPUT"
 
       - name: CI green 待ち＋自動マージ（autoのみ）
@@ -113,17 +116,18 @@ jobs:
         if: steps.gate.outputs.verdict == 'auto'
         env:
           GH_TOKEN: ${{ secrets.TARGET_REPO_PAT }}
+          PR_URL: ${{ steps.pr.outputs.url }}
         run: |
           # CIがあれば green を待つ。無ければそのままマージ。失敗・タイムアウトは review に落とす。
           set +e
-          gh pr checks "${{ steps.pr.outputs.url }}" --repo "$TARGET_REPO" --watch --interval 20 --fail-fast
+          gh pr checks "$PR_URL" --repo "$TARGET_REPO" --watch --interval 20 --fail-fast
           CHECK=$?
           set -e
           if [ "$CHECK" -ne 0 ]; then
             echo "verdict=review" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          gh pr merge "${{ steps.pr.outputs.url }}" --repo "$TARGET_REPO" --squash --delete-branch
+          gh pr merge "$PR_URL" --repo "$TARGET_REPO" --squash --delete-branch
           echo "verdict=merged" >> "$GITHUB_OUTPUT"
 
       - name: Health check（任意）
@@ -141,17 +145,19 @@ jobs:
         if: always()
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          MERGE_VERDICT: ${{ steps.merge.outputs.verdict }}
+          GATE_VERDICT: ${{ steps.gate.outputs.verdict }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+          DETAIL: ${{ steps.gate.outputs.detail }}
         run: |
           # 最終判定：merged > review > failed
-          VERDICT="${{ steps.merge.outputs.verdict }}"
-          [ -z "$VERDICT" ] && VERDICT="${{ steps.gate.outputs.verdict }}"
+          VERDICT="$MERGE_VERDICT"
+          [ -z "$VERDICT" ] && VERDICT="$GATE_VERDICT"
           case "$VERDICT" in
             merged) RESULT="merged" ;;
             auto|review) RESULT="review" ;;
             *) RESULT="failed" ;;
           esac
-          PR_URL="${{ steps.pr.outputs.url }}"
-          DETAIL="${{ steps.gate.outputs.detail }}"
           curl -s -X POST "$CALLBACK_URL" \
             -H "content-type: application/json" \
             -H "x-cron-secret: $CRON_SECRET" \
