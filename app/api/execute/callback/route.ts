@@ -11,7 +11,7 @@ import {
   fetchTicketByPageId,
 } from "@/lib/tickets";
 import { returnLearningFromCompleted } from "@/lib/learn";
-import { pushText } from "@/lib/line";
+import { pushText, truncateForLine } from "@/lib/line";
 import { checkCronSecret } from "@/lib/cronAuth";
 
 export const runtime = "nodejs";
@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
         { heading: "本番反映 完了", body: `自動改修→マージ→デプロイ完了。${prUrl}` },
       ]);
       await pushText(
-        `✅ 直して本番に反映しました（${ticketId}）\n対象：${system}\n${prUrl}`
+        [`✅ 本番反映しました ${ticketId}｜${system}`, ``, `PR ▶ ${prUrl}`].join("\n")
       );
       // 学び還元（KNOWHOW_ENABLED時のみ実働。OFFなら no-op）。
       const learn = await returnLearningFromCompleted(5).catch(() => ({ memorized: 0 }));
@@ -80,10 +80,13 @@ export async function POST(req: NextRequest) {
         { heading: "PR作成（レビュー待ち）", body: `${detail}\nPR: ${prUrl}` },
       ]);
       await pushText(
-        `✅ 直して、PR（修正の差分）を作りました（${ticketId}）\n` +
-          `対象：${system}\n` +
-          `${detail ? `内容：${detail}\n` : ""}` +
-          `下のリンクで差分を確認して、よければ「Merge」を押せば本番に反映されます。\n${prUrl}`
+        [
+          `✅ PRができました ${ticketId}｜${system}`,
+          ...(detail ? [`内容：${truncateForLine(detail, 60)}`] : []),
+          ``,
+          `差分を確認して「Merge」で本番反映されます。`,
+          `PR ▶ ${prUrl}`,
+        ].join("\n")
       );
       return NextResponse.json({ ok: true, state: "レビュー" });
     }
@@ -94,9 +97,12 @@ export async function POST(req: NextRequest) {
       { heading: "実装失敗（差し戻し）", body: detail || "(理由不明)" },
     ]);
     await pushText(
-      `🔴 うまく直せませんでした（${ticketId}）\n` +
-        `対象：${system}\n理由：${detail || "不明"}\n` +
-        `議論に戻したので、内容を見直してまた提案できます。`
+      [
+        `🔴 直せませんでした ${ticketId}｜${system}`,
+        `理由：${truncateForLine(detail || "不明", 60)}`,
+        ``,
+        `議論に戻しました。見直して再提案します。`,
+      ].join("\n")
     );
     return NextResponse.json({ ok: true, state: "差し戻し" });
   } catch (err) {

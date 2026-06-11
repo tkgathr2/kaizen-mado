@@ -124,5 +124,24 @@ describe("line（純関数）", () => {
     expect(text).toContain("プロレポ");
     expect(text).toContain("GO推奨");
     expect(text).toContain("GO KZ-12");
+    // 読みやすさ改修（2026-06-12）：返信ガイド1行化＋Notion詳細リンク
+    expect(text).toContain("GO KZ-12／修正 KZ-12／却下 KZ-12");
+    expect(text).toContain("https://www.notion.so/p1");
+  });
+});
+
+import { truncateForLine, notionPageUrl } from "../line";
+
+describe("文面ヘルパ", () => {
+  it("truncateForLine は改行を潰して max 文字に丸める", () => {
+    expect(truncateForLine("あいうえお", 10)).toBe("あいうえお");
+    expect(truncateForLine("あい\nうえ  お", 10)).toBe("あい うえ お");
+    expect(truncateForLine("あいうえおかきくけこさ", 10)).toBe("あいうえおかきくけ…");
+    expect(truncateForLine(null, 5)).toBe("");
+  });
+  it("notionPageUrl はハイフン無しのURLを返す", () => {
+    expect(notionPageUrl("37b0d980-8b3b-8148-9721-e1fa84498c34")).toBe(
+      "https://www.notion.so/37b0d9808b3b81489721e1fa84498c34"
+    );
   });
 });

@@ -13,7 +13,7 @@ import {
 import { findTarget } from "@/lib/targets";
 import { preGate } from "@/lib/gate";
 import { dispatchExecution, dispatchEnabled } from "@/lib/orchestrate";
-import { pushText } from "@/lib/line";
+import { pushText, truncateForLine, notionPageUrl } from "@/lib/line";
 import { checkCronSecret } from "@/lib/cronAuth";
 
 export const runtime = "nodejs";
@@ -59,11 +59,17 @@ export async function POST(req: NextRequest) {
           },
         ]);
         await pushText(
-          `🛑 これは社長案件です（${ticket.ticketId}）\n` +
-            `対象：${ticket.system}（${ticket.type}・重要度${ticket.importance}）\n` +
-            `件名：${ticket.title}\n\n` +
-            `この理由で、カイゼンくんは自動で直しません：\n${decision.reasons.map((r) => `・${r}`).join("\n")}\n\n` +
-            `慎重に扱うべき内容です。どう進めるかは社長がご判断ください。`
+          [
+            `🛑 社長案件です ${ticket.ticketId}｜${ticket.system}`,
+            `「${truncateForLine(ticket.title, 28)}」`,
+            ``,
+            `自動では直しません。理由：`,
+            ...decision.reasons.slice(0, 3).map((r) => `・${truncateForLine(r, 38)}`),
+            ...(decision.reasons.length > 3 ? [`・ほか${decision.reasons.length - 3}件（詳細はNotion）`] : []),
+            ``,
+            `進め方は社長のご判断をお願いします。`,
+            `詳細 ▶ ${notionPageUrl(ticket.pageId)}`,
+          ].join("\n")
         );
         escalated.push(ticket.ticketId);
         continue;
@@ -82,9 +88,10 @@ export async function POST(req: NextRequest) {
         ]);
         // GOからPR完成までの間、動いていることが伝わるよう「着手」を通知。
         await pushText(
-          `🔧 着手しました（${ticket.ticketId}）\n` +
-            `対象：${ticket.system}\n` +
-            `カイゼンくんが直して、確認用のPR（差分）を作っています。できたらまた連絡します。`
+          [
+            `🔧 着手しました ${ticket.ticketId}｜${ticket.system}`,
+            `確認用のPR（差分）を作成中。できたらお知らせします。`,
+          ].join("\n")
         );
         dispatched.push(ticket.ticketId);
       } else {
