@@ -59,6 +59,8 @@ jobs:
         uses: anthropics/claude-code-base-action@beta
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # 既定はpermission拒否でEditすらできない（KZ-3実走4回目で判明）。実装に必要な道具だけ許可。
+          allowed_tools: "Read,Glob,Grep,Edit,MultiEdit,Write,Bash(npm install),Bash(npm ci),Bash(npm run build),Bash(npm run lint),Bash(npx vitest run),Bash(npx tsc --noEmit)"
           prompt: |
             次の「カイゼン実装指示」に従って、このリポジトリに最小差分の変更を加えてください。
             禁止パス（${{ env.FORBIDDEN }}）には触れないでください。テスト・型・lintを壊さないこと。
@@ -69,6 +71,8 @@ jobs:
       - name: Post-gate（3条件のうち diff行数・禁止パスを判定）
         id: gate
         run: |
+          # claude-code-base-action が残す実行ログ等はPRに混ぜない（KZ-3実走でoutput.txt混入）
+          rm -f output.txt
           git add -A
           # 変更が無ければ failed 扱い
           if git diff --cached --quiet; then
