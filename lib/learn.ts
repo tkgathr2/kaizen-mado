@@ -4,6 +4,7 @@
 // knowhow送信は認証ゼロで全公開 → PIIを必ずマスクしてから送る。
 // memorize成功した行のみ FGSリンクに冪等マークを付け、次回 is_empty から外す。
 import { maskPII } from "./pii";
+import { distillTicket, isDistillEnabled } from "./distill";
 import {
   fetchCompletedUnlearned,
   setTicketUrlField,
@@ -13,15 +14,22 @@ import {
 const DEFAULT_BASE = "https://knowhow.up.railway.app";
 const MEMORIZED_MARK = "knowhow://memorized";
 
-/** 完了チケットを knowhow に memorize する。成功したら true */
+/**
+ * 完了チケットを knowhow に memorize する。成功したら true。
+ * Phase 2（KAIZEN_DISTILL_ENABLED=true）：Claude(haiku)で「事象→原因→対処→学び」へ
+ * 蒸留し tool="kaizen-distill" で送る（knowhow側で生ログと区別され正味資産に計上）。
+ * 蒸留失敗・OFF時は従来の固定文面（tool="kaizen-mado"）にフォールバック。
+ */
 async function memorizeCompleted(ticket: TicketRow): Promise<boolean> {
   const base = process.env.KNOWHOW_API_BASE || DEFAULT_BASE;
   const projectKey = process.env.KNOWHOW_PROJECT_KEY || "cto-lab";
 
+  const distilled = isDistillEnabled() ? await distillTicket(ticket) : null;
+
   const safeTitle = maskPII(ticket.title);
   const safeDetail = maskPII(ticket.detail);
 
-  const rawLog = [
+  const fallbackRawLog = [
     `【完了カイゼン】${ticket.ticketId}`,
     `対象: ${ticket.system}`,
     `種別: ${ticket.type} / 重要度: ${ticket.importance}`,
@@ -30,13 +38,21 @@ async function memorizeCompleted(ticket: TicketRow): Promise<boolean> {
     `学び: 現場の声を起点に改善を完了。再発防止・横展開の観点で活用する。`,
   ].join("\n");
 
-  const body = {
-    project_key: projectKey,
-    tool: "kaizen-mado",
-    status: "success",
-    raw_log: rawLog,
-    tags: ["完了カイゼン", ticket.system, ticket.type, ticket.importance],
-  };
+  const body = distilled
+    ? {
+        project_key: projectKey,
+        tool: "kaizen-distill",
+        status: "success",
+        raw_log: distilled.rawLog,
+        tags: ["カイゼン学び", ticket.system, ticket.type, ...distilled.keywords],
+      }
+    : {
+        project_key: projectKey,
+        tool: "kaizen-mado",
+        status: "success",
+        raw_log: fallbackRawLog,
+        tags: ["完了カイゼン", ticket.system, ticket.type, ticket.importance],
+      };
 
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (process.env.KB_API_KEY) headers["X-API-Key"] = process.env.KB_API_KEY;
