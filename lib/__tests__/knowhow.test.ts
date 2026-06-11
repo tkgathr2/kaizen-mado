@@ -33,7 +33,7 @@ describe("memorizeToKnowhow", () => {
     const mockFetch = vi.fn();
     global.fetch = mockFetch;
 
-    const result = await memorizeToKnowhow(baseTicket, "TKT-001", "tanaka");
+    const result = await memorizeToKnowhow(baseTicket, "TKT-001");
     expect(result).toBe(false);
     expect(mockFetch).not.toHaveBeenCalled();
   });
@@ -43,7 +43,7 @@ describe("memorizeToKnowhow", () => {
     const mockFetch = vi.fn();
     global.fetch = mockFetch;
 
-    const result = await memorizeToKnowhow(baseTicket, "TKT-001", "tanaka");
+    const result = await memorizeToKnowhow(baseTicket, "TKT-001");
     expect(result).toBe(false);
     expect(mockFetch).not.toHaveBeenCalled();
   });
@@ -53,7 +53,7 @@ describe("memorizeToKnowhow", () => {
     const mockFetch = vi.fn().mockResolvedValue({ ok: true });
     global.fetch = mockFetch;
 
-    await memorizeToKnowhow(baseTicket, "TKT-002", null);
+    await memorizeToKnowhow(baseTicket, "TKT-002");
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
@@ -61,7 +61,7 @@ describe("memorizeToKnowhow", () => {
     process.env.KNOWHOW_ENABLED = "true";
     global.fetch = vi.fn().mockResolvedValue({ ok: true });
 
-    const result = await memorizeToKnowhow(baseTicket, "TKT-003", null);
+    const result = await memorizeToKnowhow(baseTicket, "TKT-003");
     expect(result).toBe(true);
   });
 
@@ -69,7 +69,7 @@ describe("memorizeToKnowhow", () => {
     process.env.KNOWHOW_ENABLED = "true";
     global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 500 });
 
-    const result = await memorizeToKnowhow(baseTicket, "TKT-004", null);
+    const result = await memorizeToKnowhow(baseTicket, "TKT-004");
     expect(result).toBe(false);
   });
 
@@ -77,7 +77,7 @@ describe("memorizeToKnowhow", () => {
     process.env.KNOWHOW_ENABLED = "true";
     global.fetch = vi.fn().mockRejectedValue(new Error("network error"));
 
-    const result = await memorizeToKnowhow(baseTicket, "TKT-005", null);
+    const result = await memorizeToKnowhow(baseTicket, "TKT-005");
     expect(result).toBe(false);
   });
 
@@ -94,7 +94,7 @@ describe("memorizeToKnowhow", () => {
       title: "tanaka@example.com からの問い合わせ",
       detail: "担当者(tanaka@example.com)が確認しました",
     };
-    await memorizeToKnowhow(ticketWithPII, "TKT-006", "tanaka@example.com");
+    await memorizeToKnowhow(ticketWithPII, "TKT-006");
 
     const parsed = JSON.parse(capturedBody);
     expect(parsed.raw_log).not.toContain("tanaka@example.com");
@@ -114,12 +114,25 @@ describe("memorizeToKnowhow", () => {
       title: "090-1234-5678 から連絡あり",
       detail: "03-9876-5432 に折り返し電話してください",
     };
-    await memorizeToKnowhow(ticketWithPhone, "TKT-007", "090-1234-5678");
+    await memorizeToKnowhow(ticketWithPhone, "TKT-007");
 
     const parsed = JSON.parse(capturedBody);
     expect(parsed.raw_log).not.toContain("090-1234-5678");
     expect(parsed.raw_log).not.toContain("03-9876-5432");
     expect(parsed.raw_log).toContain("[電話]");
+  });
+
+  it("raw_logに起票者欄が存在しない（人名は正規表現で守れないため送らない・仕様v2.0 §3）", async () => {
+    process.env.KNOWHOW_ENABLED = "true";
+    let capturedBody = "";
+    global.fetch = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+      capturedBody = init.body as string;
+      return Promise.resolve({ ok: true });
+    });
+
+    await memorizeToKnowhow(baseTicket, "TKT-009");
+    const parsed = JSON.parse(capturedBody);
+    expect(parsed.raw_log).not.toContain("起票者");
   });
 
   it("エンドポイントURLに/api/devin/memorizeを含む", async () => {
@@ -130,7 +143,7 @@ describe("memorizeToKnowhow", () => {
       return Promise.resolve({ ok: true });
     });
 
-    await memorizeToKnowhow(baseTicket, "TKT-008", null);
+    await memorizeToKnowhow(baseTicket, "TKT-008");
     expect(capturedUrl).toContain("/api/devin/memorize");
   });
 });

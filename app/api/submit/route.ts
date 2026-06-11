@@ -54,7 +54,7 @@ export async function POST(req: NextRequest) {
   try {
     const result = await createTicket(ticket, reporter);
     // デュアルライト：声を knowhow にも貯める（従・失敗してもユーザーには成功を返す）
-    const memorized = await memorizeToKnowhow(ticket, result.ticketId, reporter);
+    const memorized = await memorizeToKnowhow(ticket, result.ticketId);
     // イベント駆動：起票直後に /api/process を起こし、議論→GO待ち→LINE提案まで即進める。
     // 応答はブロックしない（after で後処理）。鍵未投入なら kickEndpoint は no-op。
     waitUntil(kickEndpoint("/api/process"));
