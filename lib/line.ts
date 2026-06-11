@@ -192,29 +192,49 @@ export async function replyText(replyToken: string, text: string): Promise<boole
   });
 }
 
+// ── 文面ヘルパ（スマホのLINEは1行が短く折り返されるため、短文・要点先頭で組む） ──
+
+/** LINE向けに1行へ整形して切り詰める（改行・連続空白は1スペースに）。 */
+export function truncateForLine(s: string | null | undefined, max: number): string {
+  const t = (s || "").trim().replace(/\s+/g, " ");
+  if (t.length <= max) return t;
+  return t.slice(0, Math.max(0, max - 1)) + "…";
+}
+
+/** NotionページURL（詳細はLINEに書かずリンクへ逃がす）。 */
+export function notionPageUrl(pageId: string): string {
+  return `https://www.notion.so/${(pageId || "").replace(/-/g, "")}`;
+}
+
 /** GO伺い本文を組み立てる（チケット＋議論結果から）。
- * 複数提案が連続で届いてもLINEのquick replyボタンは"最新メッセージ"にしか付かないため、
- * 各提案を「ID付きテキスト返信（GO KZ-3 等）」で個別に答えられる形にする（前の提案にも返信可）。 */
+ * 読みやすさ最優先：結論（おすすめ）を先頭に、方針・リスクは要約だけ、詳細はNotionリンクへ。
+ * 複数提案が連続で届いてもquick replyボタンは"最新メッセージ"にしか付かないため、
+ * 「ID付きテキスト返信（GO KZ-3 等）」で前の提案にも答えられる形は維持する。 */
 export function buildProposalText(ticket: TicketRow, d: DiscussResult): string {
-  const risks = d.risks.length ? d.risks.map((r) => `・${r}`).join("\n") : "・特になし";
   const id = ticket.ticketId;
-  return (
-    `🔁 カイゼン提案 ${id}\n` +
-    `━━━━━━━━━━\n` +
-    `対象：${ticket.system || "未特定"}（${ticket.type || "改善"}・重要度${ticket.importance || "中"}）\n` +
-    `件名：${ticket.title || "改善のご要望"}\n` +
-    `\n` +
-    `方針：${d.houshin}\n` +
-    `工数：${d.kousuu}\n` +
-    `リスク：\n${risks}\n` +
-    `推奨：${d.recommendation}\n` +
-    `━━━━━━━━━━\n` +
-    `▼ 返信でお答えください（複数届いてもIDで区別できます）\n` +
-    `　✅ 着手 → 「GO ${id}」\n` +
-    `　✏️ 修正 → 「修正 ${id}」\n` +
-    `　🚫 却下 → 「却下 ${id}」\n` +
-    `※下の3ボタンは“最新の提案”だけに付きます。前の提案にはこの「GO ${id}」のようにIDで返信してください。`
-  );
+  const riskLines = d.risks.length
+    ? d.risks
+        .slice(0, 2)
+        .map((r) => `・${truncateForLine(r, 38)}`)
+        .join("\n") + (d.risks.length > 2 ? `\n・ほか${d.risks.length - 2}件（詳細はNotion）` : "")
+    : "・特になし";
+  return [
+    `🔁 提案 ${id}｜${ticket.system || "対象未特定"}`,
+    `「${truncateForLine(ticket.title || "改善のご要望", 28)}」`,
+    ``,
+    `🧭 おすすめ：${truncateForLine(d.recommendation, 40)}`,
+    ``,
+    `方針：${truncateForLine(d.houshin, 110)}`,
+    `工数：${truncateForLine(d.kousuu, 30)}`,
+    `リスク：`,
+    riskLines,
+    ``,
+    `▼ 返信（どれか1つ）`,
+    `GO ${id}／修正 ${id}／却下 ${id}`,
+    `※ボタンは最新の提案のみ。前の提案にはID付きで返信。`,
+    ``,
+    `詳細 ▶ ${notionPageUrl(ticket.pageId)}`,
+  ].join("\n");
 }
 
 /** GO待ちチケットの提案を高木さん宛にpushする。GO/修正/却下のquick reply付き。 */
