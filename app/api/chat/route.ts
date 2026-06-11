@@ -4,6 +4,7 @@ import { buildSystemPrompt, toAnthropicMessages } from "@/lib/prompt";
 import { callClaude } from "@/lib/anthropic";
 import { fallbackTurn } from "@/lib/fallback";
 import { resolveSystem } from "@/lib/systems";
+import { isRecallEnabled, recallSimilar, buildRecallNote } from "@/lib/recall";
 import type { ChatMessage, TurnResult } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -54,6 +55,14 @@ export async function POST(req: NextRequest) {
   // confirm のとき system が空なら、リンク由来の system を補完
   if (result.phase === "confirm" && result.ticket && !result.ticket.system) {
     result.ticket.system = system ?? "その他";
+  }
+
+  // Phase 3（recall・既定OFF）：要約確認に進むタイミングで1回だけ類似ノウハウを参照し、
+  // 見つかれば一言添える。タイムアウト1.5秒・失敗は無言スキップ（会話を止めない）。
+  if (result.phase === "confirm" && result.ticket && isRecallEnabled()) {
+    const hits = await recallSimilar(result.ticket);
+    const note = buildRecallNote(hits);
+    if (note) result = { ...result, reply: `${result.reply}\n\n${note}` };
   }
 
   return NextResponse.json({ ...result, fallback: usedFallback });
