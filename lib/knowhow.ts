@@ -14,11 +14,11 @@ const DEFAULT_BASE = "https://knowhow.up.railway.app";
  * 起票済みチケットを knowhow に memorize する。
  * 連動が無効（NOTION相当のenv未設定）なら何もしない（no-op）。
  * 例外は投げず boolean を返す（呼び出し側は結果を待たなくてよい）。
+ * 起票者名は送らない（knowhowは公開系で、人名は正規表現マスクで守れないため。仕様v2.0 §3）。
  */
 export async function memorizeToKnowhow(
   ticket: Ticket,
-  ticketId: string,
-  reporter: string | null
+  ticketId: string
 ): Promise<boolean> {
   // 明示的に有効化されていなければ連動しない（段階リリースのため既定OFF）
   if (process.env.KNOWHOW_ENABLED !== "true") return false;
@@ -36,7 +36,6 @@ export async function memorizeToKnowhow(
     `種別: ${ticket.type} / 重要度: ${ticket.importance}`,
     `件名: ${safeTitle}`,
     `内容: ${safeDetail}`,
-    `起票者: ${maskPII(reporter || "現場フォーム")}`,
   ].join("\n");
 
   const body = {
