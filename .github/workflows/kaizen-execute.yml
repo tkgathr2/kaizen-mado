@@ -24,8 +24,11 @@ concurrency:
 jobs:
   execute:
     runs-on: ubuntu-latest
+    # 自己改修（targetRepo＝このリポ自身）は PAT 不要で動かすため write を付与。
+    # TARGET_REPO_PAT が空/未設定でも github.token にフォールバックする（他リポ改修時のみPAT必須）。
     permissions:
-      contents: read
+      contents: write
+      pull-requests: write
     env:
       TICKET_ID: ${{ github.event.client_payload.ticketId }}
       PAGE_ID: ${{ github.event.client_payload.pageId }}
@@ -40,7 +43,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ env.TARGET_REPO }}
-          token: ${{ secrets.TARGET_REPO_PAT }}
+          token: ${{ secrets.TARGET_REPO_PAT || github.token }}
           fetch-depth: 0
 
       - name: Create work branch
@@ -97,7 +100,7 @@ jobs:
         id: pr
         if: steps.gate.outputs.verdict == 'auto' || steps.gate.outputs.verdict == 'review'
         env:
-          GH_TOKEN: ${{ secrets.TARGET_REPO_PAT }}
+          GH_TOKEN: ${{ secrets.TARGET_REPO_PAT || github.token }}
           # ${{ }} は env で受けてから $VAR で使う（run内への直接展開＝シェルインジェクションを避ける）
           DETAIL: ${{ steps.gate.outputs.detail }}
           BRANCH: ${{ steps.branch.outputs.branch }}
