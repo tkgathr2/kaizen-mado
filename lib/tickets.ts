@@ -14,6 +14,8 @@ export interface TicketRow {
   reporter: string;
   state: string;
   fgsUrl: string | null;
+  /** Notionの最終更新時刻（ISO文字列）。/board の並び・表示用。古いコードは未使用なので任意。 */
+  lastEdited?: string;
 }
 
 function getAuth(): { token: string; databaseId: string } {
@@ -71,6 +73,7 @@ function parseRow(page: any): TicketRow {
     reporter: plainFromRichText(props["起票者"]),
     state: nameFromSelect(props["状態"]),
     fgsUrl: valueFromUrl(props["FGSリンク"]),
+    lastEdited: typeof page?.last_edited_time === "string" ? page.last_edited_time : "",
   };
 }
 
@@ -110,6 +113,29 @@ export async function fetchTicketsByState(
     { property: "状態", select: { equals: state } },
     limit
   );
+}
+
+/** 全チケットを最終更新の新しい順で取得（/board の状況可視化用・読み取り専用）。 */
+export async function fetchAllTickets(limit = 100): Promise<TicketRow[]> {
+  const { token, databaseId } = getAuth();
+  const res = await fetch(
+    `https://api.notion.com/v1/databases/${databaseId}/query`,
+    {
+      method: "POST",
+      headers: headers(token),
+      body: JSON.stringify({
+        sorts: [{ timestamp: "last_edited_time", direction: "descending" }],
+        page_size: Math.min(Math.max(1, limit), 100),
+      }),
+    }
+  );
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`Notion query error ${res.status}: ${t.slice(0, 300)}`);
+  }
+  const data = await res.json();
+  const results = Array.isArray(data?.results) ? data.results : [];
+  return results.map(parseRow);
 }
 
 /** pageIdで1件取得（webhookでGO時に現在状態を確認＝冪等化のため）。無ければnull。 */

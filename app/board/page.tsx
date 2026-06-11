@@ -1,0 +1,176 @@
+"use client";
+
+// ── カイゼンくん 状況ボード（/board） ──
+// 「声→起票→議論→GO待ち→着手→実装中→レビュー→完了」の全チケットの流れを1画面で見える化。
+// データは /api/board（Notion改善チケットDBを状態ごとに整形・読み取り専用）。
+// 20秒ごとに自動更新。操作ボタンは置かない（対人送信・本番破壊なし＝見るだけ）。
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { BoardColumn } from "@/lib/board";
+
+interface BoardData {
+  ok: boolean;
+  configured: boolean;
+  columns: BoardColumn[];
+  counts: Record<string, number>;
+  total: number;
+  updatedAt: string;
+}
+
+// 状態ごとの見た目（絵文字＋アクセント色）。未知状態はデフォルト。
+const STATE_META: Record<string, { emoji: string; color: string }> = {
+  受付: { emoji: "📥", color: "#9a8c7a" },
+  議論中: { emoji: "💬", color: "#b58a3c" },
+  GO待ち: { emoji: "✋", color: "#d97757" },
+  着手: { emoji: "🔧", color: "#3d7ab0" },
+  実装中: { emoji: "⚙️", color: "#3d7ab0" },
+  レビュー: { emoji: "🔍", color: "#7a5db0" },
+  完了: { emoji: "✅", color: "#3f7a3f" },
+  社長確認: { emoji: "🛑", color: "#b4452b" },
+  差し戻し: { emoji: "↩️", color: "#b58a3c" },
+  却下: { emoji: "🚫", color: "#a0a0a0" },
+};
+const DEFAULT_META = { emoji: "•", color: "#9a8c7a" };
+const metaOf = (s: string) => STATE_META[s] ?? DEFAULT_META;
+
+const IMP_COLOR: Record<string, string> = { 高: "#b4452b", 中: "#9a5a16", 低: "#83807a" };
+
+const POLL_MS = 20000;
+
+function relTime(iso: string): string {
+  if (!iso) return "";
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return "";
+  const diff = Date.now() - t;
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return "たった今";
+  if (min < 60) return `${min}分前`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `${h}時間前`;
+  const d = Math.floor(h / 24);
+  return `${d}日前`;
+}
+
+function clockHHMM(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+export default function BoardPage() {
+  const [data, setData] = useState<BoardData | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await fetch("/api/board", { cache: "no-store" });
+      const d = await r.json();
+      if (!r.ok || !d?.ok) throw new Error(d?.error || "読み込みに失敗しました");
+      setData(d as BoardData);
+      setError("");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+    timer.current = setInterval(load, POLL_MS);
+    return () => {
+      if (timer.current) clearInterval(timer.current);
+    };
+  }, [load]);
+
+  return (
+    <div className="board">
+      <header className="board-head">
+        <div className="board-logo">🔁</div>
+        <div className="board-titlewrap">
+          <h1>カイゼン状況ボード</h1>
+          <div className="board-sub">
+            声 → 起票 → 議論 → GO待ち → 着手 → 実装中 → レビュー → 完了 ／ 20秒ごとに自動更新
+          </div>
+        </div>
+        <button className="board-refresh" onClick={load} disabled={loading} title="今すぐ更新">
+          {loading ? "更新中…" : "↻ 更新"}
+        </button>
+      </header>
+
+      {error && <div className="error">読み込みエラー：{error}</div>}
+
+      {data && !data.configured && (
+        <div className="board-note">
+          Notion未接続のため表示できません（環境変数 NOTION_TOKEN / NOTION_DATABASE_ID 未設定）。
+        </div>
+      )}
+
+      {data && data.configured && (
+        <>
+          <div className="board-meta">
+            全 {data.total} 件 ／ 最終取得 {clockHHMM(data.updatedAt)}
+          </div>
+          <div className="board-cols">
+            {data.columns.map((col) => {
+              const m = metaOf(col.state);
+              return (
+                <section key={col.state} className="board-col">
+                  <div className="board-col-head" style={{ borderTopColor: m.color }}>
+                    <span className="board-col-name">
+                      <span aria-hidden>{m.emoji}</span> {col.state}
+                    </span>
+                    <span className="board-col-count">{col.cards.length}</span>
+                  </div>
+                  <div className="board-col-body">
+                    {col.cards.length === 0 && <div className="board-empty">—</div>}
+                    {col.cards.map((c) => (
+                      <a
+                        key={c.pageId}
+                        className="board-card"
+                        href={c.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        title="Notionでチケット全文を開く"
+                      >
+                        <div className="board-card-top">
+                          <span className="board-card-id">{c.ticketId || "KZ-?"}</span>
+                          <span className="board-card-sys">{c.system}</span>
+                        </div>
+                        <div className="board-card-title">{c.title}</div>
+                        <div className="board-card-foot">
+                          {c.type && <span className="board-tag">{c.type}</span>}
+                          {c.importance && (
+                            <span
+                              className="board-tag"
+                              style={{ color: IMP_COLOR[c.importance] ?? "#83807a" }}
+                            >
+                              重要度{c.importance}
+                            </span>
+                          )}
+                          {c.lastEdited && (
+                            <span className="board-card-time">{relTime(c.lastEdited)}</span>
+                          )}
+                        </div>
+                      </a>
+                    ))}
+                  </div>
+                </section>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      {!data && !error && <div className="typing">読み込み中…</div>}
+
+      <div className="board-footer">
+        カイゼンくん 状況ボード ／ 読み取り専用（操作はLINE・Notion・GitHubで） ／{" "}
+        <a href="/dashboard">成長ダッシュボード</a>
+      </div>
+    </div>
+  );
+}
