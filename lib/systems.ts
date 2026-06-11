@@ -10,6 +10,7 @@ export const SYSTEMS: { slug: string; name: string }[] = [
   { slug: "cast-meibo", name: "キャスト名簿くん" },
   { slug: "rakuraku", name: "らくらく契約くん" },
   { slug: "seiko", name: "seiko" },
+  { slug: "junkai", name: "巡回くん" },
   { slug: "kaizen", name: "カイゼンくん本体" },
   { slug: "other", name: "その他" },
 ];
