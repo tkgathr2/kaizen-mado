@@ -13,6 +13,7 @@ import {
 import { discussTicket } from "@/lib/discuss";
 import { pushProposal } from "@/lib/line";
 import { checkCronSecret } from "@/lib/cronAuth";
+import { returnLearningFromCompleted } from "@/lib/learn";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -77,10 +78,19 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // 学び還元（Phase2蒸留）を毎日ここで回す：完了済み・未学習チケットをknowhowへ。
+    // 従来は execute/callback（自動改修のマージ時）でしか走らず、手動完了・社長案件の
+    // 完了チケットが永遠に蒸留されなかった（learned=0 の真因）。失敗してもcron全体は止めない。
+    const learn = await returnLearningFromCompleted(10).catch((err) => {
+      console.error("[process] learn failed:", (err as Error).message);
+      return { memorized: 0 };
+    });
+
     return NextResponse.json({
       ok: true,
       count: processed.length,
       processed,
+      learned: learn.memorized,
       ...(errors.length ? { errors } : {}),
     });
   } catch (err) {
