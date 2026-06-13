@@ -27,6 +27,15 @@ const SENSITIVE_KEYWORDS = [
   "delete", "drop", "truncate", "migrate", "migration", "destroy", "wipe",
 ];
 
+/** 真田自走（オートパイロット）が有効か。
+ * ON のとき、preGate=auto の安全な改善は社長にGO伺いせず自動で着手→PR→マージまで進める。
+ * 社長を呼ぶのは preGate=escalate（金額/個人情報/認証/破壊/新機能/自動未許可システム）だけ。
+ * ＝「社長と真田の関係」と同じ：安全は任せて事後報告、危険だけ確認。 */
+export function autopilotEnabled(): boolean {
+  const v = (process.env.KAIZEN_AUTOPILOT || "").toLowerCase();
+  return v === "true" || v === "1" || v === "on";
+}
+
 /** 着手前ゲート。自動可なら "auto"、危険要因があれば "escalate"（理由つき）。 */
 export function preGate(ticket: TicketRow, target: TargetMeta | null): GateDecision {
   const reasons: string[] = [];

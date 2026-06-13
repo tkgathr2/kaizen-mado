@@ -94,6 +94,12 @@ jobs:
           token: ${{ secrets.TARGET_REPO_PAT || github.token }}
           fetch-depth: 0
 
+      # 自走時の Verify を ci.yml と同じ Node に固定（バージョンドリフト防止）。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
       - name: Create work branch
         id: branch
         run: |
@@ -162,16 +168,45 @@ jobs:
             --body "カイゼンくん自動改修（${TICKET_ID}）。判定: ${DETAIL}")
           echo "url=$PR_URL" >> "$GITHUB_OUTPUT"
 
-      - name: Callback to kaizen-mado（PRレビュー型）
+      # ── 真田自走の自動マージ ──
+      # bot(github.token)が作るPRは pull_request CI を起動しない（GitHub仕様）ため、
+      # PRチェック待ちは空振りする。よって「ジョブ内で実検証（型・テスト・ビルド）」を走らせ、
+      # それが緑のときだけ squash マージ＝本番反映。検証が落ちたらマージせず review で止まる（安全側）。
+      # autoMerge=false（社長GO経由・段階リリース）は従来どおりPRで止めて人がMerge。
+      - name: Verify before auto-merge（自走・実チェック）
+        id: verify
+        if: ${{ steps.pr.outputs.url != '' && steps.gate.outputs.verdict == 'auto' && matrix.item.autoMerge }}
+        continue-on-error: true
+        run: |
+          npm ci
+          npx tsc --noEmit
+          npx vitest run
+          npx next build
+
+      - name: Auto-merge（真田自走・検証グリーン時のみ）
+        id: merge
+        if: ${{ steps.verify.outcome == 'success' && matrix.item.autoMerge }}
+        env:
+          GH_TOKEN: ${{ secrets.TARGET_REPO_PAT || github.token }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+        run: |
+          if gh pr merge "$PR_URL" --squash --delete-branch; then
+            echo "merged=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Callback to kaizen-mado
         if: always()
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           GATE_VERDICT: ${{ steps.gate.outputs.verdict }}
           PR_URL: ${{ steps.pr.outputs.url }}
           DETAIL: ${{ steps.gate.outputs.detail }}
+          MERGED: ${{ steps.merge.outputs.merged }}
         run: |
           if [ "$GATE_VERDICT" = "failed" ] || [ -z "$PR_URL" ]; then
             RESULT="failed"
+          elif [ "$MERGED" = "true" ]; then
+            RESULT="merged"
           else
             RESULT="review"
           fi

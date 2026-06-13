@@ -45,10 +45,17 @@ export interface DispatchPayload {
   healthUrl: string | null;
   spec: string;
   callbackUrl: string;
+  /** 真田自走：ゲート通過時にPRを自動マージ→本番反映まで進めてよいか。 */
+  autoMerge: boolean;
 }
 
-/** 実行ワークフローに渡す client_payload を組み立てる（dispatch経路・plan経路で共用）。 */
-export function buildDispatchPayload(ticket: TicketRow, target: TargetMeta): DispatchPayload {
+/** 実行ワークフローに渡す client_payload を組み立てる（dispatch経路・plan経路で共用）。
+ * autoMerge=true（自走）なら、ワークフローは3条件ゲート通過時にPRを自動マージして本番反映する。 */
+export function buildDispatchPayload(
+  ticket: TicketRow,
+  target: TargetMeta,
+  autoMerge = false
+): DispatchPayload {
   const callbackBase = process.env.KAIZEN_PUBLIC_BASE || "https://kaizen.takagi.bz";
   return {
     ticketId: ticket.ticketId,
@@ -60,6 +67,7 @@ export function buildDispatchPayload(ticket: TicketRow, target: TargetMeta): Dis
     healthUrl: target.healthUrl,
     spec: buildSpec(ticket),
     callbackUrl: `${callbackBase}/api/execute/callback`,
+    autoMerge,
   };
 }
 

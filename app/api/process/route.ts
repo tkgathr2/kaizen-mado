@@ -11,9 +11,11 @@ import {
   setTicketAssignee,
 } from "@/lib/tickets";
 import { discussTicket } from "@/lib/discuss";
-import { pushProposal } from "@/lib/line";
+import { pushProposal, pushText, msgHead, stageBar, BOARD_URL } from "@/lib/line";
 import { checkCronSecret } from "@/lib/cronAuth";
 import { returnLearningFromCompleted } from "@/lib/learn";
+import { findTarget } from "@/lib/targets";
+import { preGate, autopilotEnabled } from "@/lib/gate";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -56,19 +58,53 @@ export async function POST(req: NextRequest) {
           { heading: "GO伺いドラフト（未送信）", body: d.goDraft },
         ]);
         await setTicketAssignee(ticket.pageId, "CTO Agent Lab");
-        await updateTicketState(ticket.pageId, "GO待ち");
-        // GO伺いを高木さん本人のLINEへpush（GO/修正/却下のボタン付き）。
-        // LINE鍵未設定なら pushProposal は false を返すだけ（ループは止めない）。
-        const pushed = await pushProposal(
-          { ...ticket, state: "GO待ち" },
-          d
-        );
-        processed.push({
-          ticketId: ticket.ticketId,
-          recommendation: d.recommendation,
-          source: d.source,
-          notified: pushed,
-        });
+
+        // ── 真田自走（オートパイロット） ──
+        // 安全（preGate=auto＝自動許可システム＋機微/新機能を含まない）かつ推奨がGOなら、
+        // 社長にGO伺いせず自動で「着手」へ進める（＝真田の判断でやって事後報告）。
+        // 危険（escalate）や自走OFFなら従来どおり「GO待ち」にしてGO伺いをpush（社長に聞く）。
+        const target = findTarget(ticket.system);
+        const gate = preGate({ ...ticket, state: "GO待ち" }, target);
+        // 推奨は enum（GO推奨/要検討/非推奨）。自走は「GO推奨」だけ。
+        // 要検討・非推奨はラボが慎重判断＝従来どおり社長にGO伺い（聞く）。
+        const recommendGo = d.recommendation === "GO推奨";
+
+        if (autopilotEnabled() && gate.mode === "auto" && recommendGo) {
+          // 自動GO：GO待ちを飛ばして着手へ。次のexecuteが実装→PR→（自走なら）マージまで。
+          await updateTicketState(ticket.pageId, "着手");
+          await appendDiscussionBlocks(ticket.pageId, [
+            {
+              heading: "真田自走（自動GO）",
+              body: "安全な改善のため、社長へのGO伺いを省略し真田の判断で着手。危険・対人・課金・本番破壊に該当する場合のみ社長確認（preGate=auto）。",
+            },
+          ]);
+          // FYI（質問ではなく報告）：何の件かを先頭に。
+          const fyi = await pushText(
+            [
+              msgHead("🤖", "真田が進めます", ticket.system, ticket.title),
+              `（${ticket.ticketId}）安全な改善なので、確認なしで直して反映まで進めます。`,
+              ``,
+              stageBar(4),
+              `全体像 ▶ ${BOARD_URL}`,
+            ].join("\n")
+          );
+          processed.push({
+            ticketId: ticket.ticketId,
+            recommendation: d.recommendation,
+            source: d.source,
+            notified: fyi,
+          });
+        } else {
+          // 従来：GO待ち＋GO伺い（社長に聞く）。自走未許可システム・危険案件はここ。
+          await updateTicketState(ticket.pageId, "GO待ち");
+          const pushed = await pushProposal({ ...ticket, state: "GO待ち" }, d);
+          processed.push({
+            ticketId: ticket.ticketId,
+            recommendation: d.recommendation,
+            source: d.source,
+            notified: pushed,
+          });
+        }
       } catch (err) {
         // 1件失敗しても他を続行する
         errors.push({
