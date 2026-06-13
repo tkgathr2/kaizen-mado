@@ -5,6 +5,7 @@
 import type { TicketRow } from "./tickets";
 import { updateTicketState, appendDiscussionBlocks } from "./tickets";
 import type { GoAction } from "./line";
+import { stageBar, BOARD_URL } from "./line";
 
 export interface ApplyResult {
   ok: boolean;
@@ -37,8 +38,10 @@ export async function applyGoAction(
       ok: true,
       newState: "着手",
       reply:
+        `${stageBar(3)}\n` + // ③GO受領（→着手へ）
         `✅ GO受領 ${ticket.ticketId}\n` +
-        `進めます。結果（PR完成 or 社長案件）はまたお知らせします。`,
+        `進めます。結果（PR完成 or 社長案件）はまたお知らせします。\n` +
+        `全体像 ▶ ${BOARD_URL}`,
     };
   }
 

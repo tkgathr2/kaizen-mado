@@ -206,6 +206,29 @@ export function notionPageUrl(pageId: string): string {
   return `https://www.notion.so/${(pageId || "").replace(/-/g, "")}`;
 }
 
+/** 全体像（カンバン）ボードのURL。 */
+export const BOARD_URL =
+  (process.env.KAIZEN_PUBLIC_BASE || "https://kaizen.takagi.bz") + "/board";
+
+// ── 工程ステッパー（社長が「今どこか／全体像」を一目で分かるように） ──
+// カイゼンの全工程：①声→②提案→③GO→④着手→⑤PR→⑥反映
+// 各LINE通知の先頭にこの1行を入れて、✅=済 / 🔵=いまここ / ・=これから を示す。
+export const STAGES = ["声", "提案", "GO", "着手", "PR", "反映"] as const;
+export type StageIndex = 1 | 2 | 3 | 4 | 5 | 6;
+
+/** 工程バーを組み立てる。current=いまの工程(1〜6)。done=完了として閉じる場合はcurrentに6を渡す。 */
+export function stageBar(current: StageIndex): string {
+  return (
+    "📍 " +
+    STAGES.map((label, i) => {
+      const n = i + 1;
+      if (n < current) return `✅${label}`;
+      if (n === current) return `🔵${label}`;
+      return `・${label}`;
+    }).join(" ")
+  );
+}
+
 /** GO伺い本文を組み立てる（チケット＋議論結果から）。
  * 読みやすさ最優先：結論（おすすめ）を先頭に、方針・リスクは要約だけ、詳細はNotionリンクへ。
  * 複数提案が連続で届いてもquick replyボタンは"最新メッセージ"にしか付かないため、
@@ -219,6 +242,7 @@ export function buildProposalText(ticket: TicketRow, d: DiscussResult): string {
         .join("\n") + (d.risks.length > 2 ? `\n・ほか${d.risks.length - 2}件（詳細はNotion）` : "")
     : "・特になし";
   return [
+    stageBar(2), // ②提案（GO待ち）
     `🔁 提案 ${id}｜${ticket.system || "対象未特定"}`,
     `「${truncateForLine(ticket.title || "改善のご要望", 28)}」`,
     ``,
@@ -234,6 +258,7 @@ export function buildProposalText(ticket: TicketRow, d: DiscussResult): string {
     `※ボタンは最新の提案のみ。前の提案にはID付きで返信。`,
     ``,
     `詳細 ▶ ${notionPageUrl(ticket.pageId)}`,
+    `全体像 ▶ ${BOARD_URL}`,
   ].join("\n");
 }
 
