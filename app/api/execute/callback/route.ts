@@ -11,7 +11,7 @@ import {
   fetchTicketByPageId,
 } from "@/lib/tickets";
 import { returnLearningFromCompleted } from "@/lib/learn";
-import { pushText, truncateForLine, stageBar, BOARD_URL } from "@/lib/line";
+import { pushText, truncateForLine, stageBar, BOARD_URL, msgHead } from "@/lib/line";
 import { checkCronSecret } from "@/lib/cronAuth";
 
 export const runtime = "nodejs";
@@ -67,9 +67,10 @@ export async function POST(req: NextRequest) {
       ]);
       await pushText(
         [
-          stageBar(6), // ⑥反映（完了）
-          `✅ 本番反映しました ${ticketId}｜${system}`,
+          msgHead("🎉", "本番反映", system || current.system, current.title), // まず「何の件か」
+          `（${ticketId}）直して本番に反映しました。`,
           ``,
+          stageBar(6), // ⑥反映（完了）
           `PR ▶ ${prUrl}`,
           `全体像 ▶ ${BOARD_URL}`,
         ].join("\n")
@@ -87,11 +88,12 @@ export async function POST(req: NextRequest) {
       ]);
       await pushText(
         [
-          stageBar(5), // ⑤PR（レビュー待ち）
-          `✅ PRができました ${ticketId}｜${system}`,
+          msgHead("✅", "PRできました", system || current.system, current.title), // まず「何の件か」
+          `（${ticketId}）直して、確認用の差分(PR)を作りました。`,
           ...(detail ? [`内容：${truncateForLine(detail, 60)}`] : []),
           ``,
-          `差分を確認して「Merge」で本番反映されます。`,
+          `差分を見て「Merge」を押すと本番反映されます。`,
+          stageBar(5), // ⑤PR（レビュー待ち）
           `PR ▶ ${prUrl}`,
           `全体像 ▶ ${BOARD_URL}`,
         ].join("\n")
@@ -106,11 +108,12 @@ export async function POST(req: NextRequest) {
     ]);
     await pushText(
       [
-        stageBar(4), // ④着手で失敗→差し戻し
-        `🔴 直せませんでした ${ticketId}｜${system}`,
+        msgHead("⚠️", "直せず", system || current.system, current.title), // まず「何の件か」
+        `（${ticketId}）今回は直せませんでした。`,
         `理由：${truncateForLine(detail || "不明", 60)}`,
         ``,
         `議論に戻しました。見直して再提案します。`,
+        stageBar(4), // ④着手で失敗→差し戻し
         `全体像 ▶ ${BOARD_URL}`,
       ].join("\n")
     );

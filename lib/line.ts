@@ -229,6 +229,20 @@ export function stageBar(current: StageIndex): string {
   );
 }
 
+/** メッセージ先頭の「何の件か」ヘッダー（2行）。社長が最初に主題＝システム＋タイトルを掴めるように。
+ * 例：💡【提案】プロレポ / 「一覧を新着順にする」 */
+export function msgHead(
+  emoji: string,
+  kind: string,
+  system: string | null | undefined,
+  title: string | null | undefined
+): string {
+  return (
+    `${emoji}【${kind}】${truncateForLine(system || "対象未特定", 20)}\n` +
+    `「${truncateForLine(title || "改善のご要望", 30)}」`
+  );
+}
+
 /** GO伺い本文を組み立てる（チケット＋議論結果から）。
  * 読みやすさ最優先：結論（おすすめ）を先頭に、方針・リスクは要約だけ、詳細はNotionリンクへ。
  * 複数提案が連続で届いてもquick replyボタンは"最新メッセージ"にしか付かないため、
@@ -242,21 +256,20 @@ export function buildProposalText(ticket: TicketRow, d: DiscussResult): string {
         .join("\n") + (d.risks.length > 2 ? `\n・ほか${d.risks.length - 2}件（詳細はNotion）` : "")
     : "・特になし";
   return [
-    stageBar(2), // ②提案（GO待ち）
-    `🔁 提案 ${id}｜${ticket.system || "対象未特定"}`,
-    `「${truncateForLine(ticket.title || "改善のご要望", 28)}」`,
+    msgHead("💡", "提案", ticket.system, ticket.title), // まず「何の件か」
+    `（${id}）`,
     ``,
     `🧭 おすすめ：${truncateForLine(d.recommendation, 40)}`,
-    ``,
     `方針：${truncateForLine(d.houshin, 110)}`,
     `工数：${truncateForLine(d.kousuu, 30)}`,
     `リスク：`,
     riskLines,
     ``,
-    `▼ 返信（どれか1つ）`,
+    `▼ 直していい？ 返信で（どれか1つ）`,
     `GO ${id}／修正 ${id}／却下 ${id}`,
     `※ボタンは最新の提案のみ。前の提案にはID付きで返信。`,
     ``,
+    stageBar(2), // ②提案（GO待ち）
     `詳細 ▶ ${notionPageUrl(ticket.pageId)}`,
     `全体像 ▶ ${BOARD_URL}`,
   ].join("\n");
