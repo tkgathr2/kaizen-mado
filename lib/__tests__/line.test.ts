@@ -145,3 +145,36 @@ describe("文面ヘルパ", () => {
     );
   });
 });
+
+import { stageBar } from "../line";
+
+describe("工程ステッパー stageBar", () => {
+  it("いまの工程を🔵、過去を✅、未来を・で示す（全6工程）", () => {
+    const bar = stageBar(4);
+    // ①声②提案③GO は完了、④着手がいまここ、⑤PR⑥反映はこれから
+    expect(bar).toContain("✅声");
+    expect(bar).toContain("✅提案");
+    expect(bar).toContain("✅GO");
+    expect(bar).toContain("🔵着手");
+    expect(bar).toContain("・PR");
+    expect(bar).toContain("・反映");
+  });
+  it("最終工程(6=反映)は全完了の手前まで✅、反映が🔵", () => {
+    const bar = stageBar(6);
+    expect(bar).toContain("✅PR");
+    expect(bar).toContain("🔵反映");
+    expect(bar).not.toContain("・");
+  });
+  it("提案文(stage2)には工程バーと全体像リンクが入る", () => {
+    const t = {
+      pageId: "p1", ticketId: "KZ-20", system: "プロレポ", type: "改善",
+      importance: "低", title: "x", detail: "y", reporter: "現場",
+      state: "GO待ち", fgsUrl: null,
+    } as TicketRow;
+    const d: DiscussResult = { houshin: "a", kousuu: "b", risks: [], recommendation: "GO推奨", goDraft: "", source: "claude" };
+    const text = buildProposalText(t, d);
+    expect(text).toContain("📍");
+    expect(text).toContain("🔵提案");
+    expect(text).toContain("/board");
+  });
+});

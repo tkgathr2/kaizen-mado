@@ -18,7 +18,7 @@ import {
   buildDispatchPayload,
   type DispatchPayload,
 } from "@/lib/orchestrate";
-import { pushText, truncateForLine, notionPageUrl } from "@/lib/line";
+import { pushText, truncateForLine, notionPageUrl, stageBar, BOARD_URL } from "@/lib/line";
 import { checkCronSecret } from "@/lib/cronAuth";
 
 export const runtime = "nodejs";
@@ -70,6 +70,7 @@ export async function POST(req: NextRequest) {
         ]);
         await pushText(
           [
+            stageBar(3), // ③のGO段で社長判断へ分岐
             `🛑 社長案件です ${ticket.ticketId}｜${ticket.system}`,
             `「${truncateForLine(ticket.title, 28)}」`,
             ``,
@@ -79,6 +80,7 @@ export async function POST(req: NextRequest) {
             ``,
             `進め方は社長のご判断をお願いします。`,
             `詳細 ▶ ${notionPageUrl(ticket.pageId)}`,
+            `全体像 ▶ ${BOARD_URL}`,
           ].join("\n")
         );
         escalated.push(ticket.ticketId);
@@ -100,8 +102,10 @@ export async function POST(req: NextRequest) {
         ]);
         await pushText(
           [
+            stageBar(4), // ④着手
             `🔧 着手しました ${ticket.ticketId}｜${ticket.system}`,
             `確認用のPR（差分）を作成中。できたらお知らせします。`,
+            `全体像 ▶ ${BOARD_URL}`,
           ].join("\n")
         );
         plan.push(buildDispatchPayload(ticket, target));
@@ -123,8 +127,10 @@ export async function POST(req: NextRequest) {
         // GOからPR完成までの間、動いていることが伝わるよう「着手」を通知。
         await pushText(
           [
+            stageBar(4), // ④着手
             `🔧 着手しました ${ticket.ticketId}｜${ticket.system}`,
             `確認用のPR（差分）を作成中。できたらお知らせします。`,
+            `全体像 ▶ ${BOARD_URL}`,
           ].join("\n")
         );
         dispatched.push(ticket.ticketId);
