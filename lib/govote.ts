@@ -5,7 +5,7 @@
 import type { TicketRow } from "./tickets";
 import { updateTicketState, appendDiscussionBlocks } from "./tickets";
 import type { GoAction } from "./line";
-import { stageBar, BOARD_URL } from "./line";
+import { stageBar, BOARD_URL, msgHead } from "./line";
 
 export interface ApplyResult {
   ok: boolean;
@@ -38,9 +38,9 @@ export async function applyGoAction(
       ok: true,
       newState: "着手",
       reply:
+        `${msgHead("✅", "GO受領", ticket.system, ticket.title)}\n` + // まず「何の件か」
+        `（${ticket.ticketId}）進めます。結果はまたお知らせします。\n\n` +
         `${stageBar(3)}\n` + // ③GO受領（→着手へ）
-        `✅ GO受領 ${ticket.ticketId}\n` +
-        `進めます。結果（PR完成 or 社長案件）はまたお知らせします。\n` +
         `全体像 ▶ ${BOARD_URL}`,
     };
   }
@@ -54,8 +54,8 @@ export async function applyGoAction(
       ok: true,
       newState: "差し戻し",
       reply:
-        `✏️ 修正受領 ${ticket.ticketId}\n` +
-        `議論に戻して、見直してから再提案します。`,
+        `${msgHead("✏️", "修正受領", ticket.system, ticket.title)}\n` +
+        `（${ticket.ticketId}）議論に戻して、見直してから再提案します。`,
     };
   }
 
@@ -67,6 +67,8 @@ export async function applyGoAction(
   return {
     ok: true,
     newState: "却下",
-    reply: `🚫 却下しました ${ticket.ticketId}。今回は見送ります。`,
+    reply:
+      `${msgHead("🚫", "却下", ticket.system, ticket.title)}\n` +
+      `（${ticket.ticketId}）今回は見送ります。`,
   };
 }

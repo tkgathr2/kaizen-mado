@@ -165,16 +165,36 @@ describe("工程ステッパー stageBar", () => {
     expect(bar).toContain("🔵反映");
     expect(bar).not.toContain("・");
   });
-  it("提案文(stage2)には工程バーと全体像リンクが入る", () => {
+  it("提案文は主題（システム・タイトル）が先頭、工程バー・リンクは後ろ", () => {
     const t = {
       pageId: "p1", ticketId: "KZ-20", system: "プロレポ", type: "改善",
-      importance: "低", title: "x", detail: "y", reporter: "現場",
+      importance: "低", title: "一覧を新着順に", detail: "y", reporter: "現場",
       state: "GO待ち", fgsUrl: null,
     } as TicketRow;
     const d: DiscussResult = { houshin: "a", kousuu: "b", risks: [], recommendation: "GO推奨", goDraft: "", source: "claude" };
     const text = buildProposalText(t, d);
-    expect(text).toContain("📍");
+    // 1行目に「何の件か」＝システム名・タイトルが来る
+    const firstLine = text.split("\n")[0];
+    expect(firstLine).toContain("提案");
+    expect(firstLine).toContain("プロレポ");
+    expect(text).toContain("「一覧を新着順に」");
+    // 工程バーとリンクは存在しつつ、主題より後ろ
     expect(text).toContain("🔵提案");
     expect(text).toContain("/board");
+    expect(text.indexOf("プロレポ")).toBeLessThan(text.indexOf("📍"));
+  });
+});
+
+import { msgHead } from "../line";
+
+describe("msgHead（何の件かヘッダー）", () => {
+  it("絵文字【種別】システム＋「タイトル」を2行で返す", () => {
+    const h = msgHead("💡", "提案", "プロレポ", "一覧を新着順に");
+    expect(h).toBe("💡【提案】プロレポ\n「一覧を新着順に」");
+  });
+  it("system/title が空でも既定文言で落ちない", () => {
+    const h = msgHead("✅", "完了", null, null);
+    expect(h).toContain("対象未特定");
+    expect(h).toContain("改善のご要望");
   });
 });

@@ -18,7 +18,7 @@ import {
   buildDispatchPayload,
   type DispatchPayload,
 } from "@/lib/orchestrate";
-import { pushText, truncateForLine, notionPageUrl, stageBar, BOARD_URL } from "@/lib/line";
+import { pushText, truncateForLine, notionPageUrl, stageBar, BOARD_URL, msgHead } from "@/lib/line";
 import { checkCronSecret } from "@/lib/cronAuth";
 
 export const runtime = "nodejs";
@@ -70,15 +70,16 @@ export async function POST(req: NextRequest) {
         ]);
         await pushText(
           [
-            stageBar(3), // ③のGO段で社長判断へ分岐
-            `🛑 社長案件です ${ticket.ticketId}｜${ticket.system}`,
-            `「${truncateForLine(ticket.title, 28)}」`,
+            msgHead("🛑", "社長判断", ticket.system, ticket.title), // まず「何の件か」
+            `（${ticket.ticketId}）`,
             ``,
             `自動では直しません。理由：`,
             ...decision.reasons.slice(0, 3).map((r) => `・${truncateForLine(r, 38)}`),
             ...(decision.reasons.length > 3 ? [`・ほか${decision.reasons.length - 3}件（詳細はNotion）`] : []),
             ``,
             `進め方は社長のご判断をお願いします。`,
+            ``,
+            stageBar(3), // ③のGO段で社長判断へ分岐
             `詳細 ▶ ${notionPageUrl(ticket.pageId)}`,
             `全体像 ▶ ${BOARD_URL}`,
           ].join("\n")
@@ -102,9 +103,10 @@ export async function POST(req: NextRequest) {
         ]);
         await pushText(
           [
+            msgHead("🔧", "着手", ticket.system, ticket.title), // まず「何の件か」
+            `（${ticket.ticketId}）直し始めました。確認用のPR（差分）を作成中。`,
+            ``,
             stageBar(4), // ④着手
-            `🔧 着手しました ${ticket.ticketId}｜${ticket.system}`,
-            `確認用のPR（差分）を作成中。できたらお知らせします。`,
             `全体像 ▶ ${BOARD_URL}`,
           ].join("\n")
         );
@@ -127,9 +129,10 @@ export async function POST(req: NextRequest) {
         // GOからPR完成までの間、動いていることが伝わるよう「着手」を通知。
         await pushText(
           [
+            msgHead("🔧", "着手", ticket.system, ticket.title), // まず「何の件か」
+            `（${ticket.ticketId}）直し始めました。確認用のPR（差分）を作成中。`,
+            ``,
             stageBar(4), // ④着手
-            `🔧 着手しました ${ticket.ticketId}｜${ticket.system}`,
-            `確認用のPR（差分）を作成中。できたらお知らせします。`,
             `全体像 ▶ ${BOARD_URL}`,
           ].join("\n")
         );
