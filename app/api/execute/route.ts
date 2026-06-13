@@ -11,7 +11,7 @@ import {
   appendDiscussionBlocks,
 } from "@/lib/tickets";
 import { findTarget } from "@/lib/targets";
-import { preGate } from "@/lib/gate";
+import { preGate, autopilotEnabled } from "@/lib/gate";
 import {
   dispatchExecution,
   dispatchEnabled,
@@ -110,7 +110,8 @@ export async function POST(req: NextRequest) {
             `全体像 ▶ ${BOARD_URL}`,
           ].join("\n")
         );
-        plan.push(buildDispatchPayload(ticket, target));
+        // 自走ONなら autoMerge=true（このtsへ来た時点でpreGate=auto＝安全と判定済み）。
+        plan.push(buildDispatchPayload(ticket, target, autopilotEnabled()));
         dispatched.push(ticket.ticketId);
         continue;
       }

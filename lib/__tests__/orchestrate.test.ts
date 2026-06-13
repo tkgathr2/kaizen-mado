@@ -95,5 +95,11 @@ describe("orchestrate", () => {
     expect(p.forbiddenPaths).toEqual([".env"]);
     expect(p.callbackUrl).toContain("/api/execute/callback");
     expect(p.spec).toContain("KZ-9");
+    expect(p.autoMerge).toBe(false); // 既定は自動マージしない
+  });
+
+  it("buildDispatchPayload(…, true) で autoMerge=true（真田自走）", () => {
+    const p = buildDispatchPayload(ticket(), target, true);
+    expect(p.autoMerge).toBe(true);
   });
 });

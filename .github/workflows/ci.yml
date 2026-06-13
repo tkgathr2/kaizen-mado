@@ -1,0 +1,29 @@
+# ── PR CI（型・テスト・ビルド） ──
+# 人が出す Pull Request 用のCI（型/テスト/ビルド）。
+# 注：真田自走（kaizen-loop.yml の自動マージ）の検証は別経路。bot(github.token)製PRは
+# pull_request CI を起動しないGitHub仕様のため、kaizen-loop はジョブ内で同等の検証
+# （npm ci→tsc→vitest→next build）を実走し、緑のときだけ自動マージする。本ファイルは
+# 人のPR経路をカバーする（両経路で検証が走る）。
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci
+      - name: typecheck
+        run: npx tsc --noEmit
+      - name: test
+        run: npx vitest run
+      - name: build
+        run: npx next build

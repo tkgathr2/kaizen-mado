@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { preGate } from "../gate";
+import { describe, it, expect, afterEach } from "vitest";
+import { preGate, autopilotEnabled } from "../gate";
 import type { TicketRow } from "../tickets";
 import type { TargetMeta } from "../targets";
 
@@ -58,5 +58,25 @@ describe("preGate", () => {
     const d = preGate(ticket(), eligible);
     expect(d.mode).toBe("auto");
     expect(d.reasons).toHaveLength(0);
+  });
+});
+
+describe("autopilotEnabled（真田自走スイッチ）", () => {
+  const saved = process.env.KAIZEN_AUTOPILOT;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.KAIZEN_AUTOPILOT;
+    else process.env.KAIZEN_AUTOPILOT = saved;
+  });
+  it("true/1/on で有効、それ以外は無効", () => {
+    process.env.KAIZEN_AUTOPILOT = "true";
+    expect(autopilotEnabled()).toBe(true);
+    process.env.KAIZEN_AUTOPILOT = "1";
+    expect(autopilotEnabled()).toBe(true);
+    process.env.KAIZEN_AUTOPILOT = "ON";
+    expect(autopilotEnabled()).toBe(true);
+    process.env.KAIZEN_AUTOPILOT = "false";
+    expect(autopilotEnabled()).toBe(false);
+    delete process.env.KAIZEN_AUTOPILOT;
+    expect(autopilotEnabled()).toBe(false);
   });
 });
