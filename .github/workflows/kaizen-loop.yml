@@ -1,0 +1,183 @@
+# ── カイゼン自律ループ（PAT不要・GitHub Actions完結版） ──
+# 目的：Vercel側のGITHUB_DISPATCH_TOKEN(PAT)に頼らず、改善ループを完全自走させる。
+#   repository_dispatch はActions標準トークンでは"連鎖起動"できない（GitHub仕様）ため、
+#   別ワークフローを起動せず「計画→実装→PR」をこの1本の中で完結させる。
+#
+# 流れ：
+#   plan ジョブ … Vercelに /api/process（受付→GO待ち＋LINE）と /api/execute?mode=plan
+#                 （着手→実装中＋実装ペイロード返却・社長案件はVercelがescalate）を叩く。
+#   implement ジョブ … plan が返した各ペイロードを matrix で受け、対象リポを Claude が改修→PR→callback。
+#
+# 必要シークレット（すべて既存・新規発行不要）：
+#   CRON_SECRET … Vercelの /api/process・/api/execute 認証（既存GH secret）
+#   ANTHROPIC_API_KEY … Claude実装（既存GH secret）
+#   GITHUB_TOKEN … Actions自動付与。自リポ(kaizen-mado)のPR作成に使う（自己改修のみ。他リポはTARGET_REPO_PAT）
+#   TARGET_REPO_PAT … 任意。他リポ改修時のみ必要（無ければ自リポはgithub.tokenで動く）
+name: kaizen-loop
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "1回で処理する着手チケットの上限"
+        required: false
+        default: "3"
+  schedule:
+    # 15分ごと（GitHub Actionsのcronはベストエフォート。Vercel Hobbyの1日1回制約に縛られない）
+    - cron: "*/15 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kaizen-loop
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      items: ${{ steps.plan.outputs.items }}
+      count: ${{ steps.plan.outputs.count }}
+    steps:
+      - name: 受付→GO待ち（提案push）
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          curl -sS -X POST "https://kaizen.takagi.bz/api/process" \
+            -H "x-cron-secret: ${CRON_SECRET}" \
+            -H "content-type: application/json" \
+            -d '{"limit":5}' || true
+
+      - name: 着手→実装ペイロード取得（mode=plan）
+        id: plan
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          LIMIT: ${{ github.event.inputs.limit || '3' }}
+        run: |
+          RES=$(curl -sS -X POST "https://kaizen.takagi.bz/api/execute?mode=plan" \
+            -H "x-cron-secret: ${CRON_SECRET}" \
+            -H "content-type: application/json" \
+            -d "{\"limit\":${LIMIT}}")
+          echo "raw: $RES"
+          ITEMS=$(echo "$RES" | jq -c '.plan // []')
+          COUNT=$(echo "$ITEMS" | jq 'length')
+          echo "items=$ITEMS" >> "$GITHUB_OUTPUT"
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+
+  implement:
+    needs: plan
+    if: ${{ needs.plan.outputs.count != '0' && needs.plan.outputs.count != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        item: ${{ fromJson(needs.plan.outputs.items) }}
+    env:
+      TICKET_ID: ${{ matrix.item.ticketId }}
+      PAGE_ID: ${{ matrix.item.pageId }}
+      SYSTEM: ${{ matrix.item.system }}
+      TARGET_REPO: ${{ matrix.item.targetRepo }}
+      HEALTH_URL: ${{ matrix.item.healthUrl }}
+      CALLBACK_URL: ${{ matrix.item.callbackUrl }}
+      SPEC: ${{ matrix.item.spec }}
+      FORBIDDEN: ${{ join(matrix.item.forbiddenPaths, ',') }}
+    steps:
+      - name: Checkout target repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.TARGET_REPO }}
+          token: ${{ secrets.TARGET_REPO_PAT || github.token }}
+          fetch-depth: 0
+
+      - name: Create work branch
+        id: branch
+        run: |
+          BR="kaizen/${TICKET_ID,,}-$(date +%s)"
+          git config user.name "kaizen-bot"
+          git config user.email "kaizen-bot@users.noreply.github.com"
+          git checkout -b "$BR"
+          echo "branch=$BR" >> "$GITHUB_OUTPUT"
+
+      - name: Implement with Claude
+        uses: anthropics/claude-code-base-action@beta
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          allowed_tools: "Read,Glob,Grep,Edit,MultiEdit,Write,Bash(npm install),Bash(npm ci),Bash(npm run build),Bash(npm run lint),Bash(npx vitest run),Bash(npx tsc --noEmit)"
+          prompt: |
+            次の「カイゼン実装指示」に従って、このリポジトリに最小差分の変更を加えてください。
+            禁止パス（${{ env.FORBIDDEN }}）には触れないでください。テスト・型・lintを壊さないこと。
+            変更後はビルド/テストが通る状態にしてください。
+
+            ${{ env.SPEC }}
+
+      - name: Post-gate（diff行数・禁止パス判定）
+        id: gate
+        run: |
+          rm -f output.txt
+          git add -A
+          if git diff --cached --quiet; then
+            echo "verdict=failed" >> "$GITHUB_OUTPUT"
+            echo "detail=変更が生成されませんでした" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          LINES=$(git diff --cached --numstat | awk '{a+=$1; d+=$2} END {print a+d}')
+          TOUCHED=$(git diff --cached --name-only)
+          HIT=""
+          IFS=',' read -ra PATHS <<< "$FORBIDDEN"
+          for p in "${PATHS[@]}"; do
+            [ -z "$p" ] && continue
+            if echo "$TOUCHED" | grep -qi -- "$p"; then HIT="$HIT $p"; fi
+          done
+          if [ -n "$HIT" ]; then
+            echo "verdict=review" >> "$GITHUB_OUTPUT"
+            echo "detail=禁止パス接触:$HIT" >> "$GITHUB_OUTPUT"
+          elif [ "${LINES:-0}" -ge 50 ]; then
+            echo "verdict=review" >> "$GITHUB_OUTPUT"
+            echo "detail=差分が大きい（${LINES}行 >= 50）" >> "$GITHUB_OUTPUT"
+          else
+            echo "verdict=auto" >> "$GITHUB_OUTPUT"
+            echo "detail=diff ${LINES}行・禁止パス非接触" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit & push & PR
+        id: pr
+        if: steps.gate.outputs.verdict == 'auto' || steps.gate.outputs.verdict == 'review'
+        env:
+          GH_TOKEN: ${{ secrets.TARGET_REPO_PAT || github.token }}
+          DETAIL: ${{ steps.gate.outputs.detail }}
+          BRANCH: ${{ steps.branch.outputs.branch }}
+        run: |
+          git commit -q -m "fix(kaizen): ${TICKET_ID} 自動改修
+
+          ${DETAIL}"
+          git push -u origin "$BRANCH"
+          PR_URL=$(gh pr create --repo "$TARGET_REPO" \
+            --head "$BRANCH" \
+            --title "fix(kaizen): ${TICKET_ID} 自動改修" \
+            --body "カイゼンくん自動改修（${TICKET_ID}）。判定: ${DETAIL}")
+          echo "url=$PR_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Callback to kaizen-mado（PRレビュー型）
+        if: always()
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          GATE_VERDICT: ${{ steps.gate.outputs.verdict }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+          DETAIL: ${{ steps.gate.outputs.detail }}
+        run: |
+          if [ "$GATE_VERDICT" = "failed" ] || [ -z "$PR_URL" ]; then
+            RESULT="failed"
+          else
+            RESULT="review"
+          fi
+          curl -s -X POST "$CALLBACK_URL" \
+            -H "content-type: application/json" \
+            -H "x-cron-secret: $CRON_SECRET" \
+            -d "$(jq -n --arg t "$TICKET_ID" --arg p "$PAGE_ID" --arg s "$SYSTEM" \
+                   --arg r "$RESULT" --arg u "$PR_URL" --arg d "$DETAIL" \
+                   '{ticketId:$t,pageId:$p,system:$s,result:$r,prUrl:$u,detail:$d}')"

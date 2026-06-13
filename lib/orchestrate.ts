@@ -35,6 +35,34 @@ export function dispatchEnabled(): boolean {
   return Boolean(process.env.GITHUB_DISPATCH_TOKEN);
 }
 
+export interface DispatchPayload {
+  ticketId: string;
+  pageId: string;
+  system: string;
+  targetRepo: string;
+  importance: string;
+  forbiddenPaths: string[];
+  healthUrl: string | null;
+  spec: string;
+  callbackUrl: string;
+}
+
+/** 実行ワークフローに渡す client_payload を組み立てる（dispatch経路・plan経路で共用）。 */
+export function buildDispatchPayload(ticket: TicketRow, target: TargetMeta): DispatchPayload {
+  const callbackBase = process.env.KAIZEN_PUBLIC_BASE || "https://kaizen.takagi.bz";
+  return {
+    ticketId: ticket.ticketId,
+    pageId: ticket.pageId,
+    system: ticket.system,
+    targetRepo: target.repo as string,
+    importance: ticket.importance,
+    forbiddenPaths: target.forbiddenPaths,
+    healthUrl: target.healthUrl,
+    spec: buildSpec(ticket),
+    callbackUrl: `${callbackBase}/api/execute/callback`,
+  };
+}
+
 export interface DispatchInput {
   ticket: TicketRow;
   target: TargetMeta;
@@ -49,21 +77,9 @@ export async function dispatchExecution({ ticket, target }: DispatchInput): Prom
   if (!token) return false;
   if (!target.repo) return false;
 
-  const callbackBase = process.env.KAIZEN_PUBLIC_BASE || "https://kaizen.takagi.bz";
-
   const payload = {
     event_type: DISPATCH_EVENT,
-    client_payload: {
-      ticketId: ticket.ticketId,
-      pageId: ticket.pageId,
-      system: ticket.system,
-      targetRepo: target.repo,
-      importance: ticket.importance,
-      forbiddenPaths: target.forbiddenPaths,
-      healthUrl: target.healthUrl,
-      spec: buildSpec(ticket),
-      callbackUrl: `${callbackBase}/api/execute/callback`,
-    },
+    client_payload: buildDispatchPayload(ticket, target),
   };
 
   try {
