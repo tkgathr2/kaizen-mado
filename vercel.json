@@ -1,6 +1,4 @@
 {
-  "crons": [
-    { "path": "/api/process", "schedule": "0 0 * * *" },
-    { "path": "/api/execute", "schedule": "30 0 * * *" }
-  ]
+  "$comment": "改善ループの定期起動は GitHub Actions の kaizen-loop.yml に一本化（PAT不要・15分間隔）。Vercel cron は二重起動を避けるため撤去。/api/process・/api/execute エンドポイント自体は手動kick/Actionsから引き続き利用。",
+  "crons": []
 }
