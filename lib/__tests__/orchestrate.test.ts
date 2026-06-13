@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { buildSpec, dispatchEnabled, dispatchExecution } from "../orchestrate";
+import { buildSpec, dispatchEnabled, dispatchExecution, buildDispatchPayload } from "../orchestrate";
 import type { TicketRow } from "../tickets";
 import type { TargetMeta } from "../targets";
 
@@ -86,5 +86,14 @@ describe("orchestrate", () => {
     global.fetch = vi.fn().mockResolvedValue({ status: 403, text: async () => "forbidden" }) as any;
     const ok = await dispatchExecution({ ticket: ticket(), target });
     expect(ok).toBe(false);
+  });
+
+  it("buildDispatchPayload はActions(plan経路)が使う形を返す", () => {
+    const p = buildDispatchPayload(ticket(), target);
+    expect(p.ticketId).toBe("KZ-9");
+    expect(p.targetRepo).toBe("tkgathr2/sterepo");
+    expect(p.forbiddenPaths).toEqual([".env"]);
+    expect(p.callbackUrl).toContain("/api/execute/callback");
+    expect(p.spec).toContain("KZ-9");
   });
 });

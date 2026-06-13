@@ -12,7 +12,12 @@ import {
 } from "@/lib/tickets";
 import { findTarget } from "@/lib/targets";
 import { preGate } from "@/lib/gate";
-import { dispatchExecution, dispatchEnabled } from "@/lib/orchestrate";
+import {
+  dispatchExecution,
+  dispatchEnabled,
+  buildDispatchPayload,
+  type DispatchPayload,
+} from "@/lib/orchestrate";
 import { pushText, truncateForLine, notionPageUrl } from "@/lib/line";
 import { checkCronSecret } from "@/lib/cronAuth";
 
@@ -20,6 +25,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // Vercel Cron は GET で叩く。手動/自前cronは POST。
+// ?mode=plan … 自分でdispatchせず、auto対象の実装ペイロードを返す（GitHub Actions側が
+//   github.token で実行するための「PAT不要ループ」用）。社長案件のescalateは従来どおり自分で処理。
 export async function GET(req: NextRequest) {
   return POST(req);
 }
@@ -28,6 +35,8 @@ export async function POST(req: NextRequest) {
   if (!checkCronSecret(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+
+  const planMode = req.nextUrl.searchParams.get("mode") === "plan";
 
   let limit = 3;
   try {
@@ -44,6 +53,7 @@ export async function POST(req: NextRequest) {
     const dispatched: string[] = [];
     const escalated: string[] = [];
     const skipped: { ticketId: string; reason: string }[] = [];
+    const plan: DispatchPayload[] = []; // planモードで実行ワークフローに渡すペイロード
 
     for (const ticket of tickets) {
       const target = findTarget(ticket.system);
@@ -75,9 +85,33 @@ export async function POST(req: NextRequest) {
         continue;
       }
 
-      // auto：dispatch可能なら実行ワークフローを起動し「実装中」へ。
-      if (!dispatchEnabled() || !target?.repo) {
-        skipped.push({ ticketId: ticket.ticketId, reason: "dispatch未設定（GITHUB_DISPATCH_TOKEN/repo）" });
+      // auto：repoが確定していなければ自動不可。
+      if (!target?.repo) {
+        skipped.push({ ticketId: ticket.ticketId, reason: "repo未確定" });
+        continue;
+      }
+
+      // planモード：自分でdispatchせず「実装中」へ進めてペイロードを返す。
+      // 実行はGitHub Actions（github.token）が担う＝VercelにPAT不要。
+      if (planMode) {
+        await updateTicketState(ticket.pageId, "実装中");
+        await appendDiscussionBlocks(ticket.pageId, [
+          { heading: "自動着手（Actions実行）", body: `GitHub Actionsが改修→PR作成（${target.repo}・PRレビュー型）。` },
+        ]);
+        await pushText(
+          [
+            `🔧 着手しました ${ticket.ticketId}｜${ticket.system}`,
+            `確認用のPR（差分）を作成中。できたらお知らせします。`,
+          ].join("\n")
+        );
+        plan.push(buildDispatchPayload(ticket, target));
+        dispatched.push(ticket.ticketId);
+        continue;
+      }
+
+      // 従来：Vercelからrepository_dispatchで起動（GITHUB_DISPATCH_TOKEN必須）。
+      if (!dispatchEnabled()) {
+        skipped.push({ ticketId: ticket.ticketId, reason: "dispatch未設定（GITHUB_DISPATCH_TOKEN）" });
         continue;
       }
       const ok = await dispatchExecution({ ticket, target });
@@ -103,6 +137,7 @@ export async function POST(req: NextRequest) {
       ok: true,
       dispatched,
       escalated,
+      ...(planMode ? { plan } : {}),
       ...(skipped.length ? { skipped } : {}),
     });
   } catch (err) {
