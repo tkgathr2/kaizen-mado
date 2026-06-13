@@ -114,6 +114,19 @@ export default function BoardPage() {
           <div className="board-meta">
             全 {data.total} 件 ／ 最終取得 {clockHHMM(data.updatedAt)}
           </div>
+          <div className="board-summary">
+            {Object.entries(data.counts)
+              .filter(([, count]) => count > 0)
+              .map(([state, count]) => {
+                const m = metaOf(state);
+                return (
+                  <span key={state} className="board-summary-item">
+                    <span aria-hidden>{m.emoji}</span>
+                    {state}: {count}
+                  </span>
+                );
+              })}
+          </div>
           <div className="board-cols">
             {data.columns.map((col) => {
               const m = metaOf(col.state);
