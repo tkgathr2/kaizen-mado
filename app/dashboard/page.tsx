@@ -57,7 +57,7 @@ export default function DashboardPage() {
 
   return (
     <div className="dash">
-      <DashHeader />
+      <DashHeader stats={stats} />
 
       <div className="dash-cards">
         <Card label="集まった声（累計）" value={stats.total} unit="件" />
@@ -151,7 +151,14 @@ export default function DashboardPage() {
   );
 }
 
-function DashHeader() {
+function DashHeader({ stats }: { stats?: KaizenStats }) {
+  // 進行中件数を計算（受付・検討・提案中・改修中）
+  const inProgressCount = stats
+    ? stats.funnel
+        .filter(f => f.stage === "受付" || f.stage === "検討・提案中" || f.stage === "改修中")
+        .reduce((sum, f) => sum + f.count, 0)
+    : 0;
+
   return (
     <header className="header">
       {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -160,6 +167,11 @@ function DashHeader() {
         <h1>カイゼンくん 成長ダッシュボード</h1>
         <div className="sub">声が集まる → 直る → 学びになる、の現在地</div>
       </div>
+      {stats && inProgressCount > 0 && (
+        <div className="progress-badge">
+          進行中 {inProgressCount} 件
+        </div>
+      )}
     </header>
   );
 }

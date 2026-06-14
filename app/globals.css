@@ -62,6 +62,11 @@ html, body {
   background: #fbeee8; border: 1px solid #f1d9cd; padding: 5px 12px; border-radius: 999px;
   white-space: nowrap; font-weight: 500;
 }
+.progress-badge {
+  margin-left: auto; font-size: 12px; color: #3d7ab0;
+  background: #eef4f9; border: 1px solid #d1e4f3; padding: 5px 12px; border-radius: 999px;
+  white-space: nowrap; font-weight: 600;
+}
 
 /* ───── 会話エリア ───── */
 .chat {
