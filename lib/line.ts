@@ -250,8 +250,8 @@ export function systemLabel(system: string | null | undefined): string {
 }
 
 /** メッセージ先頭の「何の件か」ヘッダー（3行）。社長が最初に
- * ①種別 ②どのシステムか（やさしい説明） ③ざっくり何をするか を一目で掴めるように。
- * 例：💡【カイゼンの提案】/ 🖥 カイゼンくん（…窓口アプリ）/ ✏️ 窓口に説明を1行足す */
+ * ①どのシステムか（やさしい説明・最上段） ②種別 ③ざっくり何をするか を一目で掴めるように。
+ * 例：🖥 カイゼンくん（…窓口アプリ）/ 💡【カイゼンの提案】/ ✏️ 窓口に説明を1行足す */
 export function msgHead(
   emoji: string,
   kind: string,
@@ -259,8 +259,8 @@ export function msgHead(
   title: string | null | undefined
 ): string {
   return (
-    `${emoji}【${kind}】\n` +
     `🖥 ${truncateForLine(systemLabel(system), 34)}\n` +
+    `${emoji}【${kind}】\n` +
     `✏️ ${truncateForLine(title || "改善のご要望", 32)}`
   );
 }
