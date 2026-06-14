@@ -173,11 +173,20 @@ jobs:
       # PRチェック待ちは空振りする。よって「ジョブ内で実検証（型・テスト・ビルド）」を走らせ、
       # それが緑のときだけ squash マージ＝本番反映。検証が落ちたらマージせず review で止まる（安全側）。
       # autoMerge=false（社長GO経由・段階リリース）は従来どおりPRで止めて人がMerge。
+      # Claude実装ステップ(Docker)が Node を 18 に戻すため、Verify直前に Node20 を再セット
+      # （vitest@4 は Node20+ 必須＝styleText。これが無いと verify が常に落ち自動マージできない）。
+      - name: Re-pin Node 20 before verify
+        if: ${{ steps.pr.outputs.url != '' && steps.gate.outputs.verdict == 'auto' && matrix.item.autoMerge }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       - name: Verify before auto-merge（自走・実チェック）
         id: verify
         if: ${{ steps.pr.outputs.url != '' && steps.gate.outputs.verdict == 'auto' && matrix.item.autoMerge }}
         continue-on-error: true
         run: |
+          node -v
           npm ci
           npx tsc --noEmit
           npx vitest run
