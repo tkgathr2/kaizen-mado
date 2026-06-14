@@ -30,10 +30,16 @@ const SENSITIVE_KEYWORDS = [
 /** 真田自走（オートパイロット）が有効か。
  * ON のとき、preGate=auto の安全な改善は社長にGO伺いせず自動で着手→PR→マージまで進める。
  * 社長を呼ぶのは preGate=escalate（金額/個人情報/認証/破壊/新機能/自動未許可システム）だけ。
- * ＝「社長と真田の関係」と同じ：安全は任せて事後報告、危険だけ確認。 */
+ * ＝「社長と真田の関係」と同じ：安全は任せて事後報告、危険だけ確認。
+ *
+ * 既定ON（社長指示2026-06-13「いちいち聞くの面倒・真田との関係と同じに」）。
+ * 影響範囲は autoEligible なシステム（現状カイゼンくん本体のみ）に限定され、さらに
+ * GO推奨＋ジョブ内実検証(tsc/test/build)緑のときだけ自動マージするため安全。
+ * 全停止したいときだけ env KAIZEN_AUTOPILOT=off|0|false を設定（キルスイッチ）。 */
 export function autopilotEnabled(): boolean {
   const v = (process.env.KAIZEN_AUTOPILOT || "").toLowerCase();
-  return v === "true" || v === "1" || v === "on";
+  if (v === "off" || v === "0" || v === "false" || v === "no") return false;
+  return true;
 }
 
 /** 着手前ゲート。自動可なら "auto"、危険要因があれば "escalate"（理由つき）。 */

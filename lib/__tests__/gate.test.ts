@@ -67,16 +67,18 @@ describe("autopilotEnabled（真田自走スイッチ）", () => {
     if (saved === undefined) delete process.env.KAIZEN_AUTOPILOT;
     else process.env.KAIZEN_AUTOPILOT = saved;
   });
-  it("true/1/on で有効、それ以外は無効", () => {
+  it("既定ON。off/0/false/no のときだけ無効（キルスイッチ）", () => {
+    delete process.env.KAIZEN_AUTOPILOT;
+    expect(autopilotEnabled()).toBe(true); // 既定ON
     process.env.KAIZEN_AUTOPILOT = "true";
     expect(autopilotEnabled()).toBe(true);
-    process.env.KAIZEN_AUTOPILOT = "1";
+    process.env.KAIZEN_AUTOPILOT = "on";
     expect(autopilotEnabled()).toBe(true);
-    process.env.KAIZEN_AUTOPILOT = "ON";
-    expect(autopilotEnabled()).toBe(true);
-    process.env.KAIZEN_AUTOPILOT = "false";
+    process.env.KAIZEN_AUTOPILOT = "off";
     expect(autopilotEnabled()).toBe(false);
-    delete process.env.KAIZEN_AUTOPILOT;
+    process.env.KAIZEN_AUTOPILOT = "0";
+    expect(autopilotEnabled()).toBe(false);
+    process.env.KAIZEN_AUTOPILOT = "false";
     expect(autopilotEnabled()).toBe(false);
   });
 });
