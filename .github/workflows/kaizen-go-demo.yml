@@ -1,0 +1,35 @@
+name: kaizen-go-demo
+
+on:
+  workflow_dispatch:
+    inputs:
+      ticketId:
+        description: "対象チケットID（空白=GO待ち最初の1件）"
+        required: false
+        default: ""
+      action:
+        description: "アクション: go / fix / reject"
+        required: false
+        default: "go"
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call /api/admin/go
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          TICKET_ID: ${{ github.event.inputs.ticketId }}
+          ACTION: ${{ github.event.inputs.action }}
+        run: |
+          BODY="{\"action\":\"${ACTION}\"}"
+          if [ -n "$TICKET_ID" ]; then
+            BODY="{\"action\":\"${ACTION}\",\"ticketId\":\"${TICKET_ID}\"}"
+          fi
+          echo "Request: $BODY"
+          RES=$(curl -sS -X POST "https://kaizen.takagi.bz/api/admin/go" \
+            -H "x-cron-secret: ${CRON_SECRET}" \
+            -H "content-type: application/json" \
+            -d "$BODY")
+          echo "Response: $RES"
+          echo "$RES" | jq .
