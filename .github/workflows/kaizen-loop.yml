@@ -188,9 +188,12 @@ jobs:
         run: |
           node -v
           npm ci
-          npx tsc --noEmit
-          npx vitest run
-          npx next build
+          # 対象リポ自身のnpmスクリプトで検証（リポ非依存）。
+          # テストの無いリポは検証できない＝安全側にマージしない（review止まり）。
+          node -e "const s=(require('./package.json').scripts)||{}; if(!s.test){console.error('no test script → 自動マージしない'); process.exit(1)}"
+          npm run typecheck --if-present
+          npm test
+          npm run build --if-present
 
       - name: Auto-merge（真田自走・検証グリーン時のみ）
         id: merge
