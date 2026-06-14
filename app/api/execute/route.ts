@@ -70,7 +70,7 @@ export async function POST(req: NextRequest) {
         ]);
         await pushText(
           [
-            msgHead("🛑", "社長判断", ticket.system, ticket.title), // まず「何の件か」
+            msgHead("🛑", "社長に相談です", ticket.system, ticket.title), // まず「何の件か」
             `（${ticket.ticketId}）`,
             ``,
             `自動では直しません。理由：`,
@@ -103,7 +103,7 @@ export async function POST(req: NextRequest) {
         ]);
         await pushText(
           [
-            msgHead("🔧", "着手", ticket.system, ticket.title), // まず「何の件か」
+            msgHead("🔧", "いま直しています", ticket.system, ticket.title), // まず「何の件か」
             `（${ticket.ticketId}）直し始めました。確認用のPR（差分）を作成中。`,
             ``,
             stageBar(4), // ④着手
@@ -130,7 +130,7 @@ export async function POST(req: NextRequest) {
         // GOからPR完成までの間、動いていることが伝わるよう「着手」を通知。
         await pushText(
           [
-            msgHead("🔧", "着手", ticket.system, ticket.title), // まず「何の件か」
+            msgHead("🔧", "いま直しています", ticket.system, ticket.title), // まず「何の件か」
             `（${ticket.ticketId}）直し始めました。確認用のPR（差分）を作成中。`,
             ``,
             stageBar(4), // ④着手

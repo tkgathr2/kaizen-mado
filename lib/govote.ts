@@ -38,7 +38,7 @@ export async function applyGoAction(
       ok: true,
       newState: "着手",
       reply:
-        `${msgHead("✅", "GO受領", ticket.system, ticket.title)}\n` + // まず「何の件か」
+        `${msgHead("✅", "GO受けました", ticket.system, ticket.title)}\n` + // まず「何の件か」
         `（${ticket.ticketId}）進めます。結果はまたお知らせします。\n\n` +
         `${stageBar(3)}\n` + // ③GO受領（→着手へ）
         `全体像 ▶ ${BOARD_URL}`,
@@ -54,7 +54,7 @@ export async function applyGoAction(
       ok: true,
       newState: "差し戻し",
       reply:
-        `${msgHead("✏️", "修正受領", ticket.system, ticket.title)}\n` +
+        `${msgHead("✏️", "修正ですね", ticket.system, ticket.title)}\n` +
         `（${ticket.ticketId}）議論に戻して、見直してから再提案します。`,
     };
   }
