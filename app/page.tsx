@@ -136,7 +136,7 @@ function KaizenMado() {
           <div>
             <h1>カイゼン窓口</h1>
             <div className="sub">高木産業グループ カイゼンくん</div>
-            <div className="catchphrase">あなたの声で、システムが良くなります。</div>
+            <div className="catchphrase">気づいたことを送ると、システムが良くなっていきます</div>
           </div>
           <div className="pill">{systemName ? `対象：${systemName}` : "対象：未指定"}</div>
         </header>
