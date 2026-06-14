@@ -29,6 +29,11 @@ function kickIfStarted(newState?: string) {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// LINE Developers コンソールの「検証」ボタンは GET を送る。200 を返さないと URL が「無効」扱いになる。
+export async function GET() {
+  return NextResponse.json({ ok: true });
+}
+
 export async function POST(req: NextRequest) {
   const body = await req.text();
   const sig = req.headers.get("x-line-signature");
