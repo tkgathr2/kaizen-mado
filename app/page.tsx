@@ -236,7 +236,11 @@ function KaizenMado() {
       )}
 
       {!embed && (
-        <div className="footer">カイゼンくん 第1段・カイゼン窓口 ／ 入力内容はNotionの改善チケットに記録されます</div>
+        <div className="footer">
+          カイゼンくん 第1段・カイゼン窓口 ／ 入力内容はNotionの改善チケットに記録されます
+          <br />
+          <small>このシステムは現場の声で日々改善されています</small>
+        </div>
       )}
     </div>
   );
