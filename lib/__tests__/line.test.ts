@@ -173,11 +173,11 @@ describe("工程ステッパー stageBar", () => {
     } as TicketRow;
     const d: DiscussResult = { houshin: "a", kousuu: "b", risks: [], recommendation: "GO推奨", goDraft: "", source: "claude" };
     const text = buildProposalText(t, d);
-    // 1行目に「何の件か」＝システム名・タイトルが来る
-    const firstLine = text.split("\n")[0];
-    expect(firstLine).toContain("提案");
-    expect(firstLine).toContain("プロレポ");
-    expect(text).toContain("「一覧を新着順に」");
+    const lines = text.split("\n");
+    // 1行目=種別、2行目=やさしいシステム名、3行目=ざっくり何を（主題が先頭3行）
+    expect(lines[0]).toContain("提案");
+    expect(lines[1]).toContain("プロレポ");
+    expect(lines[2]).toContain("一覧を新着順に");
     // 工程バーとリンクは存在しつつ、主題より後ろ
     expect(text).toContain("🔵提案");
     expect(text).toContain("/board");
@@ -185,16 +185,28 @@ describe("工程ステッパー stageBar", () => {
   });
 });
 
-import { msgHead } from "../line";
+import { msgHead, systemLabel } from "../line";
 
-describe("msgHead（何の件かヘッダー）", () => {
-  it("絵文字【種別】システム＋「タイトル」を2行で返す", () => {
-    const h = msgHead("💡", "提案", "プロレポ", "一覧を新着順に");
-    expect(h).toBe("💡【提案】プロレポ\n「一覧を新着順に」");
+describe("systemLabel（やさしいシステム名）", () => {
+  it("既知システムはやさしい説明つき、未知はそのまま", () => {
+    expect(systemLabel("カイゼンくん本体")).toContain("窓口アプリ");
+    expect(systemLabel("ほうこちゃん")).toContain("警備");
+    expect(systemLabel("謎システム")).toBe("謎システム");
+    expect(systemLabel(null)).toContain("未特定");
+  });
+});
+
+describe("msgHead（何の件かヘッダー・3行）", () => {
+  it("①種別②やさしいシステム名③ざっくり何を、の3行", () => {
+    const h = msgHead("💡", "カイゼンの提案", "カイゼンくん本体", "窓口に説明を1行足す");
+    const lines = h.split("\n");
+    expect(lines[0]).toBe("💡【カイゼンの提案】");
+    expect(lines[1]).toContain("カイゼンくん（"); // やさしい説明
+    expect(lines[2]).toContain("窓口に説明を1行足す"); // ざっくり何を
   });
   it("system/title が空でも既定文言で落ちない", () => {
     const h = msgHead("✅", "完了", null, null);
-    expect(h).toContain("対象未特定");
+    expect(h).toContain("未特定");
     expect(h).toContain("改善のご要望");
   });
 });

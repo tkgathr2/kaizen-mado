@@ -229,8 +229,29 @@ export function stageBar(current: StageIndex): string {
   );
 }
 
-/** メッセージ先頭の「何の件か」ヘッダー（2行）。社長が最初に主題＝システム＋タイトルを掴めるように。
- * 例：💡【提案】プロレポ / 「一覧を新着順にする」 */
+// 各システムのやさしい説明（社長が「何のシステムか」を一目で分かるように）。
+const SYSTEM_LABELS: Record<string, string> = {
+  カイゼンくん本体: "カイゼンくん（みんなの改善の声を受ける窓口アプリ）",
+  プロレポ: "プロレポ（営業日報システム）",
+  ステレポ: "ステレポ（SNS運用・分析システム）",
+  ほうこちゃん: "ほうこちゃん（警備の報告書システム）",
+  "mfc-invoice-upload": "請求書アップロード（MFクラウド連携）",
+  Indeed応募通知: "Indeed応募通知（採用の応募通知Bot）",
+  キャスト名簿くん: "キャスト名簿くん（スタッフ名簿システム）",
+  らくらく契約くん: "らくらく契約くん（契約書づくり）",
+  巡回くん: "巡回くん（SNS巡回システム）",
+  その他: "その他のシステム",
+};
+
+/** システム名をやさしい説明つきにする（未知ならそのまま）。 */
+export function systemLabel(system: string | null | undefined): string {
+  if (!system) return "対象未特定のシステム";
+  return SYSTEM_LABELS[system] || system;
+}
+
+/** メッセージ先頭の「何の件か」ヘッダー（3行）。社長が最初に
+ * ①種別 ②どのシステムか（やさしい説明） ③ざっくり何をするか を一目で掴めるように。
+ * 例：💡【カイゼンの提案】/ 🖥 カイゼンくん（…窓口アプリ）/ ✏️ 窓口に説明を1行足す */
 export function msgHead(
   emoji: string,
   kind: string,
@@ -238,8 +259,9 @@ export function msgHead(
   title: string | null | undefined
 ): string {
   return (
-    `${emoji}【${kind}】${truncateForLine(system || "対象未特定", 20)}\n` +
-    `「${truncateForLine(title || "改善のご要望", 30)}」`
+    `${emoji}【${kind}】\n` +
+    `🖥 ${truncateForLine(systemLabel(system), 34)}\n` +
+    `✏️ ${truncateForLine(title || "改善のご要望", 32)}`
   );
 }
 
@@ -249,28 +271,19 @@ export function msgHead(
  * 「ID付きテキスト返信（GO KZ-3 等）」で前の提案にも答えられる形は維持する。 */
 export function buildProposalText(ticket: TicketRow, d: DiscussResult): string {
   const id = ticket.ticketId;
-  const riskLines = d.risks.length
-    ? d.risks
-        .slice(0, 2)
-        .map((r) => `・${truncateForLine(r, 38)}`)
-        .join("\n") + (d.risks.length > 2 ? `\n・ほか${d.risks.length - 2}件（詳細はNotion）` : "")
-    : "・特になし";
+  // 方針＝どう直すかを、やさしい一言に（長い技術説明は詳細リンクへ逃がす）。
+  const how = truncateForLine(d.houshin, 50);
   return [
-    msgHead("💡", "提案", ticket.system, ticket.title), // まず「何の件か」
-    `（${id}）`,
-    ``,
-    `🧭 おすすめ：${truncateForLine(d.recommendation, 40)}`,
-    `方針：${truncateForLine(d.houshin, 110)}`,
-    `工数：${truncateForLine(d.kousuu, 30)}`,
-    `リスク：`,
-    riskLines,
+    msgHead("💡", "カイゼンの提案", ticket.system, ticket.title), // ①種別②システム③何を
+    `🔧 どう直す：${how}`, // ④どう直すか（やさしく一言）
+    `🧭 おすすめ：${truncateForLine(d.recommendation, 24)}（目安 ${truncateForLine(d.kousuu, 16)}）`,
     ``,
     `▼ 直していい？ 返信で（どれか1つ）`,
     `GO ${id}／修正 ${id}／却下 ${id}`,
     `※ボタンは最新の提案のみ。前の提案にはID付きで返信。`,
     ``,
     stageBar(2), // ②提案（GO待ち）
-    `詳細 ▶ ${notionPageUrl(ticket.pageId)}`,
+    `くわしく ▶ ${notionPageUrl(ticket.pageId)}`,
     `全体像 ▶ ${BOARD_URL}`,
   ].join("\n");
 }

@@ -81,7 +81,7 @@ export async function POST(req: NextRequest) {
           // FYI（質問ではなく報告）：何の件かを先頭に。
           const fyi = await pushText(
             [
-              msgHead("🤖", "真田が進めます", ticket.system, ticket.title),
+              msgHead("🤖", "真田が直します", ticket.system, ticket.title),
               `（${ticket.ticketId}）安全な改善なので、確認なしで直して反映まで進めます。`,
               ``,
               stageBar(4),

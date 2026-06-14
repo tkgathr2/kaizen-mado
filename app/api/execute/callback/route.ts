@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
       ]);
       await pushText(
         [
-          msgHead("🎉", "本番反映", system || current.system, current.title), // まず「何の件か」
+          msgHead("🎉", "直して反映しました", system || current.system, current.title), // まず「何の件か」
           `（${ticketId}）直して本番に反映しました。`,
           ``,
           stageBar(6), // ⑥反映（完了）
@@ -88,7 +88,7 @@ export async function POST(req: NextRequest) {
       ]);
       await pushText(
         [
-          msgHead("✅", "PRできました", system || current.system, current.title), // まず「何の件か」
+          msgHead("✅", "直せました（確認待ち）", system || current.system, current.title), // まず「何の件か」
           `（${ticketId}）直して、確認用の差分(PR)を作りました。`,
           ...(detail ? [`内容：${truncateForLine(detail, 60)}`] : []),
           ``,
@@ -108,7 +108,7 @@ export async function POST(req: NextRequest) {
     ]);
     await pushText(
       [
-        msgHead("⚠️", "直せず", system || current.system, current.title), // まず「何の件か」
+        msgHead("⚠️", "直せませんでした", system || current.system, current.title), // まず「何の件か」
         `（${ticketId}）今回は直せませんでした。`,
         `理由：${truncateForLine(detail || "不明", 60)}`,
         ``,
