@@ -46,15 +46,17 @@ export const TARGETS: TargetMeta[] = [
   { system: "Indeed応募通知", repo: "tkgathr2/recruit", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
   { system: "キャスト名簿くん", repo: "tkgathr2/cast-meibo", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
   { system: "らくらく契約くん", repo: null, healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
-  // 見積もりシステム＝MFクラウド請求書(HO-114)。外部SaaSで自前リポなし＝repo:null。
-  // autoEligible:false のため、西村さんの改善要望は自動改修せず「社長案件＝真田へエスカレ」へ流す。
-  { system: "見積もりシステム", repo: null, healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
+  // 見積もりシステム＝見積もり自動化システム（mitsumori-app・自前Next.jsアプリ）。
+  // 2026-06-19 フェーズ1本番化（Vercel）。会社×区分×人数×日数で金額自動計算。
+  // 自前リポありだが autoEligible:false スタート＝西村さんの改善要望は真田へエスカレ（段階解放）。
+  { system: "見積もりシステム", repo: "tkgathr2/mitsumori-app", healthUrl: "https://mitsumori-app-pied.vercel.app", forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
   // 初回ライブ試走＝カイゼンくん自身（自己改修・最低リスク）。PRレビュー型なのでPRを作るだけ。
   { system: "カイゼンくん本体", repo: "tkgathr2/kaizen-mado", healthUrl: "https://kaizen.takagi.bz", forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
   { system: "AIOダッシュボードくん", repo: "tkgathr2/aio-checker", healthUrl: "https://aio.takagi.bz/api/dashboard", forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
   { system: "採用管理システム", repo: "tkgathr2/saiyo-kanri", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
   // メンション秘書くん＝Slack mention検知→早乙女返信案→LINE社長OK→Bot送信。
   { system: "メンション秘書くん", repo: "tkgathr2/mention-hisho", healthUrl: "https://mention.takagi.bz/api/health", forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
+  { system: "爆裂リード獲得くん（交通誘導）", repo: "tkgathr2/leadforge", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
   { system: "その他", repo: null, healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
 ];
 
