@@ -53,6 +53,7 @@ export const TARGETS: TargetMeta[] = [
   { system: "カイゼンくん本体", repo: "tkgathr2/kaizen-mado", healthUrl: "https://kaizen.takagi.bz", forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
   { system: "AIOダッシュボードくん", repo: "tkgathr2/aio-checker", healthUrl: "https://aio.takagi.bz/api/dashboard", forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
   { system: "採用管理システム", repo: "tkgathr2/saiyo-kanri", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
+  { system: "爆裂リード獲得くん（交通誘導）", repo: "tkgathr2/leadforge", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
   { system: "その他", repo: null, healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
 ];
 
