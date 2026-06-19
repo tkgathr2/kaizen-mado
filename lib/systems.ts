@@ -13,6 +13,7 @@ export const SYSTEMS: { slug: string; name: string }[] = [
   { slug: "seiko", name: "seiko" },
   { slug: "junkai", name: "巡回くん" },
   { slug: "kaizen", name: "カイゼンくん本体" },
+  { slug: "aio-checker", name: "AIOダッシュボードくん" },
   { slug: "other", name: "その他" },
 ];
 
