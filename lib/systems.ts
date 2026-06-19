@@ -14,6 +14,7 @@ export const SYSTEMS: { slug: string; name: string }[] = [
   { slug: "junkai", name: "巡回くん" },
   { slug: "kaizen", name: "カイゼンくん本体" },
   { slug: "aio-checker", name: "AIOダッシュボードくん" },
+  { slug: "saiyo-kanri", name: "採用管理システム" },
   { slug: "other", name: "その他" },
 ];
 
