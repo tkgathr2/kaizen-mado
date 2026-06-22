@@ -121,6 +121,9 @@ jobs:
 
             ${{ env.SPEC }}
 
+      - name: Stage Claude edits
+        run: git add -A
+
       - name: Post-gate（diff行数・禁止パス判定）
         id: gate
         run: |
@@ -228,3 +231,4 @@ jobs:
             -d "$(jq -n --arg t "$TICKET_ID" --arg p "$PAGE_ID" --arg s "$SYSTEM" \
                    --arg r "$RESULT" --arg u "$PR_URL" --arg d "$DETAIL" \
                    '{ticketId:$t,pageId:$p,system:$s,result:$r,prUrl:$u,detail:$d}')"
+
