@@ -183,6 +183,8 @@ export default function BoardPage() {
       <div className="board-footer">
         カイゼンくん 状況ボード ／ 読み取り専用（操作はLINE・Notion・GitHubで） ／{" "}
         <a href="/dashboard">成長ダッシュボード</a>
+          {" ／ "}
+          <span style={{fontSize:"0.75rem",opacity:0.7}}>⚙️ 自律ループ稼働中</span>
       </div>
     </div>
   );
