@@ -110,6 +110,8 @@ jobs:
           echo "branch=$BR" >> "$GITHUB_OUTPUT"
 
       - name: Implement with Claude
+        env:
+          ANTHROPIC_MODEL: claude-opus-4-5
         uses: anthropics/claude-code-base-action@beta
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -231,4 +233,3 @@ jobs:
             -d "$(jq -n --arg t "$TICKET_ID" --arg p "$PAGE_ID" --arg s "$SYSTEM" \
                    --arg r "$RESULT" --arg u "$PR_URL" --arg d "$DETAIL" \
                    '{ticketId:$t,pageId:$p,system:$s,result:$r,prUrl:$u,detail:$d}')"
-
