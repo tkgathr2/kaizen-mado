@@ -17,6 +17,7 @@ export const SYSTEMS: { slug: string; name: string }[] = [
   { slug: "saiyo-kanri", name: "採用管理システム" },
   { slug: "mention-hisho", name: "メンション秘書くん" },
   { slug: "leadforge-ky", name: "爆裂リード獲得くん（交通誘導）" },
+  { slug: "buppin", name: "かいたくん（物品購入）" },
   { slug: "other", name: "その他" },
 ];
 
