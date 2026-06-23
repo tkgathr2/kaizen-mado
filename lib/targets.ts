@@ -57,6 +57,8 @@ export const TARGETS: TargetMeta[] = [
   // メンション秘書くん＝Slack mention検知→早乙女返信案→LINE社長OK→Bot送信。
   { system: "メンション秘書くん", repo: "tkgathr2/mention-hisho", healthUrl: "https://mention.takagi.bz/api/health", forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
   { system: "爆裂リード獲得くん（交通誘導）", repo: "tkgathr2/leadforge", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
+  // かいたくん（物品購入）＝物品購入管理Webアプリ（Next.js+Railway）。https://kaitakun.takagi.bz
+  { system: "かいたくん（物品購入）", repo: "tkgathr2/buppin", healthUrl: "https://kaitakun.takagi.bz", forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
   { system: "その他", repo: null, healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
 ];
 
