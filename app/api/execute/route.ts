@@ -140,15 +140,8 @@ export async function POST(req: NextRequest) {
           await appendDiscussionBlocks(ticket.pageId, [
             { heading: "自動着手（Actions実行）", body: `GitHub Actionsが改修→PR作成（${target.repo}・PRレビュー型）。` },
           ]);
-          await pushText(
-            [
-              msgHead("🔧", "いま直しています", ticket.system, ticket.title), // まず「何の件か」
-              `（${ticket.ticketId}）直し始めました。確認用のPR（差分）を作成中。`,
-              ``,
-              stageBar(4), // ④着手
-              `全体像 ▶ ${BOARD_URL}`,
-            ].join("\n")
-          );
+          // 新仕様：着手の進捗FYI（旧「🔧 いま直しています」）は送らない（自分から送るLINEは
+          // 「GO伺い」と「詰まり連絡」だけ）。状態遷移・dispatchは維持する。
           // 自走ONなら autoMerge=true（このtsへ来た時点でpreGate=auto＝安全と判定済み）。
           plan.push(buildDispatchPayload(ticket, target, autopilotEnabled()));
           dispatched.push(ticket.ticketId);
@@ -179,16 +172,8 @@ export async function POST(req: NextRequest) {
         await appendDiscussionBlocks(ticket.pageId, [
           { heading: "自動着手", body: `実行ワークフローを起動（${target.repo}）。AIが改修→PR作成→レビュー待ち（PRレビュー型）。` },
         ]);
-        // GOからPR完成までの間、動いていることが伝わるよう「着手」を通知。
-        await pushText(
-          [
-            msgHead("🔧", "いま直しています", ticket.system, ticket.title), // まず「何の件か」
-            `（${ticket.ticketId}）直し始めました。確認用のPR（差分）を作成中。`,
-            ``,
-            stageBar(4), // ④着手
-            `全体像 ▶ ${BOARD_URL}`,
-          ].join("\n")
-        );
+        // 新仕様：着手の進捗FYI（旧「🔧 いま直しています」）は送らない（自分から送るLINEは
+        // 「GO伺い」と「詰まり連絡」だけ）。状態遷移・dispatchは維持する。
         dispatched.push(ticket.ticketId);
       } else {
         // dispatch失敗：先に進めた「実装中」を「着手」へ巻き戻す（次のexecuteで再試行できるように）。
