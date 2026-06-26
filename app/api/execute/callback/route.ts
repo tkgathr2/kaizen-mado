@@ -1,8 +1,9 @@
 // ── POST /api/execute/callback ── 実行ワークフローからの結果通知を受ける ──
 // .github/workflows/kaizen-execute.yml が PR→ゲート→マージ→デプロイ→ヘルスの結果を返す。
-//  - merged    → 「完了」へ。LINEで「直しました」を報告し、学び還元(returnLearningFromCompleted)を回す。
-//  - review    → 「レビュー」へ。3条件ゲート不通過＝人の確認待ち。PR URLをLINEで知らせる。
-//  - failed    → 「差し戻し」へ。実装失敗。理由をLINEで知らせる。
+//  - merged    → 「完了」へ。学び還元(returnLearningFromCompleted)を回す。（FYI通知は新仕様で無し）
+//  - review    → 「レビュー」へ。3条件ゲート不通過＝人の確認待ち。（FYI通知は新仕様で無し・/boardで確認）
+//  - failed    → 「差し戻し」へ。実装失敗＝人の助けが要る詰まりとして「詰まり連絡」を1回だけLINE送信。
+// ★ 新仕様：自分から送るLINEは「GO伺い」と「詰まり連絡」だけ。進捗FYI（着手/完了/PR完成）は送らない。
 // 認証は CRON_SECRET（x-cron-secret）を流用。鍵未設定なら本番fail-closed。
 import { NextRequest, NextResponse } from "next/server";
 import {
@@ -11,7 +12,7 @@ import {
   fetchTicketByPageId,
 } from "@/lib/tickets";
 import { returnLearningFromCompleted } from "@/lib/learn";
-import { pushText, truncateForLine, stageBar, BOARD_URL, msgHead } from "@/lib/line";
+import { notifyStuckOnce } from "@/lib/notify";
 import { checkCronSecret } from "@/lib/cronAuth";
 
 export const runtime = "nodejs";
@@ -65,16 +66,8 @@ export async function POST(req: NextRequest) {
       await appendDiscussionBlocks(pageId, [
         { heading: "本番反映 完了", body: `自動改修→マージ→デプロイ完了。${prUrl}` },
       ]);
-      await pushText(
-        [
-          msgHead("🎉", "直して反映しました", system || current.system, current.title), // まず「何の件か」
-          `（${ticketId}）直して本番に反映しました。`,
-          ``,
-          stageBar(6), // ⑥反映（完了）
-          `PR ▶ ${prUrl}`,
-          `全体像 ▶ ${BOARD_URL}`,
-        ].join("\n")
-      );
+      // 新仕様：完了報告FYI（旧「🎉 直して反映しました」）は送らない（自分から送るLINEは
+      // 「GO伺い」と「詰まり連絡」だけ）。状態遷移・学び還元は維持する。
       // 学び還元（KNOWHOW_ENABLED時のみ実働。OFFなら no-op）。
       const learn = await returnLearningFromCompleted(5).catch(() => ({ memorized: 0 }));
       return NextResponse.json({ ok: true, state: "完了", learned: learn.memorized });
@@ -86,37 +79,20 @@ export async function POST(req: NextRequest) {
       await appendDiscussionBlocks(pageId, [
         { heading: "PR作成（レビュー待ち）", body: `${detail}\nPR: ${prUrl}` },
       ]);
-      await pushText(
-        [
-          msgHead("✅", "直せました（確認待ち）", system || current.system, current.title), // まず「何の件か」
-          `（${ticketId}）直して、確認用の差分(PR)を作りました。`,
-          ...(detail ? [`内容：${truncateForLine(detail, 60)}`] : []),
-          ``,
-          `差分を見て「Merge」を押すと本番反映されます。`,
-          stageBar(5), // ⑤PR（レビュー待ち）
-          `PR ▶ ${prUrl}`,
-          `全体像 ▶ ${BOARD_URL}`,
-        ].join("\n")
-      );
+      // 新仕様：PR完成FYI（旧「✅ 直せました（Merge押して）」）は送らない（自分から送るLINEは
+      // 「GO伺い」と「詰まり連絡」だけ）。状態遷移は維持する（PRは /board で確認できる）。
       return NextResponse.json({ ok: true, state: "レビュー" });
     }
 
-    // failed
+    // failed → 差し戻し。これは「人の助けが要る詰まり」として詰まり連絡を1回だけ送る。
+    // ※ 真田が裏で直せるシステム故障（モデル切れ等の技術障害）と、人の助けが要る詰まりの
+    //   自動切り分けは将来の死活監視で扱う＝今はスコープ外。ここでは failed をそのまま
+    //   「人の助けが要る詰まり」として扱い、同じチケットでは1回だけ通知（de-dup）する。
     await updateTicketState(pageId, "差し戻し");
     await appendDiscussionBlocks(pageId, [
       { heading: "実装失敗（差し戻し）", body: detail || "(理由不明)" },
     ]);
-    await pushText(
-      [
-        msgHead("⚠️", "直せませんでした", system || current.system, current.title), // まず「何の件か」
-        `（${ticketId}）今回は直せませんでした。`,
-        `理由：${truncateForLine(detail || "不明", 60)}`,
-        ``,
-        `議論に戻しました。見直して再提案します。`,
-        stageBar(4), // ④着手で失敗→差し戻し
-        `全体像 ▶ ${BOARD_URL}`,
-      ].join("\n")
-    );
+    await notifyStuckOnce(current, detail || "不明（くわしくは /board をご確認ください）");
     return NextResponse.json({ ok: true, state: "差し戻し" });
   } catch (err) {
     console.error("[execute/callback] failed:", (err as Error).message);

@@ -13,6 +13,11 @@ const discussTicket = vi.fn((..._a: unknown[]): Promise<unknown> => Promise.reso
 const returnLearningFromCompleted = vi.fn(
   (..._a: unknown[]): Promise<{ memorized: number }> => Promise.resolve({ memorized: 0 })
 );
+// 新仕様の検証用：LINE送信モックを名前付きで保持し「呼ばれない」ことを検証する。
+const pushProposal = vi.fn(async () => true);
+const pushText = vi.fn(async () => true);
+const preGate = vi.fn(() => ({ mode: "escalate" as string, reasons: [] as string[] }));
+const autopilotEnabled = vi.fn(() => false);
 
 vi.mock("@/lib/tickets", () => ({
   fetchTicketsByState: (...a: unknown[]) => fetchTicketsByState(...a),
@@ -26,19 +31,19 @@ vi.mock("@/lib/discuss", () => ({
 vi.mock("@/lib/learn", () => ({
   returnLearningFromCompleted: (...a: unknown[]) => returnLearningFromCompleted(...a),
 }));
-// LINE送信・トリガ・ターゲット解決・ゲートは本テストの関心外なので無害化。
+// LINE送信・トリガ・ターゲット解決・ゲートは名前付きモックで差し替え（呼び出し検証に使う）。
 vi.mock("@/lib/line", () => ({
-  pushProposal: vi.fn(async () => true),
-  pushText: vi.fn(async () => true),
+  pushProposal: (...a: unknown[]) => pushProposal(...(a as [])),
+  pushText: (...a: unknown[]) => pushText(...(a as [])),
   msgHead: () => "",
   stageBar: () => "",
   BOARD_URL: "x",
 }));
 vi.mock("@/lib/trigger", () => ({ kickEndpoint: vi.fn(async () => true) }));
-vi.mock("@/lib/targets", () => ({ findTarget: vi.fn(() => null) }));
+vi.mock("@/lib/targets", () => ({ findTarget: vi.fn(() => ({ repo: "tkgathr2/x" })) }));
 vi.mock("@/lib/gate", () => ({
-  preGate: vi.fn(() => ({ mode: "escalate", reasons: [] })),
-  autopilotEnabled: vi.fn(() => false),
+  preGate: (...a: unknown[]) => preGate(...(a as [])),
+  autopilotEnabled: (...a: unknown[]) => autopilotEnabled(...(a as [])),
 }));
 
 import { POST } from "../route";
@@ -58,6 +63,9 @@ describe("/api/process 失敗時の状態巻き戻し", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // clearAllMocks は mockReturnValue を消さないため、テスト間で明示的に既定へ戻す。
+    preGate.mockReturnValue({ mode: "escalate", reasons: [] });
+    autopilotEnabled.mockReturnValue(false);
     // CRON_SECRET未設定でも、明示フラグ ALLOW_INSECURE_CRON=1 のとき checkCronSecret が通る
     // （cronAuth は未設定時 fail-closed。本番は CRON_SECRET 設定で保護）。
     delete process.env.CRON_SECRET;
@@ -102,5 +110,45 @@ describe("/api/process 失敗時の状態巻き戻し", () => {
     // エラーは握って応答自体は200で返し、errorsに積む。
     expect(json.ok).toBe(true);
     expect(json.errors?.[0]?.ticketId).toBe("KZ-1");
+  });
+
+  it("自動GO（着手）でも着手予告FYIをLINE送信しない（新仕様）", async () => {
+    fetchTicketsByState.mockResolvedValueOnce([
+      {
+        pageId: "page-2",
+        ticketId: "KZ-2",
+        system: "カイゼンくん本体",
+        type: "改善",
+        importance: "低",
+        title: "t2",
+        detail: "d2",
+        reporter: "現場",
+        state: "受付",
+        fgsUrl: null,
+      },
+    ]);
+    // 安全（auto）＋自走ON＋GO推奨 → 自動GOで「着手」へ進む分岐。
+    discussTicket.mockResolvedValueOnce({
+      houshin: "h",
+      kousuu: "k",
+      risks: [],
+      recommendation: "GO推奨",
+      goDraft: "g",
+      source: "fallback",
+    });
+    preGate.mockReturnValue({ mode: "auto", reasons: [] });
+    autopilotEnabled.mockReturnValue(true);
+
+    const res = await POST(makeReq());
+    const json = await res.json();
+
+    // 「着手」へ進めている（状態遷移・kickロジックは維持）。
+    expect(updateTicketState).toHaveBeenCalledWith("page-2", "着手");
+    // ★新仕様の肝：自分から送るLINEは「GO伺い/詰まり連絡」だけ＝着手予告FYIは送らない。
+    expect(pushText).not.toHaveBeenCalled();
+    // 自動GOなのでGO伺い(pushProposal)も送らない。
+    expect(pushProposal).not.toHaveBeenCalled();
+    expect(json.ok).toBe(true);
+    expect(json.processed?.[0]?.notified).toBe(false);
   });
 });

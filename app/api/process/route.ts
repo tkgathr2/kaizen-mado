@@ -12,7 +12,7 @@ import {
   setTicketAssignee,
 } from "@/lib/tickets";
 import { discussTicket } from "@/lib/discuss";
-import { pushProposal, pushText, msgHead, stageBar, BOARD_URL } from "@/lib/line";
+import { pushProposal } from "@/lib/line";
 import { checkCronSecret } from "@/lib/cronAuth";
 import { returnLearningFromCompleted } from "@/lib/learn";
 import { findTarget } from "@/lib/targets";
@@ -84,21 +84,13 @@ export async function POST(req: NextRequest) {
           // line/webhook・admin/go と同じ形。vercel.json の crons は空＝安全網がないため、
           // ここで kick しないと自動GOチケットが「着手」のまま実装パイプラインに乗らず残置する。
           waitUntil(kickEndpoint("/api/execute"));
-          // FYI（質問ではなく報告）：何の件かを先頭に。
-          const fyi = await pushText(
-            [
-              msgHead("🤖", "真田が直します", ticket.system, ticket.title),
-              `（${ticket.ticketId}）安全な改善なので、確認なしで直して反映まで進めます。`,
-              ``,
-              stageBar(4),
-              `全体像 ▶ ${BOARD_URL}`,
-            ].join("\n")
-          );
+          // 新仕様：自分から送るLINEは「GO伺い」と「詰まり連絡」だけ。
+          // 着手予告（旧「🤖 真田が直します」FYI）は不要のため送らない（状態遷移・kickは維持）。
           processed.push({
             ticketId: ticket.ticketId,
             recommendation: d.recommendation,
             source: d.source,
-            notified: fyi,
+            notified: false,
           });
         } else {
           // 従来：GO待ち＋GO伺い（社長に聞く）。自走未許可システム・危険案件はここ。
