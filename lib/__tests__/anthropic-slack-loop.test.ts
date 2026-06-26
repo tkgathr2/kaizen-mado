@@ -95,4 +95,41 @@ describe("callClaudeWithSlack（tool useループ）", () => {
     delete process.env.ANTHROPIC_API_KEY;
     await expect(callClaudeWithSlack(SYS_PROMPT, HISTORY, "Indeed応募通知")).rejects.toThrow();
   });
+
+  it("最終反復は record_turn を強制する（read_slack→read_slack→強制ターンで完了）", async () => {
+    let anthropicCalls = 0;
+    const bodies: any[] = [];
+    const fetchMock = vi.fn(async (url: string, init?: any) => {
+      const u = String(url);
+      if (u.includes("api.anthropic.com")) {
+        anthropicCalls++;
+        bodies.push(JSON.parse(init.body));
+        // iter0,1: read_slack を返す / iter2（強制ターン）: record_turn を返す
+        if (anthropicCalls <= 2) return anthropicToolUse("read_slack", {}, `tu_${anthropicCalls}`) as any;
+        return anthropicToolUse("record_turn", { reply: "確認しました。", phase: "clarify" }) as any;
+      }
+      return slackHistory([{ text: "Error: timeout" }]) as any;
+    });
+    global.fetch = fetchMock as unknown as typeof global.fetch;
+
+    const r = await callClaudeWithSlack(SYS_PROMPT, HISTORY, "Indeed応募通知");
+    expect(r.phase).toBe("clarify");
+    expect(anthropicCalls).toBe(3); // 2回read_slack + 1回強制ターン
+    // 強制ターン（3回目）は tool_choice が record_turn 固定であること
+    expect(bodies[2].tool_choice.type).toBe("tool");
+    expect(bodies[2].tool_choice.name).toBe("record_turn");
+  });
+
+  it("最終反復でも record_turn を返さなければ throw（→呼び出し側フォールバック）", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      const u = String(url);
+      // 常に read_slack を返す＝record_turn を一度も返さない異常系
+      if (u.includes("api.anthropic.com")) return anthropicToolUse("read_slack", {}) as any;
+      return slackHistory([{ text: "Error: timeout" }]) as any;
+    });
+    global.fetch = fetchMock as unknown as typeof global.fetch;
+    await expect(
+      callClaudeWithSlack(SYS_PROMPT, HISTORY, "Indeed応募通知")
+    ).rejects.toThrow();
+  });
 });

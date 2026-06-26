@@ -150,9 +150,10 @@ export async function callClaudeWithSlack(
         system,
         tools: forceTurn ? [TURN_TOOL] : [READ_SLACK_TOOL, TURN_TOOL],
         // any＝何らかのツールを必ず呼ばせる（地の文を返させない）。最終は record_turn 固定。
+        // 並列tool_useを禁止＝1ターン1tool_use（複数返ると tool_result 不足で次回400になるため予防）。
         tool_choice: forceTurn
-          ? { type: "tool", name: TURN_TOOL.name }
-          : { type: "any" },
+          ? { type: "tool", name: TURN_TOOL.name, disable_parallel_tool_use: true }
+          : { type: "any", disable_parallel_tool_use: true },
         messages: convo,
       }),
     });
