@@ -29,6 +29,11 @@ import {
   summarizeStatus,
   generateReply,
   converseEnabled,
+  guessSystem,
+  recallForReply,
+  formatLearningContext,
+  recordConversationTurn,
+  recordDecisionTurn,
   type ResolveContext,
 } from "@/lib/converse";
 import { createTicket } from "@/lib/notion";
@@ -37,6 +42,19 @@ import { findRecentDuplicate } from "@/lib/tickets";
 // GO適用の結果が「着手」になったら、即 /api/execute を起こして実改修へ進める（応答はブロックしない）。
 function kickIfStarted(newState?: string) {
   if (newState === "着手") waitUntil(kickEndpoint("/api/execute"));
+}
+
+// 全体学習への記録は「非ブロッキング・fail-safe」。社長への返信を絶対に遅らせない/壊さない。
+// 記録の Promise は await せず void で投げ、例外も握る（記録失敗で会話は止めない）。
+// Vercel上では waitUntil で関数終了後も記録の完了を待たせる（記録の取りこぼし防止）。
+function recordInBackground(p: Promise<unknown>): void {
+  const safe = Promise.resolve(p).catch(() => {});
+  try {
+    waitUntil(safe);
+  } catch {
+    // waitUntil が使えない環境（テスト等）でも記録自体は走る。例外は握る。
+    void safe;
+  }
 }
 
 export const runtime = "nodejs";
@@ -97,6 +115,8 @@ async function handleEvent(ev: any): Promise<void> {
     }
     const r = await applyGoAction(p.action, ticket);
     kickIfStarted(r.newState);
+    // 社長の判断（GO/却下/修正）を教師信号として全体学習に記録（非ブロッキング）。
+    if (r.ok) recordInBackground(recordDecisionTurn(p.action, ticket));
     if (replyToken) await replyText(replyToken, r.reply);
     return;
   }
@@ -139,6 +159,8 @@ async function handleEvent(ev: any): Promise<void> {
     // 修正(fix)時は本文(cmd.body)を渡し、社長の修正指示を議論へ反映する。
     const r = await applyGoAction(cmd.action, ticket, cmd.body);
     kickIfStarted(r.newState);
+    // 社長の判断（GO/却下/修正）を教師信号として全体学習に記録（非ブロッキング）。
+    if (r.ok) recordInBackground(recordDecisionTurn(cmd.action, ticket, cmd.body));
     if (replyToken) await replyText(replyToken, r.reply);
     return;
   }
@@ -161,6 +183,8 @@ async function handleConversation(
       if (res.ticket) {
         const r = await applyGoAction(intent.refAction, res.ticket);
         kickIfStarted(r.newState);
+        // 社長の判断（GO/却下/修正）を教師信号として全体学習に記録（非ブロッキング）。
+        if (r.ok) recordInBackground(recordDecisionTurn(intent.refAction, res.ticket, text));
         await safeReply(replyToken, r.reply);
         return;
       }
@@ -214,7 +238,10 @@ async function handleConversation(
         : "雑談・あいさつ。軽く受け答えしつつ、用件があれば気軽にどうぞと添える。";
     let reply: string | null = null;
     if (converseEnabled()) {
-      reply = await generateReply(text, statusNote, hint);
+      // 返答を作る前に、過去の学び（社長の好み・前例）を引いて文脈に渡す（鍵無/0件なら素通し）。
+      const hits = await recallForReply(text, 3);
+      const learningNote = formatLearningContext(hits);
+      reply = await generateReply(text, statusNote, hint, learningNote);
     }
     // Claude が使えない/失敗時：状況質問は状況サマリをそのまま返す。雑談は定型のやさしい一言。
     if (!reply) {
@@ -224,6 +251,8 @@ async function handleConversation(
           : "はい、カイゼンくんです。直してほしいこと・困っていることがあれば、いつでも書いてください。";
     }
     await safeReply(replyToken, reply);
+    // この会話1ターン（社長の発言＋AIの返答）を全体学習に記録（非ブロッキング・fail-safe）。
+    recordInBackground(recordConversationTurn(text, reply, guessSystem(text)));
   } catch (e) {
     console.error("[line/converse] 会話処理エラー", (e as Error).message);
     await safeReply(
