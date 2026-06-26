@@ -7,6 +7,8 @@ export const SYSTEMS: { slug: string; name: string }[] = [
   { slug: "houko", name: "ほうこちゃん" },
   { slug: "mfc-invoice-upload", name: "mfc-invoice-upload" },
   { slug: "indeed", name: "Indeed応募通知" },
+  { slug: "recruit", name: "Indeed応募通知" },  // alias（応募通知ボット＝tkgathr2/recruit。Indeed/ジモティーの応募通知）
+  { slug: "ouboe-tsuchi", name: "Indeed応募通知" },  // alias（応募通知ボットの分かりやすいスラグ）
   { slug: "cast-meibo", name: "キャスト名簿くん" },
   { slug: "rakuraku", name: "らくらく契約くん" },
   { slug: "mitsumori", name: "見積もりシステム" },
