@@ -50,6 +50,11 @@ describe("widget.js（静的検証）", () => {
     expect(src).toContain('origin + "/kaizen-kun.png"');
   });
 
+  it("マスコット画像の読込失敗時はonerrorで隠す（壊れアイコンを出さない）", () => {
+    expect(src).toContain("onerror=");
+    expect(src).toContain("this.style.display");
+  });
+
   it("middleware がマスコット画像を認証除外している（埋め込み先でアイコンが消える事故防止）", () => {
     const mw = readFileSync(path.resolve(__dirname, "../../middleware.ts"), "utf-8");
     expect(mw).toContain("kaizen-kun.png");
@@ -167,6 +172,7 @@ class StubEl {
   tagName: string;
   className = "";
   id = "";
+  parentNode: StubEl | null = null;
   style: Record<string, string> = {};
   children: StubEl[] = [];
   attrs: Record<string, string> = {};
@@ -190,7 +196,14 @@ class StubEl {
     return shadow;
   }
   appendChild(child: StubEl) {
+    child.parentNode = this;
     this.children.push(child);
+    return child;
+  }
+  removeChild(child: StubEl) {
+    const i = this.children.indexOf(child);
+    if (i >= 0) this.children.splice(i, 1);
+    if (child.parentNode === this) child.parentNode = null;
     return child;
   }
   setAttribute(k: string, v: string) {
@@ -278,6 +291,17 @@ function setupDom(opts: { reducedMotion?: boolean; calloutSeen?: boolean } = {})
     },
     body,
     createElement: (tag: string) => new StubEl(tag),
+    getElementById: (id: string) => {
+      const walk = (el: StubEl): StubEl | null => {
+        for (const c of el.children) {
+          if (c.id === id) return c;
+          const found = walk(c);
+          if (found) return found;
+        }
+        return null;
+      };
+      return walk(body);
+    },
     querySelectorAll: () => [] as unknown[],
     addEventListener: (type: string, fn: (e: unknown) => void) => {
       (docListeners[type] ||= []).push(fn);
@@ -361,6 +385,34 @@ describe("widget.js（ランタイム検証 / build() 実走）", () => {
     // 1回目で __kaizenWidgetLoaded が立つ。2回目は即return。
     runWidget(env);
     expect(env.body.children.length).toBe(1);
+  });
+
+  it("冪等化：前回の残骸 host があれば取り除いてから作る（二重生成しない）", () => {
+    const env = setupDom();
+    const stale = new StubEl("div");
+    stale.id = "kaizen-widget-host";
+    env.body.appendChild(stale);
+    runWidget(env);
+    // 残骸は除去され、新しい host 1つだけになる。
+    expect(env.body.children.length).toBe(1);
+    expect(env.body.children[0]).not.toBe(stale);
+    expect(env.body.children[0].id).toBe("kaizen-widget-host");
+  });
+
+  it("degrade-safe：build 失敗時はロードガードを解除して再試行可能にする", () => {
+    const env = setupDom();
+    let calls = 0;
+    // 2回目の createElement で例外＝build途中で失敗させる。
+    (env.documentStub as { createElement: (t: string) => StubEl }).createElement = (
+      tag: string
+    ) => {
+      calls += 1;
+      if (calls >= 2) throw new Error("boom");
+      return new StubEl(tag);
+    };
+    runWidget(env);
+    // ホストは追加されず（or 途中）、ガードは false に戻って次の試行を許す。
+    expect(env.windowStub.__kaizenWidgetLoaded).toBe(false);
   });
 
   it("初回コールアウト：遅延後に自動表示され、自動収納で閉じる", () => {

@@ -187,6 +187,10 @@
   }
 
   function build() {
+    // 冪等化：前回の部分失敗等で残った古いhostがあれば取り除いてから作る（二重生成防止）。
+    var stale = document.getElementById("kaizen-widget-host");
+    if (stale && stale.parentNode) stale.parentNode.removeChild(stale);
+
     var host = document.createElement("div");
     host.id = "kaizen-widget-host";
     var root = host.attachShadow ? host.attachShadow({ mode: "open" }) : host;
@@ -208,7 +212,7 @@
     btn.setAttribute("aria-haspopup", "dialog");
     btn.setAttribute("aria-expanded", "false");
     btn.innerHTML =
-      '<span class="kz-avatar"><img src="' + ICON + '" alt=""></span>' +
+      '<span class="kz-avatar"><img src="' + ICON + '" alt="" onerror="this.style.display=\'none\'"></span>' +
       '<span class="kz-text">' +
       '<span class="kz-name">' + BTN_NAME + "</span>" +
       '<span class="kz-label">' +
@@ -240,7 +244,7 @@
     panel.setAttribute("aria-label", "カイゼン窓口");
     panel.innerHTML =
       '<div class="kz-bar">' +
-      '<span class="kz-title"><img src="' + ICON + '" alt="">カイゼンくん</span>' +
+      '<span class="kz-title"><img src="' + ICON + '" alt="" onerror="this.style.display=\'none\'">カイゼンくん</span>' +
       '<a href="' + tabUrl + '" target="_blank" rel="noopener noreferrer" title="新しいタブで開く" aria-label="新しいタブで開く">' + EXTERNAL + "</a>" +
       '<button class="kz-x" type="button" title="閉じる" aria-label="閉じる">' + CLOSE + "</button>" +
       "</div>";
@@ -344,6 +348,9 @@
     try {
       build();
     } catch (e) {
+      // 初期化に失敗してもホスト画面は壊さない（degrade-safe）。さらにロードガードを解除し、
+      // 別の<script>枚やDOMContentLoadedでの再試行を可能にする（フラグが立ったまま宙づり防止）。
+      window.__kaizenWidgetLoaded = false;
       if (window.console && typeof console.error === "function") {
         console.error("[kaizen-widget] 初期化に失敗しました（ホスト画面には影響しません）", e);
       }
