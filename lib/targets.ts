@@ -41,7 +41,7 @@ export const TARGETS: TargetMeta[] = [
   // ステレポ（SNS運用・分析）を自走対象に段階解放（2026-06-13）。TSバックエンド＝
   // build:tsc / test:vitest / typecheck:tsc。verifyはリポ自身のscriptsで走る。
   { system: "ステレポ", repo: "tkgathr2/sterepo", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
-  { system: "ほうこちゃん", repo: null, healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
+  { system: "ほうこちゃん", repo: "tkgathr2/security-report-system", healthUrl: "https://houko-control-production.up.railway.app", forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
   { system: "mfc-invoice-upload", repo: null, healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
   { system: "Indeed応募通知", repo: "tkgathr2/recruit", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
   { system: "キャスト名簿くん", repo: "tkgathr2/cast-meibo", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
