@@ -67,4 +67,64 @@ describe("widget.js", () => {
     expect(src).toContain("console.warn");
     expect(src).toContain("data-sys");
   });
+
+  // ── 発見性の改善（pill・初回コールアウト・パルス・a11y）──
+
+  it("休止状態はラベル付きpill（読めば用途が分かる文言が入っている）", () => {
+    // ボタンに「ご意見・改善はこちら」の文言が出る＝何のボタンか一読で分かる。
+    expect(src).toContain("ご意見・改善はこちら");
+    // 狭い画面用の短いラベルも持つ（はみ出し対策）。
+    expect(src).toContain('class="kz-label-short"');
+  });
+
+  it("狭い画面(<=480px)ではラベルを短縮し、はみ出さない", () => {
+    expect(src).toContain("@media (max-width:480px)");
+    // 短いラベルへ切り替えるCSSがある。
+    expect(src).toContain(".kz-label-short{display:inline}");
+    // pillに最大幅の上限があり画面外へ出ない。
+    expect(src).toContain("max-width:calc(100vw - 40px)");
+  });
+
+  it("初回コールアウトは localStorage で一度きり（衝突しない固有キー）", () => {
+    expect(src).toContain("kaizen-widget:first-visit-callout:v1");
+    expect(src).toContain("localStorage");
+    expect(src).toContain("shouldShowCallout");
+    expect(src).toContain("markCalloutSeen");
+  });
+
+  it("初回コールアウトはホバー非依存で自動表示し、×と自動収納(8秒)で閉じる", () => {
+    // 文面（送っていいと思える優しい説明）。
+    expect(src).toContain("ここから気軽に送れます");
+    // 1〜1.5秒後の自動表示と、8秒での自動収納。
+    expect(src).toContain("1200");
+    expect(src).toContain("8000");
+    // ×ボタンで閉じられる。
+    expect(src).toContain("この案内を閉じる");
+  });
+
+  it("パネルを開いたらコールアウトは即消える", () => {
+    // setOpen(true) の経路で hideCallout を呼ぶ。
+    expect(src).toContain("hideCallout()");
+  });
+
+  it("初回だけパルスし、最初の操作(クリック/フォーカス)で止まる", () => {
+    expect(src).toContain("kz-pulse");
+    expect(src).toContain("stopPulse");
+    // フォーカスでも止める。
+    expect(src).toContain('addEventListener("focus", stopPulse)');
+  });
+
+  it("prefers-reduced-motion を尊重してパルスを無効化できる", () => {
+    expect(src).toContain("prefers-reduced-motion");
+    expect(src).toContain("matchMedia");
+  });
+
+  it("aria-label とキーボード/フォーカス導線を維持する", () => {
+    // ボタンには用途が伝わる aria-label。
+    expect(src).toContain('btn.setAttribute("aria-label"');
+    // フォーカスでもツールチップが出る（キーボード操作者にも説明が届く）。
+    expect(src).toContain(".kz-btn:focus-visible+.kz-tip");
+    // Escでパネルを閉じる導線は維持。
+    expect(src).toContain('e.key === "Escape"');
+  });
 });
