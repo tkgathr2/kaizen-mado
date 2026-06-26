@@ -54,17 +54,22 @@ function makeReq(): any {
 describe("/api/process 失敗時の状態巻き戻し", () => {
   const savedEnv = process.env.NODE_ENV;
   const savedSecret = process.env.CRON_SECRET;
+  const savedInsecure = process.env.ALLOW_INSECURE_CRON;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    // CRON_SECRET未設定＋本番でない → checkCronSecret が通る
+    // CRON_SECRET未設定でも、明示フラグ ALLOW_INSECURE_CRON=1 のとき checkCronSecret が通る
+    // （cronAuth は未設定時 fail-closed。本番は CRON_SECRET 設定で保護）。
     delete process.env.CRON_SECRET;
+    process.env.ALLOW_INSECURE_CRON = "1";
     (process.env as any).NODE_ENV = "test";
   });
   afterEach(() => {
     (process.env as any).NODE_ENV = savedEnv;
     if (savedSecret === undefined) delete process.env.CRON_SECRET;
     else process.env.CRON_SECRET = savedSecret;
+    if (savedInsecure === undefined) delete process.env.ALLOW_INSECURE_CRON;
+    else process.env.ALLOW_INSECURE_CRON = savedInsecure;
   });
 
   it("議論ステップで例外が出たら状態を「受付」へ戻す", async () => {
