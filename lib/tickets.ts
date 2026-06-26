@@ -85,23 +85,58 @@ function findUniqueId(props: any): any {
   return null;
 }
 
-async function queryDatabase(filter: any, limit: number): Promise<TicketRow[]> {
+// Notion query の1ページ最大件数。これを超える件数は has_more/next_cursor で繰り返し取得する。
+const NOTION_PAGE_SIZE = 100;
+
+/**
+ * Notion DBクエリをページネーション込みで全件取得する（limit に達するまで）。
+ * 旧実装は先頭ページ(page_size=limit)しか見ず、limit>100 や「全件」を意図しても
+ * has_more を辿らないため取りこぼしていた。has_more の間 start_cursor を付けて繰り返す。
+ * @param filter Notion filter（null可＝全件）
+ * @param limit  取得上限（全件取りたい場合は十分大きな数を渡す）
+ * @param sorts  Notion sorts（任意）
+ */
+async function queryDatabase(
+  filter: any,
+  limit: number,
+  sorts?: any
+): Promise<TicketRow[]> {
   const { token, databaseId } = getAuth();
-  const res = await fetch(
-    `https://api.notion.com/v1/databases/${databaseId}/query`,
-    {
-      method: "POST",
-      headers: headers(token),
-      body: JSON.stringify({ filter, page_size: limit }),
+  const cap = Math.max(1, Math.floor(limit));
+  const rows: TicketRow[] = [];
+  let cursor: string | undefined = undefined;
+
+  // has_more の間ループ。1ページ毎に残り必要件数だけ要求して limit でちょうど止める。
+  do {
+    const remaining = cap - rows.length;
+    const pageSize = Math.min(NOTION_PAGE_SIZE, remaining);
+    const payload: any = { page_size: pageSize };
+    if (filter) payload.filter = filter;
+    if (sorts) payload.sorts = sorts;
+    if (cursor) payload.start_cursor = cursor;
+
+    const res = await fetch(
+      `https://api.notion.com/v1/databases/${databaseId}/query`,
+      {
+        method: "POST",
+        headers: headers(token),
+        body: JSON.stringify(payload),
+      }
+    );
+    if (!res.ok) {
+      const t = await res.text().catch(() => "");
+      throw new Error(`Notion query error ${res.status}: ${t.slice(0, 300)}`);
     }
-  );
-  if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    throw new Error(`Notion query error ${res.status}: ${t.slice(0, 300)}`);
-  }
-  const data = await res.json();
-  const results = Array.isArray(data?.results) ? data.results : [];
-  return results.map(parseRow);
+    const data = await res.json();
+    const results = Array.isArray(data?.results) ? data.results : [];
+    for (const page of results) {
+      rows.push(parseRow(page));
+      if (rows.length >= cap) break;
+    }
+    cursor = data?.has_more && data?.next_cursor ? data.next_cursor : undefined;
+  } while (cursor && rows.length < cap);
+
+  return rows;
 }
 
 /** 指定状態のチケットを取得 */
@@ -115,27 +150,14 @@ export async function fetchTicketsByState(
   );
 }
 
-/** 全チケットを最終更新の新しい順で取得（/board の状況可視化用・読み取り専用）。 */
+/** 全チケットを最終更新の新しい順で取得（/board の状況可視化用・読み取り専用）。
+ * ページネーション対応：limit が100を超えても has_more を辿って全件取得する。 */
 export async function fetchAllTickets(limit = 100): Promise<TicketRow[]> {
-  const { token, databaseId } = getAuth();
-  const res = await fetch(
-    `https://api.notion.com/v1/databases/${databaseId}/query`,
-    {
-      method: "POST",
-      headers: headers(token),
-      body: JSON.stringify({
-        sorts: [{ timestamp: "last_edited_time", direction: "descending" }],
-        page_size: Math.min(Math.max(1, limit), 100),
-      }),
-    }
+  return queryDatabase(
+    null,
+    limit,
+    [{ timestamp: "last_edited_time", direction: "descending" }]
   );
-  if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    throw new Error(`Notion query error ${res.status}: ${t.slice(0, 300)}`);
-  }
-  const data = await res.json();
-  const results = Array.isArray(data?.results) ? data.results : [];
-  return results.map(parseRow);
 }
 
 /** pageIdで1件取得（webhookでGO時に現在状態を確認＝冪等化のため）。無ければnull。 */

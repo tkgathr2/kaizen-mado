@@ -59,6 +59,41 @@ describe("preGate", () => {
     expect(d.mode).toBe("auto");
     expect(d.reasons).toHaveLength(0);
   });
+
+  // ── 単語境界判定（誤爆修正） ──
+  it("英語機微語は単語境界で当たる（escalate）", () => {
+    for (const w of ["update password field", "rotate the secret", "send an email", "delete the row", "charge the card"]) {
+      const d = preGate(ticket({ title: "改善", detail: w }), eligible);
+      expect(d.mode, w).toBe("escalate");
+    }
+  });
+
+  it("英語機微語の部分一致は誤爆しない（auto）", () => {
+    // "auth"→author, "price"→enterprise, "charge"→supercharge, "email"を含まない一般語
+    for (const w of ["fix the author byline", "for enterprise customers", "supercharge the loader", "improve the dropdown layout"]) {
+      const d = preGate(ticket({ title: "改善", detail: w }), eligible);
+      expect(d.mode, w).toBe("auto");
+    }
+  });
+
+  it('"api key" は語間空白を許容して当たる', () => {
+    const d = preGate(ticket({ detail: "rotate the api key" }), eligible);
+    expect(d.mode).toBe("escalate");
+  });
+
+  it("日本語機微語は部分一致のまま当たる（境界化しない）", () => {
+    const d = preGate(ticket({ detail: "口座情報の表示" }), eligible);
+    expect(d.mode).toBe("escalate");
+  });
+
+  it("detail が undefined でも 'undefined' を機微語誤検知しない", () => {
+    const t = ticket({ title: "一覧を見やすく" });
+    // detail を強制的に undefined に
+    (t as any).detail = undefined;
+    const d = preGate(t, eligible);
+    expect(d.mode).toBe("auto");
+    expect(d.reasons).toHaveLength(0);
+  });
 });
 
 describe("autopilotEnabled（真田自走スイッチ）", () => {

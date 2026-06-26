@@ -132,13 +132,17 @@ export function parsePostback(
 // テキスト返信からGO/修正/却下＋チケットIDを読む（ボタンを使わず「GO KZ-12」と打つ場合）。
 const TEXT_GO = /^(go|ok|ゴー|ごー|オーケー|承認|よし)/i;
 const TEXT_REJECT = /^(却下|ng|やめ|中止|なし)/i;
-const TEXT_FIX = /^(修正|なおして|直して|やり直し)/;
+// 「修正して」「修正してください」のように丁寧な命令補助語が付く形も同じコマンド扱い。
+// 補助語(して/してください/して下さい)は本文ではないので body 抽出時に一緒に削る。
+const TEXT_FIX = /^(修正|なおして|直して|やり直し)(して(ください|下さい)?)?/;
 const TICKET_ID_RE = /\b(KZ[-－]?\d+)\b/i;
 
-/** 自由文から {action, ticketId?} を読む。判定不能なら null（誤爆防止）。 */
+/** 自由文から {action, ticketId?, body?} を読む。判定不能なら null（誤爆防止）。
+ * body＝コマンド語・チケットID を除いた「本文」。社長が「修正 KZ-12 ◯◯を直して」と
+ * 返信したときの「◯◯を直して」部分。修正(fix)時にこれを議論へ反映する。 */
 export function parseTextCommand(
   text: string | undefined | null
-): { action: GoAction; ticketId: string | null } | null {
+): { action: GoAction; ticketId: string | null; body: string } | null {
   if (!text) return null;
   const t = text.trim();
   let action: GoAction | null = null;
@@ -148,7 +152,15 @@ export function parseTextCommand(
   if (!action) return null;
   const m = t.match(TICKET_ID_RE);
   const ticketId = m ? m[1].toUpperCase().replace("－", "-").replace(/KZ(\d)/, "KZ-$1") : null;
-  return { action, ticketId };
+  // 本文＝先頭のコマンド語とチケットID表記を取り除いた残り。
+  // 例: 「修正 KZ-12 ◯◯を直して」→「◯◯を直して」。区切りの記号・空白も削る。
+  let body = t
+    .replace(TEXT_REJECT, "")
+    .replace(TEXT_FIX, "")
+    .replace(TEXT_GO, "");
+  if (m) body = body.replace(m[0], "");
+  body = body.replace(/^[\s、,：:。.\-－―ー　]+/, "").trim();
+  return { action, ticketId, body };
 }
 
 // ── 送信系（失敗してもthrowしない：呼び出し元の改善ループを止めないため fail-safe） ──

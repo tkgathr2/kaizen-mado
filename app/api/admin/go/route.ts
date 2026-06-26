@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  let body: { ticketId?: string; action?: string } = {};
+  let body: { ticketId?: string; action?: string; note?: string } = {};
   try {
     body = await req.json();
   } catch {
@@ -58,7 +58,7 @@ export async function POST(req: NextRequest) {
     ticket = rows[0];
   }
 
-  const result = await applyGoAction(action, ticket);
+  const result = await applyGoAction(action, ticket, body.note);
 
   // GO→「着手」になったら即 /api/execute を起こして実改修へ
   if (result.newState === "着手") {

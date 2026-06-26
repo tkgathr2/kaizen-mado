@@ -1,10 +1,34 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   fetchTicketsByState,
+  fetchAllTickets,
+  fetchCompletedUnlearned,
   updateTicketState,
   setTicketUrlField,
   appendDiscussionBlocks,
 } from "../tickets";
+
+// 指定件数ぶんのダミー結果ページを生成（has_more / next_cursor 制御つき）。
+function page(count: number, hasMore: boolean, cursor?: string) {
+  const results = Array.from({ length: count }, (_, i) => ({
+    id: `page-${cursor ?? "first"}-${i}`,
+    properties: {
+      ID: { type: "unique_id", unique_id: { prefix: "KZ", number: i + 1 } },
+      対象システム: { type: "select", select: { name: "プロレポ" } },
+      種別: { type: "select", select: { name: "改善" } },
+      重要度: { type: "select", select: { name: "中" } },
+      チケット名: { type: "title", title: [{ plain_text: `t${i}` }] },
+      内容: { type: "rich_text", rich_text: [] },
+      起票者: { type: "rich_text", rich_text: [] },
+      状態: { type: "select", select: { name: "完了" } },
+      FGSリンク: { type: "url", url: null },
+    },
+  }));
+  return {
+    ok: true,
+    json: async () => ({ results, has_more: hasMore, next_cursor: hasMore ? (cursor ?? "cur-1") : null }),
+  };
+}
 
 // query 応答のダミー（properties一式入り1件）
 function queryResponse() {
@@ -162,5 +186,46 @@ describe("tickets", () => {
       .fn()
       .mockResolvedValue({ ok: false, status: 500, text: async () => "err" });
     await expect(fetchTicketsByState("受付")).rejects.toThrow(/Notion query error/);
+  });
+
+  // ── ページネーション（has_more / next_cursor）対応 ──
+  it("fetchAllTickets は has_more の間 start_cursor を付けて全件取得する", async () => {
+    const captured: any[] = [];
+    let call = 0;
+    global.fetch = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+      captured.push(JSON.parse(init.body as string));
+      call++;
+      // 1ページ目: 100件 has_more=true、2ページ目: 30件 has_more=false。
+      return Promise.resolve(call === 1 ? page(100, true, "cur-1") : page(30, false));
+    });
+
+    const rows = await fetchAllTickets(500);
+    expect(rows).toHaveLength(130); // 100 + 30 を取りこぼさず合算
+    expect(captured).toHaveLength(2);
+    expect(captured[0].start_cursor).toBeUndefined(); // 1回目はカーソルなし
+    expect(captured[1].start_cursor).toBe("cur-1"); // 2回目は前回のnext_cursor
+    expect(captured[0].sorts).toBeTruthy(); // ボードはsorts付き
+  });
+
+  it("fetchAllTickets は limit に達したら has_more でも止める", async () => {
+    let call = 0;
+    global.fetch = vi.fn().mockImplementation(() => {
+      call++;
+      return Promise.resolve(page(100, true, "cur-1"));
+    });
+    const rows = await fetchAllTickets(100);
+    expect(rows).toHaveLength(100);
+    expect(call).toBe(1); // limitちょうどで2ページ目を引かない
+  });
+
+  it("fetchCompletedUnlearned もページネーションで全件取得する", async () => {
+    let call = 0;
+    global.fetch = vi.fn().mockImplementation(() => {
+      call++;
+      return Promise.resolve(call === 1 ? page(100, true, "cur-1") : page(5, false));
+    });
+    const rows = await fetchCompletedUnlearned(1000);
+    expect(rows).toHaveLength(105);
+    expect(call).toBe(2);
   });
 });

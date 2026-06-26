@@ -46,6 +46,24 @@ describe("applyGoAction", () => {
     expect(updateTicketState).toHaveBeenCalledWith("page-1", "差し戻し");
   });
 
+  it("GO待ち + fix + 本文(note) → 修正指示を議論ブロックに保存し返信にも反映", async () => {
+    const note = "ボタンの色を青に直して";
+    const r = await applyGoAction("fix", ticket("GO待ち"), note);
+    expect(r.newState).toBe("差し戻し");
+    // appendDiscussionBlocks に「社長の修正指示」ブロックが含まれる
+    const blocks = vi.mocked(appendDiscussionBlocks).mock.calls[0][1];
+    const noteBlock = blocks.find((b) => b.heading === "社長の修正指示");
+    expect(noteBlock?.body).toBe(note);
+    // 返信にも要約が乗る
+    expect(r.reply).toContain("承りました");
+  });
+
+  it("GO待ち + fix で note 無しなら修正指示ブロックを増やさない", async () => {
+    await applyGoAction("fix", ticket("GO待ち"));
+    const blocks = vi.mocked(appendDiscussionBlocks).mock.calls[0][1];
+    expect(blocks.find((b) => b.heading === "社長の修正指示")).toBeUndefined();
+  });
+
   it("GO待ち + reject → 却下", async () => {
     const r = await applyGoAction("reject", ticket("GO待ち"));
     expect(r.newState).toBe("却下");

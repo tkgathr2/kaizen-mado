@@ -116,7 +116,8 @@ async function handleEvent(ev: any): Promise<void> {
       if (replyToken) await replyText(replyToken, "対象のGO待ちチケットが見つかりませんでした。");
       return;
     }
-    const r = await applyGoAction(cmd.action, ticket);
+    // 修正(fix)時は本文(cmd.body)を渡し、社長の修正指示を議論へ反映する。
+    const r = await applyGoAction(cmd.action, ticket, cmd.body);
     kickIfStarted(r.newState);
     if (replyToken) await replyText(replyToken, r.reply);
     return;
