@@ -163,19 +163,51 @@ describe("checkKnowhow", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it("有効・200 なら ok", async () => {
+  it("有効だが KB_API_KEY 未設定なら error（fetchを呼ばない＝書き込みが401で死ぬ）", async () => {
+    const mockFetch = vi.fn();
+    global.fetch = mockFetch as unknown as typeof global.fetch;
+    const r = await checkKnowhow(envWith({ KNOWHOW_ENABLED: "true" }));
+    expect(r.status).toBe("error");
+    expect(r.detail).toContain("KB_API_KEY");
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("有効・鍵付き recall が 200 なら ok（学習が実際に使う経路を叩く）", async () => {
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200 });
+    global.fetch = mockFetch as unknown as typeof global.fetch;
+    const r = await checkKnowhow(envWith({ KNOWHOW_ENABLED: "true", KB_API_KEY: "k" }));
+    expect(r.status).toBe("ok");
+    // /api/devin/recall を鍵付き POST で叩いていること（旧 /api/health 依存でない）。
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(String(url)).toContain("/api/devin/recall");
+    expect(init.method).toBe("POST");
+    expect(init.headers["x-api-key"]).toBe("k");
+  });
+
+  it("有効・recall が 401 なら error（鍵が無効）", async () => {
     global.fetch = vi
       .fn()
-      .mockResolvedValue({ ok: true, status: 200 }) as unknown as typeof global.fetch;
-    const r = await checkKnowhow(envWith({ KNOWHOW_ENABLED: "true" }));
-    expect(r.status).toBe("ok");
+      .mockResolvedValue({ ok: false, status: 401 }) as unknown as typeof global.fetch;
+    const r = await checkKnowhow(envWith({ KNOWHOW_ENABLED: "true", KB_API_KEY: "bad" }));
+    expect(r.status).toBe("error");
+    expect(r.detail).toContain("認証失敗");
+  });
+
+  it("有効・recall が 500 なら error", async () => {
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue({ ok: false, status: 500 }) as unknown as typeof global.fetch;
+    const r = await checkKnowhow(envWith({ KNOWHOW_ENABLED: "true", KB_API_KEY: "k" }));
+    expect(r.status).toBe("error");
   });
 
   it("有効・throw しても error として握る", async () => {
     global.fetch = vi
       .fn()
       .mockRejectedValue(new Error("kh down")) as unknown as typeof global.fetch;
-    const r = await checkKnowhow(envWith({ KNOWHOW_ENABLED: "true" }));
+    const r = await checkKnowhow(envWith({ KNOWHOW_ENABLED: "true", KB_API_KEY: "k" }));
     expect(r.status).toBe("error");
   });
 });
