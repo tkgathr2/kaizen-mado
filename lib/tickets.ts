@@ -1,6 +1,10 @@
 // ── Notion 改善チケットDB の読取・更新（第2段=フィードバック改善ループの内部処理） ──
 // 起票(lib/notion.ts)の延長。状態遷移・議論ブロック追記・冪等マークを担う。
 // 誰にも送信しない（対人送信・課金・本番DB破壊は含めない）。
+import type { Ticket } from "./types";
+import { normalizeForDedup } from "./dedup";
+import { normalizeSystemForTicket } from "./systems";
+
 const NOTION_VERSION = "2022-06-28";
 
 export interface TicketRow {
@@ -16,6 +20,8 @@ export interface TicketRow {
   fgsUrl: string | null;
   /** Notionの最終更新時刻（ISO文字列）。/board の並び・表示用。古いコードは未使用なので任意。 */
   lastEdited?: string;
+  /** Notionの作成時刻（ISO文字列）。起票前 冪等チェックの時間窓判定用。任意。 */
+  createdTime?: string;
 }
 
 function getAuth(): { token: string; databaseId: string } {
@@ -74,6 +80,7 @@ function parseRow(page: any): TicketRow {
     state: nameFromSelect(props["状態"]),
     fgsUrl: valueFromUrl(props["FGSリンク"]),
     lastEdited: typeof page?.last_edited_time === "string" ? page.last_edited_time : "",
+    createdTime: typeof page?.created_time === "string" ? page.created_time : "",
   };
 }
 
@@ -174,6 +181,105 @@ export async function fetchTicketByPageId(pageId: string): Promise<TicketRow | n
   }
   const page = await res.json();
   return parseRow(page);
+}
+
+// ── 起票前 冪等チェック（インスタンス跨ぎの真の二重起票防止） ──
+// lib/dedup.ts のメモリ段は「同一プロセス内」しか効かない。Vercelの
+// serverless は連打を別インスタンスで受けうるため、メモリ段をすり抜けた
+// 二重起票が Notion に2件できる。そこで createTicket の直前に Notion を
+// 1回問い合わせ、「直近N秒以内・完全同一内容（＋記名なら同一起票者）」の
+// 既存チケットがあれば、新規作成せずそれを返す。
+//
+// ★ fail-safe：このチェックが失敗/タイムアウトしたら null を返し、呼び出し側は
+//   通常どおり新規作成する（＝声を絶対に取りこぼさない。迷ったら作る側に倒す）。
+
+/** 起票前 冪等チェックの時間窓（秒）。env KAIZEN_SUBMIT_DEDUP_SECONDS（既定15秒）。
+ * 1〜600秒の範囲にクランプ（長すぎる窓は正当な再起票を握りつぶすため）。 */
+export function submitDedupSeconds(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env.KAIZEN_SUBMIT_DEDUP_SECONDS);
+  if (!Number.isFinite(raw) || raw <= 0) return 15;
+  return Math.min(600, Math.max(1, Math.floor(raw)));
+}
+
+/** 匿名（reporter空）の時間窓は記名より短くする（別人の正当な短文を消さない安全側）。
+ * 既定で記名の半分（最低1秒）。記名は submitDedupSeconds をそのまま使う。 */
+export function anonSubmitDedupSeconds(env: NodeJS.ProcessEnv = process.env): number {
+  return Math.max(1, Math.floor(submitDedupSeconds(env) / 2));
+}
+
+/** Notion 上で「直近window秒以内・完全同一内容」の既存チケットを照合する純粋ロジック。
+ * Notion側で created_time＋対象システム(＋記名なら起票者)まで絞った候補 rows を受け、
+ * title/detail/種別/重要度/起票者を正規化して厳密一致するものを1件返す（無ければnull）。
+ * 完全一致のみを重複とみなす＝別内容・別importance は通す（声を取りこぼさない）。 */
+export function matchDuplicate(
+  rows: TicketRow[],
+  ticket: Ticket,
+  reporter: string | null,
+  anonymous: boolean
+): TicketRow | null {
+  const norm = normalizeForDedup;
+  const wantSystem = norm(normalizeSystemForTicket(ticket.system));
+  const wantType = norm(ticket.type || "");
+  const wantTitle = norm(ticket.title || "");
+  const wantDetail = norm(ticket.detail || "");
+  const wantImportance = norm(ticket.importance || "");
+  const wantReporter = norm(reporter || "");
+
+  for (const r of rows) {
+    if (norm(r.system) !== wantSystem) continue;
+    if (norm(r.type) !== wantType) continue;
+    if (norm(r.title) !== wantTitle) continue;
+    if (norm(r.detail) !== wantDetail) continue;
+    if (norm(r.importance) !== wantImportance) continue;
+    // 記名のときは起票者も一致を要求（別人の同一内容を誤って弾かない）。
+    // 匿名のときは起票者キーが無いので内容完全一致のみで判定する。
+    if (!anonymous && norm(r.reporter) !== wantReporter) continue;
+    return r;
+  }
+  return null;
+}
+
+/**
+ * createTicket 直前に1回呼ぶ「Notion側の起票前 冪等チェック」。
+ * 直近window秒以内・同一 対象システム（＋記名なら同一起票者）の候補を Notion から取り、
+ * matchDuplicate で完全同一内容を厳密照合する。ヒットしたらその既存 TicketRow を返す。
+ * 失敗（クエリエラー/タイムアウト/認証未設定など）は握りつぶして null を返す（fail-safe）。
+ */
+export async function findRecentDuplicate(
+  ticket: Ticket,
+  reporter: string | null,
+  now: number = Date.now(),
+  env: NodeJS.ProcessEnv = process.env
+): Promise<TicketRow | null> {
+  try {
+    const anonymous = !reporter || reporter.trim().length === 0;
+    const windowSec = anonymous ? anonSubmitDedupSeconds(env) : submitDedupSeconds(env);
+    const since = new Date(now - windowSec * 1000).toISOString();
+    const system = normalizeSystemForTicket(ticket.system);
+
+    // Notion filter：作成時刻が窓内 AND 対象システム一致（＋記名なら起票者一致）。
+    // title/detail の厳密一致は取得後にアプリ側（matchDuplicate）で正規化照合する。
+    const and: any[] = [
+      { timestamp: "created_time", created_time: { on_or_after: since } },
+      { property: "対象システム", select: { equals: system } },
+    ];
+    if (!anonymous) {
+      and.push({ property: "起票者", rich_text: { equals: (reporter || "").trim() } });
+    }
+
+    // 窓内の候補だけ取れば十分（連打は数件）。新しい順で取得。
+    const rows = await queryDatabase({ and }, 25, [
+      { timestamp: "created_time", direction: "descending" },
+    ]);
+    return matchDuplicate(rows, ticket, reporter, anonymous);
+  } catch (err) {
+    // fail-safe：照合に失敗しても起票は止めない（声を取りこぼさない）。
+    console.error(
+      "[tickets] findRecentDuplicate failed (fallback to create):",
+      (err as Error).message
+    );
+    return null;
+  }
 }
 
 /** ticketId（例 KZ-12）でGO待ちチケットを探す（テキスト返信「GO KZ-12」用）。 */
