@@ -135,6 +135,7 @@ html, body {
   border-radius: 14px; padding: 18px; font-size: 15px; text-align: center;
 }
 .done .kz { font-weight: 700; font-size: 19px; color: var(--brand); }
+.done .kz-keep { display: inline-block; margin-top: 2px; color: var(--muted); font-size: 12.5px; }
 
 /* ───── 入力欄（Claude流の丸く広いコンポーザー） ───── */
 .composer {

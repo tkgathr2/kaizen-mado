@@ -8,6 +8,9 @@ import type { KaizenStats } from "@/lib/stats";
 // 状態の色は lib/board.ts の正本から取得（「議論」と「議論中」のズレを防ぐ）。
 import { metaOf } from "@/lib/board";
 
+// 進行中件数の純粋ロジックは app/dashboard/inProgress.ts に分離（テスト可能にするため）。
+import { inProgressFromFunnel } from "./inProgress";
+
 function fmtDate(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
@@ -56,7 +59,7 @@ export default function DashboardPage() {
         <Card label="今月の声" value={stats.thisMonth} unit="件" />
         <Card label="改修完了" value={stats.done} unit="件" />
         <Card label="完了率" value={stats.doneRate} unit="%" />
-        <Card label="学びDB還元" value={stats.learned} unit="件" />
+        <Card label="次に活かせた学び" value={stats.learned} unit="件" />
       </div>
 
       <section className="dash-section">
@@ -144,12 +147,8 @@ export default function DashboardPage() {
 }
 
 function DashHeader({ stats }: { stats?: KaizenStats }) {
-  // 進行中件数を計算（受付・検討・提案中・改修中）
-  const inProgressCount = stats
-    ? stats.funnel
-        .filter(f => f.stage === "受付" || f.stage === "検討・提案中" || f.stage === "改修中")
-        .reduce((sum, f) => sum + f.count, 0)
-    : 0;
+  // 進行中件数 ＝ 全件から「完了」「見送り」を引いた残り（段が増えても数え漏れない）。
+  const inProgressCount = stats ? inProgressFromFunnel(stats.funnel) : 0;
 
   return (
     <header className="header">

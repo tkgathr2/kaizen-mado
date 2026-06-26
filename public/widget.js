@@ -14,14 +14,19 @@
  */
 (function () {
   "use strict";
+  // 複数枚設置への堅牢化：このガードで「最初に評価された1枚」だけが採用される。
+  // 2枚目以降のscriptは即returnするため、フローティングボタンが重複して出ることはない。
   if (window.__kaizenWidgetLoaded) return;
   window.__kaizenWidgetLoaded = true;
 
+  // data-sys等の属性は「この widget.js を読み込んだ自分のscriptタグ」から取る。
+  // document.currentScript が使える環境ではそれを最優先（複数枚あっても自分を正しく特定）。
+  // 取れない古い環境では widget.js を指すscriptの先頭1枚にフォールバックする。
   var script =
     document.currentScript ||
     (function () {
       var list = document.querySelectorAll('script[src*="widget.js"]');
-      return list.length ? list[list.length - 1] : null;
+      return list.length ? list[0] : null;
     })();
 
   var DEFAULT_ORIGIN = "https://kaizen.takagi.bz";
@@ -33,7 +38,15 @@
     origin = DEFAULT_ORIGIN;
   }
 
+  // data-sys 取得失敗時の安全なフォールバック：
+  // 対象システムが特定できなくても窓口は開ける（会話の中でどのシステムか聞く）。
+  // 取れなかったことだけ警告ログに残し、設置ミスに気づけるようにする。
   var sys = (script && script.getAttribute("data-sys")) || "";
+  if (!sys && window.console && typeof console.warn === "function") {
+    console.warn(
+      "[kaizen-widget] data-sys が取得できませんでした。対象システム未指定で窓口を開きます（会話内で確認します）。"
+    );
+  }
   var madoUrl = origin + "/?embed=1" + (sys ? "&sys=" + encodeURIComponent(sys) : "");
   var tabUrl = origin + "/" + (sys ? "?sys=" + encodeURIComponent(sys) : "");
 

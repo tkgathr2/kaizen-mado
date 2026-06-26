@@ -56,4 +56,15 @@ describe("widget.js", () => {
     expect(src).toContain('target="_blank"');
     expect(src).toContain('rel="noopener noreferrer"');
   });
+
+  it("複数枚設置でも最初の1枚を採用する（currentScript無し環境は先頭scriptへフォールバック）", () => {
+    // 古い環境のフォールバックは querySelectorAll の先頭(list[0])を使う＝最初の1枚。
+    expect(src).toContain('document.currentScript');
+    expect(src).toContain("list[0]");
+  });
+
+  it("data-sys 取得失敗時は警告ログを出して安全に窓口を開く", () => {
+    expect(src).toContain("console.warn");
+    expect(src).toContain("data-sys");
+  });
 });
