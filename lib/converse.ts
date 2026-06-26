@@ -10,6 +10,13 @@
 import type { TicketRow } from "./tickets";
 import type { Ticket, TicketType, Importance } from "./types";
 import { normalizeSystemForTicket, SYSTEMS } from "./systems";
+import {
+  recordLearning,
+  recallLearning,
+  type LearningEvent,
+  type LearningKind,
+  type MemoryHit,
+} from "./memory";
 
 const API_URL = "https://api.anthropic.com/v1/messages";
 const DEFAULT_MODEL = "claude-sonnet-4-6";
@@ -329,17 +336,31 @@ const CONVERSE_SYSTEM =
   "今の状況（GO待ち・最近の案件）を渡されたら、それに基づいて事実だけ答える。" +
   "勝手に約束しない・送信や課金には触れない。要望は『チケットにして順番に進めます』と受ける。";
 
+/** recall で引いた過去の学びを、返答生成プロンプトに添える短い文脈に整形する。
+ *  ヒット0件なら空文字（プロンプトに足さない＝素通し）。社長の好み・過去の判断を踏まえて答える土台。 */
+export function formatLearningContext(hits: MemoryHit[] | null | undefined): string {
+  if (!hits || hits.length === 0) return "";
+  const lines = hits
+    .map((h) => (h?.content || "").trim())
+    .filter(Boolean)
+    .slice(0, 3)
+    .map((c) => `・${truncate(c, 160)}`);
+  return lines.length ? lines.join("\n") : "";
+}
+
 /**
  * 会話の返事を Claude（claude-sonnet-4-6）で生成する。
  * @param userText 社長のメッセージ
  * @param contextNote 「今の状況」テキスト（summarizeStatus 等）
  * @param hint この返事の趣旨（status/request/command の補足。プロンプトに添える）
+ * @param learningNote 過去の学び（recall）を整形した文脈。あれば社長の好み・前例を踏まえて答える。
  * 失敗・キー未設定時は null を返す（呼び出し側がフォールバック文を使う）。
  */
 export async function generateReply(
   userText: string,
   contextNote: string,
-  hint?: string
+  hint?: string,
+  learningNote?: string
 ): Promise<string | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
@@ -348,6 +369,9 @@ export async function generateReply(
   const sys =
     CONVERSE_SYSTEM +
     (contextNote ? `\n\n【今の状況】\n${contextNote}` : "") +
+    (learningNote
+      ? `\n\n【過去の学び・社長の好み（参考）】\n${learningNote}`
+      : "") +
     (hint ? `\n\n【この返事の趣旨】${hint}` : "");
 
   try {
@@ -377,5 +401,85 @@ export async function generateReply(
     return text || null;
   } catch {
     return null;
+  }
+}
+
+// ── 全体学習の配線（会話エンジン側のフック） ──
+// 社長との会話・判断を「同じ1つの記憶」へ流し込み、会話の返答前にその記憶を引く。
+// すべて fail-safe：memory層は元々 no-op 安全だが、ここでも例外を握り会話/リクエストを絶対止めない。
+
+/**
+ * 会話の返答を作る前に、社長の発言で過去の学び（社長の好み・前例）を引く。
+ * - 鍵が無い／0件なら [] を返し、呼び出し側は素通しでよい（recallLearning が fail-safe）。
+ * - 例外は握って [] を返す（会話を止めない）。
+ */
+export async function recallForReply(
+  userText: string,
+  topK = 3
+): Promise<MemoryHit[]> {
+  try {
+    return await recallLearning(userText, { topK });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 社長との会話1ターンを全体学習に記録する（kind:"conversation"）。
+ * 非ブロッキング：await してもしなくてもよいよう、例外は内部で握って boolean を返す。
+ * 記録の失敗で社長への返信が遅れ/壊れないこと（呼び出し側は void で投げてよい）。
+ * @param userText 社長の発言（summary に要約として入る）
+ * @param replyText AIの返答（detail に文脈として入る）
+ * @param system 関係するシステム（任意・分かれば）
+ */
+export async function recordConversationTurn(
+  userText: string,
+  replyText: string,
+  system?: string | null
+): Promise<boolean> {
+  const summary = (userText || "").trim().slice(0, 200);
+  if (!summary) return false;
+  const event: LearningEvent = {
+    kind: "conversation",
+    summary,
+    detail: (replyText || "").trim().slice(0, 800) || undefined,
+    system: system || undefined,
+  };
+  try {
+    return await recordLearning(event);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 社長の判断（GO/却下/修正）を教師信号として全体学習に記録する。
+ * - go/reject ＝ kind:"decision"（なぜ進めた/見送ったか）
+ * - fix（「違う」「直して」系の軌道修正）＝ kind:"correction"（status=failed＝しくじり先生）
+ * 非ブロッキング・fail-safe（例外を握って boolean）。
+ * @param action 適用された操作（go/fix/reject）
+ * @param ticket 対象チケット（system/title を文脈として残す）
+ * @param note   社長が添えた本文（修正指示など。任意）
+ */
+export async function recordDecisionTurn(
+  action: RefAction,
+  ticket: Pick<TicketRow, "ticketId" | "system" | "title">,
+  note?: string | null
+): Promise<boolean> {
+  const kind: LearningKind = action === "fix" ? "correction" : "decision";
+  const verb = action === "go" ? "GO（承認）" : action === "reject" ? "却下" : "修正指示";
+  const summary = `${verb}: ${ticket.system}「${truncate(ticket.title, 40)}」(${ticket.ticketId})`;
+  const detailParts: string[] = [];
+  if (note && note.trim()) detailParts.push(`社長の言葉: ${note.trim().slice(0, 600)}`);
+  const event: LearningEvent = {
+    kind,
+    summary,
+    detail: detailParts.length ? detailParts.join("\n") : undefined,
+    system: ticket.system || undefined,
+  };
+  try {
+    return await recordLearning(event);
+  } catch {
+    return false;
   }
 }
