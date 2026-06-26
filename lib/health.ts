@@ -18,6 +18,8 @@ export const HEALTH_MODEL_DEFAULT = "claude-sonnet-4-6";
 
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 const KNOWHOW_DEFAULT_BASE = "https://knowhow.up.railway.app";
+// knowhow 疎通チェックのタイムアウト（監視は素早く・短く）。
+const KNOWHOW_HEALTH_TIMEOUT_MS = 4000;
 
 /** 各チェックの状態。
  *  ok      … 疎通・期待どおり
@@ -116,8 +118,14 @@ export async function checkNotionRead(): Promise<CheckResult> {
 }
 
 /**
- * knowhow 疎通（任意・KNOWHOW_ENABLED=true のときのみ）。
- * 無効なら skipped。HEAD/GET で到達可否だけ見る（書き込みはしない）。
+ * knowhow 疎通（任意・KNOWHOW_ENABLED=true のときのみ）。無効なら skipped。
+ *
+ * 学習が実際に使う経路（鍵付き recall・読み取りのみ）で「到達性」と「鍵の有効性」を
+ * 同時に検証する。recall は副作用が無いので memorize（書き込み）は叩かない。
+ *
+ * ※ 以前は GET {base}/api/health を叩いていたが、knowhow にその endpoint は無く
+ *    恒久 404 → 死活監視が常に unhealthy → autopilot を有効化できず偽 issue を量産する
+ *    バグがあった（2026-06-27 修正）。本物の依存＝鍵付き recall を直接見ることで解消。
  */
 export async function checkKnowhow(
   env: NodeJS.ProcessEnv = process.env
@@ -127,16 +135,40 @@ export async function checkKnowhow(
     return { name, status: "skipped", detail: "KNOWHOW_ENABLED 無効" };
   }
   const base = env.KNOWHOW_API_BASE || KNOWHOW_DEFAULT_BASE;
+  // 鍵が無いと memorize は 401 で握り潰され、学習が"静かに"貯まらない＝本物の異常。
+  if (!env.KB_API_KEY) {
+    return {
+      name,
+      status: "error",
+      detail: "KB_API_KEY 未設定（学習の書き込みが 401 で無効化される）",
+    };
+  }
+  const projectKey = env.KNOWHOW_PROJECT_KEY || "cto-lab";
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), KNOWHOW_HEALTH_TIMEOUT_MS);
   try {
-    // ヘルス用の軽い GET。memorize は副作用があるので叩かない（読み取りのみ）。
-    const res = await fetch(`${base}/api/health`, { method: "GET" }).catch(() =>
-      // /api/health が無い構成でもベースURL到達だけは確認する
-      fetch(base, { method: "GET" })
-    );
-    if (res.ok) return { name, status: "ok", detail: `${base} 疎通OK (${res.status})` };
+    // recall は読み取り（副作用なし）。学習の到達性＋鍵の有効性を同時に検証する。
+    const res = await fetch(`${base}/api/devin/recall`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-API-Key": env.KB_API_KEY },
+      body: JSON.stringify({ project_key: projectKey, query: "health", top_k: 1 }),
+      signal: controller.signal,
+    });
+    if (res.ok) {
+      return { name, status: "ok", detail: `${base} recall疎通OK (${res.status})` };
+    }
+    if (res.status === 401 || res.status === 403) {
+      return {
+        name,
+        status: "error",
+        detail: `${base} 認証失敗 ${res.status}（KB_API_KEY が無効）`,
+      };
+    }
     return { name, status: "error", detail: `${base} エラー ${res.status}` };
   } catch (err) {
     return { name, status: "error", detail: `疎通失敗: ${(err as Error).message}` };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
