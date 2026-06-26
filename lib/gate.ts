@@ -47,7 +47,10 @@ const SENSITIVE_EN_REGEXES = SENSITIVE_KEYWORDS_EN.map((kw) => {
     .split(/\s+/)
     .map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
     .join("\\s+");
-  return { kw, re: new RegExp(`\\b${pattern}\\b`, "i") };
+  // 末尾は屈折形（複数形・過去/進行形）を許容：payment→payments, charge→charged,
+  // refund→refunded, delete→deleted, invoice→invoices 等も機微語として捕捉する。
+  // 先頭の \b は維持するので author(auth)・enterprise(price)・supercharge(charge) は誤検知しない。
+  return { kw, re: new RegExp(`\\b${pattern}(?:s|es|d|ed|ing)?\\b`, "i") };
 });
 
 /** 真田自走（オートパイロット）が有効か。
