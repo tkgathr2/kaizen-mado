@@ -5,6 +5,7 @@ import { callClaude } from "@/lib/anthropic";
 import { fallbackTurn } from "@/lib/fallback";
 import { resolveSystem } from "@/lib/systems";
 import { isRecallEnabled, recallSimilar, buildRecallNote } from "@/lib/recall";
+import { checkRateLimit, clientKeyFromHeaders } from "@/lib/ratelimit";
 import type { ChatMessage, TurnResult } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -38,6 +39,32 @@ export async function POST(req: NextRequest) {
       { error: "messages must end with a user turn" },
       { status: 400 }
     );
+  }
+
+  // ── 濫用・コスト保護（best-effort の第一防衛線）──
+  // /api/chat は公開窓口で、1ターンごとに課金API（Anthropic）を呼ぶ。認証OFF時は完全公開のため、
+  // スクリプトで叩かれるとコスト爆発・DoS になる。プロセス内メモリのスライディングウィンドウで
+  // IP（無ければセッション/フォールバック）単位に控えめな上限を課す。例外時はブロックせず通す。
+  try {
+    const key = clientKeyFromHeaders(req.headers, "anon");
+    const rl = checkRateLimit(`chat:${key}`);
+    if (!rl.allowed) {
+      // 会話は壊さない：reply にやさしい日本語を入れて 429 で返す。
+      // error も併記して既存クライアントの !res.ok 分岐でも穏当に止まれるようにする。
+      return NextResponse.json(
+        {
+          reply:
+            "アクセスが集中しています。少し時間をおいて、もう一度お試しください。🙏",
+          error: "アクセスが集中しています。少し時間をおいて、もう一度お試しください。🙏",
+          phase: "clarify",
+          rateLimited: true,
+        },
+        { status: 429, headers: { "Retry-After": String(rl.retryAfterSec) } }
+      );
+    }
+  } catch (err) {
+    // レート制限の内部エラーで会話を止めない（degrade-safe）。
+    console.error("[chat] rate-limit check failed (ignored):", (err as Error).message);
   }
 
   // まず Claude を試し、失敗したらフォールバックへ。会話は決して止めない。
