@@ -148,7 +148,7 @@ function KaizenMado() {
     <div className={embed ? "app embed" : "app"}>
       {!embed && (
         <header className="header">
-          <div className="logo">🛠️</div>
+          <img src="/kaizen-kun.png" alt="カイゼンくん" className="logo" />
           <div>
             <h1>カイゼン窓口</h1>
             <div className="sub">高木産業グループ カイゼンくん</div>

@@ -75,7 +75,7 @@ export default function BoardPage() {
   return (
     <div className="board">
       <header className="board-head">
-        <div className="board-logo">🔁</div>
+        <img src="/kaizen-kun.png" alt="カイゼンくん" className="board-logo" />
         <div className="board-titlewrap">
           <h1>カイゼン状況ボード</h1>
           <div className="board-sub">
