@@ -1,0 +1,96 @@
+# ── カイゼン自律ループ 死活監視（silent 故障の見張り） ──
+# 目的：ループが裏で壊れていた（旧モデルで404・対象リポがNodeでないと即死）のに
+#       誰も気づけなかった事故の再発防止。要所の死活を定期点検し、
+#       異常があれば GitHub issue で記録（社長のLINEは煩わせない＝真田の領域）。
+#
+# 流れ：
+#   /api/health を叩く（CRON_SECRET で認証）→ body.ok / body.problems を判定。
+#   unhealthy（model 404・Notion不通・滞留多数 等）なら：
+#     1) 同タイトルの open issue が無ければ gh issue create（連投抑制）。
+#     2) ワークフロー自身も fail させ、GitHub の Actions 失敗通知に乗せる。
+#
+# 必要シークレット（既存・新規発行不要）：
+#   CRON_SECRET … Vercel /api/health 認証（既存GH secret）
+#   GITHUB_TOKEN … Actions自動付与。自リポ(kaizen-mado)の issue 作成に使う。
+name: kaizen-health
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    # 6時間ごと（GitHub Actions の cron はベストエフォート）。
+    - cron: "0 */6 * * *"
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: kaizen-health
+  cancel-in-progress: false
+
+# 監視先（既定は本番ドメイン。必要なら repo variable HEALTH_BASE_URL で上書き）。
+env:
+  HEALTH_BASE_URL: ${{ vars.HEALTH_BASE_URL || 'https://kaizen.takagi.bz' }}
+
+jobs:
+  healthcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 死活監視エンドポイントを叩く
+        id: probe
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          RES=$(curl -sS --max-time 60 \
+            -H "x-cron-secret: ${CRON_SECRET}" \
+            "${HEALTH_BASE_URL}/api/health" || echo '{"ok":false,"problems":["unreachable"],"checks":[]}')
+          echo "raw: $RES"
+          # 不正JSON（HTML等）でも落ちないよう // で既定値を用意。
+          OK=$(echo "$RES" | jq -r '.ok // false' 2>/dev/null || echo "false")
+          PROBLEMS=$(echo "$RES" | jq -r '(.problems // ["unreachable"]) | join(", ")' 2>/dev/null || echo "unreachable")
+          # チェック明細を箇条書きに（issue 本文用）。
+          DETAILS=$(echo "$RES" | jq -r '(.checks // []) | map("- " + (.name // "?") + ": " + (.status // "?") + " — " + (.detail // "")) | join("\n")' 2>/dev/null || echo "- (詳細取得不可)")
+          {
+            echo "ok=$OK"
+            echo "problems=$PROBLEMS"
+            echo "details<<EOF"
+            echo "$DETAILS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: 異常なら issue 起票（同種issueは抑制）
+        if: ${{ steps.probe.outputs.ok != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROBLEMS: ${{ steps.probe.outputs.problems }}
+          DETAILS: ${{ steps.probe.outputs.details }}
+        run: |
+          set -euo pipefail
+          TITLE="[kaizen-health] 自律ループ異常検知: ${PROBLEMS}"
+          # 同タイトルの open issue があれば連投しない（抑制）。
+          EXISTING=$(gh issue list --repo "${{ github.repository }}" \
+            --state open --label kaizen-health --search "$TITLE" \
+            --json title --jq 'length' 2>/dev/null || echo "0")
+          if [ "${EXISTING:-0}" -gt 0 ]; then
+            echo "同種の open issue が既にあるため起票をスキップ（連投抑制）"
+            exit 0
+          fi
+          # ラベルが無ければ作る（冪等・失敗しても続行）。
+          gh label create kaizen-health --repo "${{ github.repository }}" \
+            --color B60205 --description "カイゼン自律ループ 死活監視" 2>/dev/null || true
+          BODY=$(printf '%s\n\n%s\n\n%s\n' \
+            "カイゼン自律ループの死活監視で異常を検知しました（自動起票）。" \
+            "**異常項目**: ${PROBLEMS}" \
+            "**チェック明細**:
+          ${DETAILS}")
+          gh issue create --repo "${{ github.repository }}" \
+            --title "$TITLE" \
+            --label kaizen-health \
+            --body "$BODY"
+
+      - name: 異常時はワークフローを fail（Actions 通知に乗せる）
+        if: ${{ steps.probe.outputs.ok != 'true' }}
+        run: |
+          echo "死活監視で異常: ${{ steps.probe.outputs.problems }}"
+          exit 1
