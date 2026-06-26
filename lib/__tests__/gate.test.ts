@@ -81,6 +81,29 @@ describe("preGate", () => {
     expect(d.mode).toBe("escalate");
   });
 
+  // ── 屈折形（複数形・過去/進行形）も機微語として捕捉する（安全側の取りこぼし防止） ──
+  it("英語機微語の屈折形（payments/charged/deleted等）も escalate", () => {
+    for (const w of [
+      "the customer was charged twice",
+      "deleted records aren't showing",
+      "payments page is broken",
+      "refunded amount is wrong",
+      "invoices list is empty",
+      "migrated the table yesterday",
+    ]) {
+      const d = preGate(ticket({ title: "改善", detail: w }), eligible);
+      expect(d.mode, w).toBe("escalate");
+    }
+  });
+
+  it("屈折形対応後も無関係語は誤爆しない（auto）", () => {
+    // 先頭の単語境界は維持＝author/enterprise/supercharge/dropdown は依然ヒットしない
+    for (const w of ["fix the author byline", "for enterprise customers", "supercharge the loader", "improve the dropdown layout"]) {
+      const d = preGate(ticket({ title: "改善", detail: w }), eligible);
+      expect(d.mode, w).toBe("auto");
+    }
+  });
+
   it("日本語機微語は部分一致のまま当たる（境界化しない）", () => {
     const d = preGate(ticket({ detail: "口座情報の表示" }), eligible);
     expect(d.mode).toBe("escalate");
