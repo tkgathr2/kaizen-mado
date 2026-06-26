@@ -115,11 +115,17 @@ function KaizenMado() {
       });
       const data = await res.json();
       if (!res.ok || !data?.ok) throw new Error(data?.error || "起票に失敗しました");
-      setDoneId(data.ticketId || "KZ-受付");
+      // 受付番号は取れたときだけ使う（取れなければ "KZ-受付" のようなダミーは出さない）。
+      const id = typeof data.ticketId === "string" ? data.ticketId.trim() : "";
+      setDoneId(id);
       setStatus("done");
+      // 完了の合図はチャット内の1行に集約（別カードでは番号を二重に出さない）。
       setMessages((m) => [
         ...m,
-        { role: "assistant", content: `送りました（${data.ticketId}）。ありがとうございました！` },
+        {
+          role: "assistant",
+          content: id ? `送りました（${id}）。ありがとうございました！` : "送りました。ありがとうございました！",
+        },
       ]);
     } catch (e) {
       setError((e as Error).message);
@@ -184,8 +190,14 @@ function KaizenMado() {
         {status === "done" && (
           <div className="done">
             送信が完了しました 🎉
-            <br />
-            受付番号 <span className="kz">{doneId}</span>
+            {doneId && (
+              <>
+                <br />
+                受付番号 <span className="kz">{doneId}</span>
+                <br />
+                <small className="kz-keep">控えなくても大丈夫です</small>
+              </>
+            )}
             <br />
             <small>CTO室で内容を確認し、改善を検討します。ありがとうございました。</small>
           </div>
