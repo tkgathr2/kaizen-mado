@@ -206,6 +206,40 @@ export function notionPageUrl(pageId: string): string {
   return `https://www.notion.so/${(pageId || "").replace(/-/g, "")}`;
 }
 
+// ── 文字化け（mojibake）検知ガード ──
+// 旧テスト投稿や取込時のエンコード崩れで「縺ｻ縺?縺薙■繧繧」のような呪文がそのまま
+// LINEへ流れ、社長に「意味不明な通知」として届く事故があった。送信前にこれを検知し、
+// 呪文ではなく「⚠️ 文字化けの可能性（リンクで原文確認）」という"意味の分かる警告"に置換する。
+
+// UTF-8テキストをCP932/Latin1として誤デコードしたときに高頻度で現れる「署名文字」。
+// これらは正常な日本語ではまず連続して出ない（出れば誤デコードの証拠）。
+const MOJIBAKE_SIGNATURE =
+  /[縀-繿�]|繧|繝|縺|蜉|蜈|蜊|郢|髟|髢|竏|繹|繞|繖|繚|ã|â|Ã|Â|�/g;
+// 半角カタカナ（U+FF61–FF9F）。単体では正常（ﾊﾟｿｺﾝ等）なので、署名文字と併発した時だけ加点。
+const HALFWIDTH_KANA = /[｡-ﾟ]/g;
+
+/** 文字列が文字化け（mojibake）している可能性が高いか。誤検知を避けるため保守的に判定。 */
+export function looksGarbled(s: string | null | undefined): boolean {
+  const t = (s || "").trim();
+  if (t.length < 4) return false; // 短文は誤判定を避けて素通し
+  const sig = (t.match(MOJIBAKE_SIGNATURE) || []).length;
+  const kana = (t.match(HALFWIDTH_KANA) || []).length;
+  // 置換文字(�/U+FFFD)が1つでもあれば確定的に文字化け。
+  if (/[�￾]/.test(t)) return true;
+  // 署名文字が3つ以上、または「署名文字が2つ以上 かつ 半角カナと混在」なら文字化け。
+  if (sig >= 3) return true;
+  if (sig >= 2 && kana >= 1) return true;
+  // 署名+半角カナの合計が全体の35%以上を占める（呪文化）。
+  if (t.length >= 6 && (sig + kana) / t.length >= 0.35 && sig >= 1) return true;
+  return false;
+}
+
+/** LINE向けに整形。文字化けしていれば呪文を出さず、意味の分かる警告に置換する。 */
+export function cleanForLine(s: string | null | undefined, max: number): string {
+  if (looksGarbled(s)) return "⚠️ 文字化けの可能性（くわしくはリンクで原文をご確認ください）";
+  return truncateForLine(s, max);
+}
+
 /** 全体像（カンバン）ボードのURL。 */
 export const BOARD_URL =
   (process.env.KAIZEN_PUBLIC_BASE || "https://kaizen.takagi.bz") + "/board";
@@ -258,10 +292,11 @@ export function msgHead(
   system: string | null | undefined,
   title: string | null | undefined
 ): string {
+  const sys = looksGarbled(system) ? "対象システム（文字化けの可能性）" : truncateForLine(systemLabel(system), 34);
   return (
-    `🖥 ${truncateForLine(systemLabel(system), 34)}\n` +
+    `🖥 ${sys}\n` +
     `${emoji}【${kind}】\n` +
-    `✏️ ${truncateForLine(title || "改善のご要望", 32)}`
+    `✏️ ${cleanForLine(title || "改善のご要望", 32)}`
   );
 }
 
@@ -272,11 +307,12 @@ export function msgHead(
 export function buildProposalText(ticket: TicketRow, d: DiscussResult): string {
   const id = ticket.ticketId;
   // 方針＝どう直すかを、やさしい一言に（長い技術説明は詳細リンクへ逃がす）。
-  const how = truncateForLine(d.houshin, 50);
+  // 文字化けしていれば呪文を出さず警告に置換（cleanForLine）。
+  const how = cleanForLine(d.houshin, 50);
   return [
     msgHead("💡", "カイゼンの提案", ticket.system, ticket.title), // ①種別②システム③何を
     `🔧 どう直す：${how}`, // ④どう直すか（やさしく一言）
-    `🧭 おすすめ：${truncateForLine(d.recommendation, 24)}（目安 ${truncateForLine(d.kousuu, 16)}）`,
+    `🧭 おすすめ：${truncateForLine(d.recommendation, 24)}（目安 ${looksGarbled(d.kousuu) ? "未記載" : truncateForLine(d.kousuu, 16)}）`,
     ``,
     `▼ 直していい？ 返信で（どれか1つ）`,
     `GO ${id}／修正 ${id}／却下 ${id}`,
