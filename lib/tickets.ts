@@ -183,6 +183,41 @@ export async function findGoMachiByTicketId(ticketId: string): Promise<TicketRow
   return rows.find((r) => r.ticketId.toUpperCase().replace(/\s/g, "") === norm) ?? null;
 }
 
+/** 「実装中」が一定時間以上滞留したチケット（=stuck）の判定しきい値（分）。
+ * implement ジョブ（GitHub Actions）が失敗/タイムアウト/中断で callback に到達しないと、
+ * チケットが「実装中」のまま永久滞留する。閾値は env KAIZEN_STUCK_MINUTES（既定30分）。 */
+export function staleImplementingMinutes(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env.KAIZEN_STUCK_MINUTES);
+  return Number.isFinite(raw) && raw > 0 ? raw : 30;
+}
+
+/** あるチケットが「実装中」かつ最終更新から minutes 分以上経過しているか（stuck判定）。
+ * lastEdited（Notion last_edited_time）で経過を測る。lastEdited が無い/不正なら
+ * 経過判定できないので「stuckではない（false）」とみなす（誤って巻き戻さない安全側）。 */
+export function isStaleImplementing(
+  row: Pick<TicketRow, "state" | "lastEdited">,
+  now: number,
+  minutes: number
+): boolean {
+  if (row.state !== "実装中") return false;
+  if (!row.lastEdited) return false;
+  const edited = Date.parse(row.lastEdited);
+  if (!Number.isFinite(edited)) return false;
+  return now - edited >= minutes * 60_000;
+}
+
+/** 「実装中」のまま stuck（一定時間以上滞留）しているチケットを取得する。
+ * implement ジョブが callback に到達せず取り残されたチケットを回収するための入口。
+ * Notion 側に時間フィルタは無いため「実装中」を取得してから lastEdited で経過判定する。 */
+export async function fetchStaleImplementing(
+  minutes: number = staleImplementingMinutes(),
+  limit = 10,
+  now: number = Date.now()
+): Promise<TicketRow[]> {
+  const rows = await fetchTicketsByState("実装中", limit);
+  return rows.filter((r) => isStaleImplementing(r, now, minutes));
+}
+
 /** 完了済みかつ未学習（FGSリンク空）のチケットを取得 */
 export async function fetchCompletedUnlearned(limit = 10): Promise<TicketRow[]> {
   return queryDatabase(

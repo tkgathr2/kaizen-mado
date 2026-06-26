@@ -6,6 +6,9 @@ import {
   updateTicketState,
   setTicketUrlField,
   appendDiscussionBlocks,
+  isStaleImplementing,
+  staleImplementingMinutes,
+  fetchStaleImplementing,
 } from "../tickets";
 
 // 指定件数ぶんのダミー結果ページを生成（has_more / next_cursor 制御つき）。
@@ -227,5 +230,77 @@ describe("tickets", () => {
     const rows = await fetchCompletedUnlearned(1000);
     expect(rows).toHaveLength(105);
     expect(call).toBe(2);
+  });
+
+  // ── stuck回収（reaper）：実装中の滞留判定・取得 ──
+  it("fetchStaleImplementing は『実装中』を取得し lastEdited が閾値超のものだけ返す", async () => {
+    const now = Date.parse("2026-06-26T12:00:00.000Z");
+    const mk = (id: string, editedIso: string) => ({
+      id,
+      last_edited_time: editedIso,
+      properties: {
+        ID: { type: "unique_id", unique_id: { prefix: "KZ", number: 1 } },
+        対象システム: { type: "select", select: { name: "カイゼンくん本体" } },
+        種別: { type: "select", select: { name: "改善" } },
+        重要度: { type: "select", select: { name: "中" } },
+        チケット名: { type: "title", title: [{ plain_text: id }] },
+        内容: { type: "rich_text", rich_text: [] },
+        起票者: { type: "rich_text", rich_text: [] },
+        状態: { type: "select", select: { name: "実装中" } },
+        FGSリンク: { type: "url", url: null },
+      },
+    });
+    let capturedBody: any = null;
+    global.fetch = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+      capturedBody = JSON.parse(init.body as string);
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          results: [
+            mk("fresh", "2026-06-26T11:50:00.000Z"), // 10分前＝閾値未満（残す対象でない）
+            mk("stuck", "2026-06-26T11:20:00.000Z"), // 40分前＝閾値超（回収対象）
+          ],
+        }),
+      });
+    });
+
+    const rows = await fetchStaleImplementing(30, 10, now);
+    // 「実装中」でフィルタしてクエリしている
+    expect(capturedBody.filter).toEqual({ property: "状態", select: { equals: "実装中" } });
+    // 40分前の1件だけが stuck として返る
+    expect(rows.map((r) => r.title)).toEqual(["stuck"]);
+  });
+
+  it("staleImplementingMinutes は env 既定30・正の数のみ採用", () => {
+    expect(staleImplementingMinutes({} as NodeJS.ProcessEnv)).toBe(30);
+    expect(staleImplementingMinutes({ KAIZEN_STUCK_MINUTES: "45" } as any)).toBe(45);
+    expect(staleImplementingMinutes({ KAIZEN_STUCK_MINUTES: "0" } as any)).toBe(30); // 0は不採用→既定
+    expect(staleImplementingMinutes({ KAIZEN_STUCK_MINUTES: "-5" } as any)).toBe(30);
+    expect(staleImplementingMinutes({ KAIZEN_STUCK_MINUTES: "abc" } as any)).toBe(30);
+  });
+});
+
+describe("isStaleImplementing（stuck判定の純粋ロジック）", () => {
+  const now = Date.parse("2026-06-26T12:00:00.000Z");
+  const base = { state: "実装中" as const };
+
+  it("実装中＋閾値以上の経過は stuck（true）", () => {
+    expect(isStaleImplementing({ ...base, lastEdited: "2026-06-26T11:20:00.000Z" }, now, 30)).toBe(true); // 40分前
+    expect(isStaleImplementing({ ...base, lastEdited: "2026-06-26T11:30:00.000Z" }, now, 30)).toBe(true); // ちょうど30分前（>=）
+  });
+
+  it("実装中でも閾値未満なら stuck でない（false）", () => {
+    expect(isStaleImplementing({ ...base, lastEdited: "2026-06-26T11:45:00.000Z" }, now, 30)).toBe(false); // 15分前
+  });
+
+  it("状態が実装中でなければ常に false（巻き戻さない）", () => {
+    expect(isStaleImplementing({ state: "着手", lastEdited: "2026-06-26T10:00:00.000Z" }, now, 30)).toBe(false);
+    expect(isStaleImplementing({ state: "完了", lastEdited: "2026-06-26T10:00:00.000Z" }, now, 30)).toBe(false);
+  });
+
+  it("lastEdited が無い/不正なら経過判定できず false（安全側）", () => {
+    expect(isStaleImplementing({ ...base, lastEdited: undefined }, now, 30)).toBe(false);
+    expect(isStaleImplementing({ ...base, lastEdited: "" }, now, 30)).toBe(false);
+    expect(isStaleImplementing({ ...base, lastEdited: "not-a-date" }, now, 30)).toBe(false);
   });
 });

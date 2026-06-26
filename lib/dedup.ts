@@ -52,7 +52,19 @@ export function shouldAccept(
 // プロセス内の受理記録（モジュールスコープで共有）。
 const recentSubmits = new Map<string, number>();
 
-/** 実運用向けラッパ：同一プロセス内の重複連打を弾く。受理なら true。 */
+/** reporter が実質空（null/空文字/空白のみ）か。匿名起票の判定に使う。 */
+function isAnonymous(reporter: string | null): boolean {
+  return !reporter || reporter.trim().length === 0;
+}
+
+/** 実運用向けラッパ：同一プロセス内の重複連打を弾く。受理なら true。
+ *
+ * 匿名（reporter が null/空）のときは dedup をスキップして常に受理する。
+ * 理由：起票者キーが空だと「別人の匿名2名が偶然同じ短文」を同一連打と誤認し、
+ * 後から送った正当な声を無言で握りつぶしてしまう。連打自体はUI側
+ * （inFlightRef＋ボタン無効化）で既に抑止できているため、匿名の取りこぼしを
+ * 防ぐ方を優先する（記名起票は従来どおりサーバ側でも重複連打を弾く）。 */
 export function acceptSubmit(ticket: Ticket, reporter: string | null, now: number = Date.now()): boolean {
+  if (isAnonymous(reporter)) return true;
   return shouldAccept(recentSubmits, dedupKey(ticket, reporter), now);
 }
