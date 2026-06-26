@@ -64,6 +64,9 @@ export const TARGETS: TargetMeta[] = [
   { system: "かいたくん（物品購入）", repo: "tkgathr2/buppin", healthUrl: "https://kaitakun.takagi.bz", forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
   // まもるくん＝SNS投稿リスクチェックWeb（ローカルリポ・GitHubリモートなし）。
   { system: "まもるくん", repo: null, healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
+  // ノウハウキング＝社内ナレッジ基盤（Python・Railway）。自律ループの"練習台"（ミスってもよい安全な対象）。
+  // autoEligible=true だが Python製のため npm検証が通らず自動マージはされない＝AIがPRを作って止まる（人がレビュー）。
+  { system: "ノウハウキング", repo: "tkgathr2/knowhow", healthUrl: "https://knowhow.up.railway.app", forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
   { system: "その他", repo: null, healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
 ];
 
