@@ -150,7 +150,7 @@ export async function checkKnowhow(
     // recall は読み取り（副作用なし）。学習の到達性＋鍵の有効性を同時に検証する。
     const res = await fetch(`${base}/api/devin/recall`, {
       method: "POST",
-      headers: { "content-type": "application/json", "x-api-key": env.KB_API_KEY },
+      headers: { "content-type": "application/json", "X-API-Key": env.KB_API_KEY },
       body: JSON.stringify({ project_key: projectKey, query: "health", top_k: 1 }),
       signal: controller.signal,
     });
