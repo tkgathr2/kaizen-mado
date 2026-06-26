@@ -46,6 +46,9 @@ export const TARGETS: TargetMeta[] = [
   { system: "Indeed応募通知", repo: "tkgathr2/recruit", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
   { system: "キャスト名簿くん", repo: "tkgathr2/cast-meibo", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
   { system: "らくらく契約くん", repo: null, healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
+  // 巡回くん＝Indeed公開ページ巡回ツール（テレアポリスト自動収集・Node.js/Railway）。https://junkai.takagi.bz
+  // 自前リポありだが autoEligible:false スタート＝改善要望は真田へエスカレ（段階解放）。
+  { system: "巡回くん", repo: "tkgathr2/junkai-kun", healthUrl: "https://junkai.takagi.bz", forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
   // 見積もりシステム＝見積もり自動化システム（mitsumori-app・自前Next.jsアプリ）。
   // 2026-06-19 フェーズ1本番化（Vercel）。会社×区分×人数×日数で金額自動計算。
   // 自前リポありだが autoEligible:false スタート＝西村さんの改善要望は真田へエスカレ（段階解放）。
