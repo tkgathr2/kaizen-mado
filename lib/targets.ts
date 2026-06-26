@@ -67,6 +67,17 @@ export const TARGETS: TargetMeta[] = [
   // ノウハウキング＝社内ナレッジ基盤（Python・Railway）。自律ループの"練習台"（ミスってもよい安全な対象）。
   // autoEligible=true だが Python製のため npm検証が通らず自動マージはされない＝AIがPRを作って止まる（人がレビュー）。
   { system: "ノウハウキング", repo: "tkgathr2/knowhow", healthUrl: "https://knowhow.up.railway.app", forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
+
+  // スケジュール調整くん
+  { system: "スケジュール調整くん", repo: "tkgathr2/schedule-relay", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
+  // ミエルカくん（ミエルカWebシステム・Express+Railway）
+  { system: "ミエルカくん", repo: "tkgathr2/mieruka-web", healthUrl: "https://mieruka-app-production.up.railway.app", forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
+  // 入退社管理くん（Next.js+Railway）
+  { system: "入退社管理くん", repo: "tkgathr2/takagi_iride", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
+  // 簡単日報くん（GAS製・リポなし）
+  { system: "簡単日報くん", repo: null, healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
+  // Tsunagee（外国人材向け求人検索・Next.js）
+  { system: "Tsunagee", repo: "tkgathr2/tsunagee", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
   { system: "その他", repo: null, healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
 ];
 
