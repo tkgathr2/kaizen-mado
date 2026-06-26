@@ -59,7 +59,6 @@ export async function recallSimilar(ticket: Ticket, topK = 3): Promise<RecallHit
 /** recall結果を利用者向けの一言に整形する。0件なら null */
 export function buildRecallNote(hits: RecallHit[]): string | null {
   if (!hits.length) return null;
-  const top = hits[0].content.replace(/\s+/g, " ").trim().slice(0, 90);
-  const count = hits.length;
-  return `💡 参考：似た声・ノウハウが過去に${count}件見つかりました（例：「${top}…」）。重複していても遠慮なくこのまま送ってください。件数が多い声ほど優先されます。`;
+  // 素人語で短く1行。固い説明・件数・代表例は出さず、安心して送れる気持ちだけ伝える。
+  return "💡 似たご意見が過去にもありました。同じでも大歓迎です、そのまま送ってください。";
 }

@@ -7,6 +7,7 @@ import { memorizeToKnowhow } from "@/lib/knowhow";
 import { normalizeSystemForTicket } from "@/lib/systems";
 import { isAuthEnabled } from "@/lib/authz";
 import { kickEndpoint } from "@/lib/trigger";
+import { acceptSubmit } from "@/lib/dedup";
 import type { Ticket, TicketType, Importance } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -49,6 +50,12 @@ export async function POST(req: NextRequest) {
   if (isAuthEnabled()) {
     const session = await auth();
     reporter = session?.user?.name || session?.user?.email || reporter;
+  }
+
+  // 二重起票ガード：同一起票者＋同一内容を短時間に連打しても、2回目以降はNotionに作らない。
+  // UI（ボタン無効化）の穴を抜けても物理的に重複チケットを防ぐ。利用者には完了表示を返す。
+  if (!acceptSubmit(ticket, reporter)) {
+    return NextResponse.json({ ok: true, duplicate: true });
   }
 
   try {

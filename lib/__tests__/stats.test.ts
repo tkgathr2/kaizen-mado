@@ -81,6 +81,19 @@ describe("aggregateTickets", () => {
     expect(byStage["見送り"]).toBe(1);
   });
 
+  it("状態名「議論中」が検討・提案中へ集計される（旧バグ：「議論」で拾い漏れていた回帰防止）", () => {
+    const rows = [
+      row({ state: "議論中" }),
+      row({ state: "議論中" }),
+      row({ state: "実装中" }), // 改修中に入る（旧 STAGE_OF には無かった状態）
+      row({ state: "レビュー" }), // 同上
+    ];
+    const s = aggregateTickets(rows, NOW);
+    const byStage = Object.fromEntries(s.funnel.map((f) => [f.stage, f.count]));
+    expect(byStage["検討・提案中"]).toBe(2); // 議論中×2
+    expect(byStage["改修中"]).toBe(2); // 実装中＋レビュー
+  });
+
   it("システム別とrecent（新しい順・最大10件）", () => {
     const rows = Array.from({ length: 12 }, (_, i) =>
       row({
