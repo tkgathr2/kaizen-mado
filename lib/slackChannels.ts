@@ -28,7 +28,11 @@ function fromEnv(envVar: string, label: string): SlackChannelRef[] {
 /**
  * 対象システム名（lib/systems.ts の正式名）→ 読んでよいチャンネルの許可リスト。
  * ここに載っていないシステムは Slack を一切読めない（安全側の既定）。
- * 新しいシステムを足すときは「公開窓口に晒して安全なチャンネルか」を必ず吟味すること。
+ *
+ * ★許可の判断基準（重要）：?sys= は利用者が選べる＝許可チャンネルは「匿名に見られても安全」
+ * でなければならない。応募通知チャンネルは本来 応募者氏名 を含むが、lib/slack.ts の
+ * 「診断行だけ通す正のフィルタ＋氏名/PIIマスク」で“ボットのエラー行だけ”に絞られるため許可可。
+ * 新システムを足すときも同基準（フィルタ後に匿名へ出して安全か）で必ず吟味すること。
  */
 function buildAllowlist(): Record<string, SlackChannelRef[]> {
   return {

@@ -23,6 +23,31 @@ const MAX_CHANNELS = 2;
 /** Slack API のタイムアウト（監視同様、短く）。 */
 const SLACK_TIMEOUT_MS = 5000;
 
+// ── 公開窓口へ晒す前の二重の絞り込み（PII漏えい対策・セキュリティレビュー HIGH 対応） ──
+//
+// この窓口は無認証・公開。?sys= は利用者が選べるため、許可チャンネルは「匿名に見られても
+// 安全な内容」に絞らねばならない。応募通知チャンネルは本来“応募者の氏名”を含むので、
+//  (a) 正のフィルタ：診断（エラー調査）に関係する行だけを通す＝応募者通知を構造的に落とす。
+//  (b) 氏名マスク：それでも残った敬称付きの氏名を最後の砦として伏字化する。
+// 機能の目的は「ボットのエラー診断」であり応募内容の閲覧ではない、という用途にも一致する。
+
+/** 診断（エラー調査）に関係しそうな行か。ここに該当しない行（応募者通知等）は落とす。 */
+const DIAGNOSTIC_RE =
+  /error|exception|fail|refused|timeout|timed out|traceback|stack|throw|crash|disconnect|reconnect|retry|warn|fatal|panic|null|undefined|\b[45]\d\d\b|エラー|失敗|落ち|停止|例外|タイムアウト|つながらない|動かない|不具合|警告|異常/i;
+
+export function looksDiagnostic(text: string): boolean {
+  return DIAGNOSTIC_RE.test(text);
+}
+
+/** 敬称付きの氏名を伏字化する（お客様・皆様等を巻き込んでも無害＝安全側）。 */
+const NAME_HONORIFIC_RE =
+  /[一-鿿゠-ヿｦ-ﾟA-Za-z][一-鿿゠-ヿ぀-ゟｦ-ﾟA-Za-z・\s]{0,18}?(さん|様|氏|くん|ちゃん|殿)/g;
+
+/** 公開窓口へ出す前の最終サニタイズ：PIIマスク（電話/メール等）＋氏名マスク。 */
+export function sanitizeSlackText(text: string): string {
+  return maskPII(text).replace(NAME_HONORIFIC_RE, "[氏名]");
+}
+
 /** Slack 連携が有効か（トークンが設定されているか）。未設定なら機能ごとOFF。 */
 export function slackEnabled(): boolean {
   return Boolean(process.env.SLACK_BOT_TOKEN && process.env.SLACK_BOT_TOKEN.trim());
@@ -71,8 +96,10 @@ async function readOneChannel(
     const messages = raw
       .map((m: any) => (typeof m?.text === "string" ? m.text : ""))
       .filter((t: string) => t.trim().length > 0)
-      // PIIマスク → さらに長文を切り詰める（順序重要：マスクしてから切る）。
-      .map((t: string) => maskPII(t).slice(0, MAX_MESSAGE_CHARS));
+      // (a) 正のフィルタ：診断に関係する行だけ通す＝応募者通知等のPIIを構造的に落とす。
+      .filter((t: string) => looksDiagnostic(t))
+      // (b) サニタイズ（PII＋氏名マスク）→ さらに長文を切り詰める（マスクしてから切る）。
+      .map((t: string) => sanitizeSlackText(t).slice(0, MAX_MESSAGE_CHARS));
     return { messages };
   } catch (err) {
     return { messages: [], error: `slack: ${(err as Error).message}` };
