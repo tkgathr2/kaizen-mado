@@ -211,3 +211,46 @@ describe("msgHead（何の件かヘッダー・3行）", () => {
     expect(h).toContain("改善のご要望");
   });
 });
+
+import { looksGarbled, cleanForLine, msgHead as msgHead2 } from "../line";
+
+describe("文字化け検知ガード（looksGarbled / cleanForLine）", () => {
+  // 正常な入力は文字化けと誤判定しない（誤検知ゼロが最優先）
+  it.each([
+    "CSV取込でスタッフ名が重複するとエラーで止まる",
+    "窓口に説明を1行足す",
+    "実績や繁忙期の集計が見たい", // 7E00台の常用漢字（繁・績）でも誤検知しない
+    "Indeedの応募通知が来ない",
+    "ﾊﾟｿｺﾝが重い", // 正常な半角カタカナ単体は素通し
+    "ABC test only english",
+    "短い", // 4文字未満は素通し
+  ])("正常: %s → garbled=false", (s) => {
+    expect(looksGarbled(s)).toBe(false);
+  });
+
+  // 文字化け（UTF-8→CP932誤デコード／置換文字）は検知する
+  it.each([
+    "縺ｻ縺?縺薙■繧繧",
+    "ﾎ繧吶￥繧吶￥ 譁?ｭ怜喧縺代＠縺溘ち繧､繝医Ν",
+    "縺ｩ縺?↑繧九°繧上°繧峨↑縺?ｉ縺励＞",
+    "壊れた�データ�です", // 置換文字 U+FFFD
+  ])("文字化け: %s → garbled=true", (s) => {
+    expect(looksGarbled(s)).toBe(true);
+  });
+
+  it("cleanForLine は文字化けを呪文でなく警告文に置換する", () => {
+    const out = cleanForLine("縺ｻ縺?縺薙■繧繧", 32);
+    expect(out).toContain("文字化けの可能性");
+    expect(out).not.toContain("縺");
+  });
+
+  it("cleanForLine は正常文はそのまま（max超で…）", () => {
+    expect(cleanForLine("正常なタイトル", 32)).toBe("正常なタイトル");
+  });
+
+  it("msgHead は文字化けタイトルを警告に置換して呪文を出さない", () => {
+    const h = msgHead2("💡", "カイゼンの提案", "ほうこちゃん", "ﾎ繧吶￥繧吶￥ 譁?ｭ怜喧縺代＠縺溘ち繧､繝医Ν");
+    expect(h).toContain("文字化けの可能性");
+    expect(h).not.toContain("繧吶");
+  });
+});
