@@ -104,6 +104,37 @@ describe("preGate", () => {
     }
   });
 
+  // ── 語幹（stem）追加：bill / pay / delet を取りこぼさない ──
+  it("語幹 bill/pay/delet の派生は機微として escalate", () => {
+    for (const w of [
+      "the bill amount is wrong",       // bill
+      "billing page broken",            // bill→billing
+      "pay button does nothing",        // pay
+      "payment failed",                 // pay→payment（payment は屈折表でも当たる）
+      "payout schedule is off",         // pay→payout
+      "delete the user",                // delet→delete
+      "deletion of records failed",     // delet→deletion（屈折表では取りこぼす形）
+      "deleted rows still show",        // delet→deleted
+      "deleting is too slow",           // delet→deleting
+      "deletes everything",             // delet→deletes
+    ]) {
+      const d = preGate(ticket({ title: "改善", detail: w }), eligible);
+      expect(d.mode, w).toBe("escalate");
+    }
+  });
+
+  it("語幹 pay/bill 追加でも語頭境界で無関係語は誤検知しない（auto）", () => {
+    // display/player の "play"、repay の "pay" は語頭境界が無いのでヒットしない。
+    for (const w of [
+      "fix the display order",     // display（playを含むが語頭でない）
+      "player list is empty",      // player（playを含むが pay ではない）
+      "repay flow needs polish",   // repay（語中の pay は \b で当たらない）
+    ]) {
+      const d = preGate(ticket({ title: "改善", detail: w }), eligible);
+      expect(d.mode, w).toBe("auto");
+    }
+  });
+
   it("日本語機微語は部分一致のまま当たる（境界化しない）", () => {
     const d = preGate(ticket({ detail: "口座情報の表示" }), eligible);
     expect(d.mode).toBe("escalate");

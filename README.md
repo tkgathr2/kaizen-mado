@@ -31,8 +31,14 @@ npm run dev                  # http://localhost:3000/?sys=prorepo
 | `NOTION_TOKEN` | Notion内部インテグレーションのトークン。改善チケットDBに「接続」を共有しておく |
 | `NOTION_DATABASE_ID` | `4771cbc4-06d3-4eb9-a30f-05058ca69bd7`（改善チケットDB） |
 | `NOTION_DATA_SOURCE_ID` | `3385ed10-660e-4917-ae90-a279afd71626`（参照用） |
+| `KAIZEN_ALLOWED_ORIGINS` | 任意。公開起票API(`/api/submit`)のCSRF/オリジン制御。**未設定なら全許可**（後方互換）。設定するなら値は**窓口自身**（例 `https://kaizen.takagi.bz`）。複数はカンマ区切り |
 
 > secrets/.env・本番デプロイは**高木承認必須**（ハイブリッドの本番前ゲート）。
+
+> ⚠️ `KAIZEN_ALLOWED_ORIGINS` の注意：`widget.js` は窓口本体（`kaizen.takagi.bz/?embed=1`）を **iframe で開くだけ**なので、
+> 起票POSTの `Origin` は埋め込み先ホストではなく **常に窓口自身（`kaizen.takagi.bz`）**。
+> ここに各埋め込み先ホストのオリジンを設定すると実Origin（`kaizen.takagi.bz`）が許可されず**全窓口が403**になる。
+> 設定するなら窓口自身のオリジンを入れること。
 
 ## システム別 窓口URL（`?sys=` スラッグ）
 本番ドメインを `https://<domain>` とすると：

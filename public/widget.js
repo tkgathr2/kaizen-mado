@@ -11,6 +11,14 @@
  * - パネル上部のバーはウィジェット側（親ページ）にあるので、認証リダイレクト等で iframe 内が
  *   表示できない環境でも「新しいタブで開く」から必ず窓口に到達できる。
  * - iframe からの postMessage {type:"kaizen:close"} で閉じる（オリジン検査あり）。
+ *
+ * 【重要・オリジンの実態】このウィジェットは窓口本体（kaizen.takagi.bz/?embed=1）を iframe で開くだけ。
+ *   実際の起票POST（/api/submit）は、その iframe＝窓口本体（kaizen.takagi.bz）から飛ぶ。
+ *   つまり起票リクエストの Origin は「埋め込み先のホスト」ではなく "常に窓口自身"＝kaizen.takagi.bz。
+ *   サーバ側の KAIZEN_ALLOWED_ORIGINS（CSRF対策）を設定する場合、許可すべき値は窓口自身
+ *   （例 https://kaizen.takagi.bz）であって、各埋め込み先ホストのオリジンではない。
+ *   ここを取り違えて埋め込み先ホストを設定すると、実Origin（kaizen.takagi.bz）が許可されず
+ *   全窓口が 403 になる。未設定なら全許可（後方互換）。
  */
 (function () {
   "use strict";

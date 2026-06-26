@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { dedupKey, shouldAccept, DEDUP_WINDOW_MS } from "../dedup";
+import { dedupKey, shouldAccept, acceptSubmit, DEDUP_WINDOW_MS } from "../dedup";
 import type { Ticket } from "../types";
 
 function t(over: Partial<Ticket> = {}): Ticket {
@@ -52,5 +52,24 @@ describe("dedup（二重起票ガード）", () => {
     const seen = new Map<string, number>();
     expect(shouldAccept(seen, dedupKey(t({ detail: "A" }), "高木"), 100)).toBe(true);
     expect(shouldAccept(seen, dedupKey(t({ detail: "B" }), "高木"), 200)).toBe(true);
+  });
+});
+
+describe("acceptSubmit（匿名はdedupスキップ＝常に受理）", () => {
+  it("匿名（reporter=null）の同一短文連投は両方受理される（別人の声を消さない）", () => {
+    // 同じ短文を続けて匿名で投げても、後の起票が無言で消えない。
+    expect(acceptSubmit(t(), null, 1000)).toBe(true);
+    expect(acceptSubmit(t(), null, 1001)).toBe(true);
+  });
+
+  it("匿名（reporter=空白のみ）も常に受理される", () => {
+    expect(acceptSubmit(t(), "   ", 2000)).toBe(true);
+    expect(acceptSubmit(t(), "", 2001)).toBe(true);
+  });
+
+  it("記名起票は従来どおりサーバ側でも連打を弾く", () => {
+    const who = "脇本-" + Math.random().toString(36).slice(2); // テスト間でキー衝突しないよう一意化
+    expect(acceptSubmit(t(), who, 3000)).toBe(true);  // 1回目：受理
+    expect(acceptSubmit(t(), who, 3100)).toBe(false); // 連打：弾く
   });
 });

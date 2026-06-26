@@ -39,19 +39,34 @@ const SENSITIVE_KEYWORDS_EN = [
   "delete", "drop", "truncate", "migrate", "migration", "destroy", "wipe",
 ];
 
+// 語幹（stem）で前方一致したい機微語。語頭の \b は維持しつつ、語尾は任意の語構成文字を許容する
+// ＝ \bstem\w*\b。屈折表で拾いきれない派生をまとめて捕捉するためのもの：
+//   - "pay"   → pay/pays/payment/payout/payable（"display"/"player"/"repay" は語頭境界で誤検知しない）
+//   - "bill"  → bill/bills/billing/billed（"billing" は既存と重複するが害なし）
+//   - "delet" → delete/deleted/deleting/deletes/deletion（屈折表の (?:…) では "deletion" を取りこぼす）
+// 語頭の \b があるため、"display" の "play" や "player" の "play"、"repay" の "pay" は当たらない（安全側維持）。
+const SENSITIVE_STEMS_EN = ["pay", "bill", "delet"];
+
 // 英語キーワードを単語境界つき正規表現にコンパイル（小文字化済みテキストに対して判定）。
-const SENSITIVE_EN_REGEXES = SENSITIVE_KEYWORDS_EN.map((kw) => {
-  // 正規表現メタ文字をエスケープし、語間の空白は \s+ で許容（"api key" → /api\s+key/）。
-  const pattern = kw
-    .toLowerCase()
-    .split(/\s+/)
-    .map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-    .join("\\s+");
-  // 末尾は屈折形（複数形・過去/進行形）を許容：payment→payments, charge→charged,
-  // refund→refunded, delete→deleted, invoice→invoices 等も機微語として捕捉する。
-  // 先頭の \b は維持するので author(auth)・enterprise(price)・supercharge(charge) は誤検知しない。
-  return { kw, re: new RegExp(`\\b${pattern}(?:s|es|d|ed|ing)?\\b`, "i") };
-});
+const SENSITIVE_EN_REGEXES = [
+  ...SENSITIVE_KEYWORDS_EN.map((kw) => {
+    // 正規表現メタ文字をエスケープし、語間の空白は \s+ で許容（"api key" → /api\s+key/）。
+    const pattern = kw
+      .toLowerCase()
+      .split(/\s+/)
+      .map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+      .join("\\s+");
+    // 末尾は屈折形（複数形・過去/進行形）を許容：payment→payments, charge→charged,
+    // refund→refunded, delete→deleted, invoice→invoices 等も機微語として捕捉する。
+    // 先頭の \b は維持するので author(auth)・enterprise(price)・supercharge(charge) は誤検知しない。
+    return { kw, re: new RegExp(`\\b${pattern}(?:s|es|d|ed|ing)?\\b`, "i") };
+  }),
+  ...SENSITIVE_STEMS_EN.map((stem) => {
+    const esc = stem.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // \bstem\w*\b：語頭境界つきの前方一致。stem 自体の名で報告する。
+    return { kw: stem, re: new RegExp(`\\b${esc}\\w*\\b`, "i") };
+  }),
+];
 
 /** 真田自走（オートパイロット）が有効か。
  * ON のとき、preGate=auto の安全な改善は社長にGO伺いせず自動で着手→PR→マージまで進める。

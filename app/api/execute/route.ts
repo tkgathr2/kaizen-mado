@@ -9,6 +9,8 @@ import {
   fetchTicketsByState,
   updateTicketState,
   appendDiscussionBlocks,
+  fetchStaleImplementing,
+  staleImplementingMinutes,
 } from "@/lib/tickets";
 import { findTarget } from "@/lib/targets";
 import { preGate, autopilotEnabled } from "@/lib/gate";
@@ -49,7 +51,39 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const tickets = await fetchTicketsByState("着手", limit);
+    // ── stuck回収（reaper）──
+    // planモードの先頭で、callbackに到達せず「実装中」のまま滞留したチケットを「着手」へ戻す。
+    // implementジョブ（GitHub Actions）が失敗/タイムアウト/中断するとcallbackが来ず、
+    // チケットが「実装中」のまま永久滞留する（回収経路ゼロ）のを防ぐ。戻したものは
+    // 「次回スキャン」で再処理される＝同じ実行では着手リストから除外して二重処理を避ける。
+    const reaped: string[] = [];
+    const reapedPageIds = new Set<string>();
+    if (planMode) {
+      const minutes = staleImplementingMinutes();
+      const stale = await fetchStaleImplementing(minutes, Math.max(limit, 5)).catch((e) => {
+        console.error("[execute] stuck回収の取得失敗", (e as Error).message);
+        return [] as Awaited<ReturnType<typeof fetchStaleImplementing>>;
+      });
+      for (const s of stale) {
+        try {
+          await updateTicketState(s.pageId, "着手");
+          await appendDiscussionBlocks(s.pageId, [
+            {
+              heading: "stuck回収（自動リセット）",
+              body: `「実装中」のまま${minutes}分以上応答が無かったため「着手」へ戻しました（次回スキャンで再処理）。`,
+            },
+          ]);
+          reaped.push(s.ticketId);
+          reapedPageIds.add(s.pageId);
+        } catch (e) {
+          console.error("[execute] stuck回収の戻し失敗", s.ticketId, (e as Error).message);
+        }
+      }
+    }
+
+    const fetched = await fetchTicketsByState("着手", limit);
+    // reaperで今まさに戻したチケットは、同じ実行では拾わない（次回スキャンに委ねる＝二重処理防止）。
+    const tickets = fetched.filter((t) => !reapedPageIds.has(t.pageId));
     const dispatched: string[] = [];
     const escalated: string[] = [];
     const skipped: { ticketId: string; reason: string }[] = [];
@@ -97,22 +131,34 @@ export async function POST(req: NextRequest) {
       // planモード：自分でdispatchせず「実装中」へ進めてペイロードを返す。
       // 実行はGitHub Actions（github.token）が担う＝VercelにPAT不要。
       if (planMode) {
+        // ── 巻き戻し防御（dispatch経路と同じ） ──
+        // 「実装中」へ進めた後の処理が失敗すると、callbackは「実装中」しか拾わない一方で
+        // 本チケットはplanにも乗らない＝宙づりになる。失敗したら「着手」へ戻して
+        // 次回スキャンに委ねる（戻し自体が失敗してもreaperが最終的に回収する）。
         await updateTicketState(ticket.pageId, "実装中");
-        await appendDiscussionBlocks(ticket.pageId, [
-          { heading: "自動着手（Actions実行）", body: `GitHub Actionsが改修→PR作成（${target.repo}・PRレビュー型）。` },
-        ]);
-        await pushText(
-          [
-            msgHead("🔧", "いま直しています", ticket.system, ticket.title), // まず「何の件か」
-            `（${ticket.ticketId}）直し始めました。確認用のPR（差分）を作成中。`,
-            ``,
-            stageBar(4), // ④着手
-            `全体像 ▶ ${BOARD_URL}`,
-          ].join("\n")
-        );
-        // 自走ONなら autoMerge=true（このtsへ来た時点でpreGate=auto＝安全と判定済み）。
-        plan.push(buildDispatchPayload(ticket, target, autopilotEnabled()));
-        dispatched.push(ticket.ticketId);
+        try {
+          await appendDiscussionBlocks(ticket.pageId, [
+            { heading: "自動着手（Actions実行）", body: `GitHub Actionsが改修→PR作成（${target.repo}・PRレビュー型）。` },
+          ]);
+          await pushText(
+            [
+              msgHead("🔧", "いま直しています", ticket.system, ticket.title), // まず「何の件か」
+              `（${ticket.ticketId}）直し始めました。確認用のPR（差分）を作成中。`,
+              ``,
+              stageBar(4), // ④着手
+              `全体像 ▶ ${BOARD_URL}`,
+            ].join("\n")
+          );
+          // 自走ONなら autoMerge=true（このtsへ来た時点でpreGate=auto＝安全と判定済み）。
+          plan.push(buildDispatchPayload(ticket, target, autopilotEnabled()));
+          dispatched.push(ticket.ticketId);
+        } catch (e) {
+          await updateTicketState(ticket.pageId, "着手").catch((e2) => {
+            console.error("[execute] plan経路の巻き戻し失敗", ticket.ticketId, (e2 as Error).message);
+          });
+          skipped.push({ ticketId: ticket.ticketId, reason: "plan処理失敗（着手へ巻き戻し）" });
+          console.error("[execute] plan処理失敗", ticket.ticketId, (e as Error).message);
+        }
         continue;
       }
 
@@ -158,6 +204,7 @@ export async function POST(req: NextRequest) {
       dispatched,
       escalated,
       ...(planMode ? { plan } : {}),
+      ...(reaped.length ? { reaped } : {}),
       ...(skipped.length ? { skipped } : {}),
     });
   } catch (err) {

@@ -152,7 +152,11 @@ jobs:
           IFS=',' read -ra PATHS <<< "$FORBIDDEN"
           for p in "${PATHS[@]}"; do
             [ -z "$p" ] && continue
-            if echo "$TOUCHED" | grep -qi -- "$p"; then HIT="$HIT $p"; fi
+            # パスセグメント境界で判定する。素の grep -qi は部分一致のため
+            #   "auth" が AuthorCard.tsx を誤検知（過剰review）／逆に意図した境界での取りこぼし
+            # を起こしていた。TOUCHED は改行区切り（git --name-only）なので、各パスの
+            # 区切り（行頭/スラッシュ/カンマ ～ スラッシュ/行末/ドット/カンマ）で挟まれた時だけ当てる。
+            if echo "$TOUCHED" | grep -qiE "(^|[/,])$p(/|$|\.|,)"; then HIT="$HIT $p"; fi
           done
           if [ -n "$HIT" ]; then
             echo "verdict=review" >> "$GITHUB_OUTPUT"
