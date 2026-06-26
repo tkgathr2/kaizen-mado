@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isAuthEnabled, isEmailAllowed } from "../authz";
+import { isAuthEnabled, isEmailAllowed, isOriginAllowed } from "../authz";
 
 describe("isAuthEnabled", () => {
   it("3鍵すべて非空なら true", () => {
@@ -102,5 +102,69 @@ describe("isEmailAllowed", () => {
 
   it("複数@がある場合は最後の@以降をドメインとみなす", () => {
     expect(isEmailAllowed("a@b@takagi.bz", "takagi.bz")).toBe(true);
+  });
+});
+
+describe("isOriginAllowed", () => {
+  it("許可オリジン未設定なら常に true（後方互換・全許可）", () => {
+    expect(isOriginAllowed("https://evil.example.com", undefined)).toBe(true);
+    expect(isOriginAllowed("https://evil.example.com", null)).toBe(true);
+    expect(isOriginAllowed("https://evil.example.com", "")).toBe(true);
+    expect(isOriginAllowed("https://evil.example.com", "   ")).toBe(true);
+  });
+
+  it("Origin ヘッダ無しは（設定があっても）通す", () => {
+    expect(isOriginAllowed(null, "https://kaizen.takagi.bz")).toBe(true);
+    expect(isOriginAllowed(undefined, "https://kaizen.takagi.bz")).toBe(true);
+    expect(isOriginAllowed("", "https://kaizen.takagi.bz")).toBe(true);
+    expect(isOriginAllowed("   ", "https://kaizen.takagi.bz")).toBe(true);
+  });
+
+  it("許可リストに一致すれば true", () => {
+    expect(
+      isOriginAllowed("https://kaizen.takagi.bz", "https://kaizen.takagi.bz")
+    ).toBe(true);
+    expect(
+      isOriginAllowed(
+        "https://kaizen.takagi.bz",
+        "https://a.example.com,https://kaizen.takagi.bz"
+      )
+    ).toBe(true);
+  });
+
+  it("許可リストに不一致なら false", () => {
+    expect(
+      isOriginAllowed("https://evil.example.com", "https://kaizen.takagi.bz")
+    ).toBe(false);
+  });
+
+  it("末尾スラッシュを無視して一致する", () => {
+    expect(
+      isOriginAllowed("https://kaizen.takagi.bz/", "https://kaizen.takagi.bz")
+    ).toBe(true);
+    expect(
+      isOriginAllowed("https://kaizen.takagi.bz", "https://kaizen.takagi.bz/")
+    ).toBe(true);
+  });
+
+  it("大文字小文字を無視して一致する", () => {
+    expect(
+      isOriginAllowed("HTTPS://KAIZEN.TAKAGI.BZ", "https://kaizen.takagi.bz")
+    ).toBe(true);
+  });
+
+  it("前後の空白を吸収する", () => {
+    expect(
+      isOriginAllowed("  https://kaizen.takagi.bz  ", "  https://kaizen.takagi.bz  ")
+    ).toBe(true);
+  });
+
+  it("スキーム/ポート違いは別オリジンとして false", () => {
+    expect(
+      isOriginAllowed("http://kaizen.takagi.bz", "https://kaizen.takagi.bz")
+    ).toBe(false);
+    expect(
+      isOriginAllowed("https://kaizen.takagi.bz:8443", "https://kaizen.takagi.bz")
+    ).toBe(false);
   });
 });

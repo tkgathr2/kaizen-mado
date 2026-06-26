@@ -5,7 +5,7 @@ import { auth } from "@/auth";
 import { createTicket } from "@/lib/notion";
 import { memorizeToKnowhow } from "@/lib/knowhow";
 import { normalizeSystemForTicket } from "@/lib/systems";
-import { isAuthEnabled } from "@/lib/authz";
+import { isAuthEnabled, isOriginAllowed } from "@/lib/authz";
 import { kickEndpoint } from "@/lib/trigger";
 import { acceptSubmit } from "@/lib/dedup";
 import type { Ticket, TicketType, Importance } from "@/lib/types";
@@ -32,6 +32,12 @@ function coerceTicket(input: any): Ticket | null {
 }
 
 export async function POST(req: NextRequest) {
+  // CSRF/オリジン安全化：KAIZEN_ALLOWED_ORIGINS（カンマ区切り）が設定されている時だけ、
+  // 許可オリジンからの送信のみ受理する。未設定なら従来どおり全許可（後方互換・窓口を止めない）。
+  if (!isOriginAllowed(req.headers.get("origin"), process.env.KAIZEN_ALLOWED_ORIGINS)) {
+    return NextResponse.json({ error: "forbidden origin" }, { status: 403 });
+  }
+
   let body: any;
   try {
     body = await req.json();
