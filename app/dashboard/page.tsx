@@ -5,16 +5,8 @@
 // データは /api/stats（Notion改善チケットDBの集計・60秒キャッシュ）。
 import { useEffect, useState } from "react";
 import type { KaizenStats } from "@/lib/stats";
-
-const STATE_COLOR: Record<string, string> = {
-  受付: "#9a8c7a",
-  議論: "#b58a3c",
-  差し戻し: "#b58a3c",
-  GO待ち: "#b58a3c",
-  着手: "#3d7ab0",
-  完了: "#3f7a3f",
-  却下: "#a0a0a0",
-};
+// 状態の色は lib/board.ts の正本から取得（「議論」と「議論中」のズレを防ぐ）。
+import { metaOf } from "@/lib/board";
 
 function fmtDate(iso: string): string {
   const d = new Date(iso);
@@ -125,7 +117,7 @@ export default function DashboardPage() {
               <span className="dash-recent-date">{fmtDate(r.createdTime)}</span>
               <span
                 className="dash-recent-state"
-                style={{ color: STATE_COLOR[r.state] ?? "#83807a" }}
+                style={{ color: metaOf(r.state).color }}
               >
                 {r.state}
               </span>

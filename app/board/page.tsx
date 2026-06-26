@@ -6,6 +6,8 @@
 // 20秒ごとに自動更新。操作ボタンは置かない（対人送信・本番破壊なし＝見るだけ）。
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BoardColumn } from "@/lib/board";
+// 状態ごとの見た目（絵文字＋色）は lib/board.ts の正本を使う（状態名のズレを防ぐ）。
+import { metaOf } from "@/lib/board";
 
 interface BoardData {
   ok: boolean;
@@ -15,22 +17,6 @@ interface BoardData {
   total: number;
   updatedAt: string;
 }
-
-// 状態ごとの見た目（絵文字＋アクセント色）。未知状態はデフォルト。
-const STATE_META: Record<string, { emoji: string; color: string }> = {
-  受付: { emoji: "📥", color: "#9a8c7a" },
-  議論中: { emoji: "💬", color: "#b58a3c" },
-  GO待ち: { emoji: "✋", color: "#d97757" },
-  着手: { emoji: "🔧", color: "#3d7ab0" },
-  実装中: { emoji: "⚙️", color: "#3d7ab0" },
-  レビュー: { emoji: "🔍", color: "#7a5db0" },
-  完了: { emoji: "✅", color: "#3f7a3f" },
-  社長確認: { emoji: "🛑", color: "#b4452b" },
-  差し戻し: { emoji: "↩️", color: "#b58a3c" },
-  却下: { emoji: "🚫", color: "#a0a0a0" },
-};
-const DEFAULT_META = { emoji: "•", color: "#9a8c7a" };
-const metaOf = (s: string) => STATE_META[s] ?? DEFAULT_META;
 
 const IMP_COLOR: Record<string, string> = { 高: "#b4452b", 中: "#9a5a16", 低: "#83807a" };
 
@@ -109,7 +95,19 @@ export default function BoardPage() {
         </div>
       )}
 
-      {data && data.configured && (
+      {data && data.configured && data.total === 0 && (
+        <div className="board-meta">
+          全 {data.total} 件 ／ 最終取得 {clockHHMM(data.updatedAt)}
+        </div>
+      )}
+
+      {data && data.configured && data.total === 0 && (
+        <div className="board-blank">
+          まだ声がありません。各システム右下のフクロウ博士からどうぞ。
+        </div>
+      )}
+
+      {data && data.configured && data.total > 0 && (
         <>
           <div className="board-meta">
             全 {data.total} 件 ／ 最終取得 {clockHHMM(data.updatedAt)}

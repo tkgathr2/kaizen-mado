@@ -35,6 +35,9 @@ function KaizenMado() {
   const [status, setStatus] = useState<"chatting" | "submitting" | "done">("chatting");
   const [doneId, setDoneId] = useState<string>("");
   const [error, setError] = useState("");
+  // 簡易モード（AI未応答でフォールバック）で返したアシスタント発話の index 集合。
+  // そのターンだけ「※ いまは簡易モードで受付中です」と薄く注記する。
+  const [fallbackIdx, setFallbackIdx] = useState<Set<number>>(() => new Set());
   const scrollRef = useRef<HTMLDivElement>(null);
   const inFlightRef = useRef(false); // send/submit 実行中フラグ（同期・二重発火防止）
 
@@ -73,7 +76,14 @@ function KaizenMado() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "通信に失敗しました");
 
-      setMessages((m) => [...m, { role: "assistant", content: data.reply }]);
+      setMessages((m) => {
+        // このアシスタント発話が簡易モード（fallback）なら index を控える。
+        if (data?.fallback) {
+          const idx = m.length;
+          setFallbackIdx((s) => new Set(s).add(idx));
+        }
+        return [...m, { role: "assistant", content: data.reply }];
+      });
       setPhase(data.phase === "confirm" ? "confirm" : "clarify");
       setTicket(data.phase === "confirm" ? (data.ticket as Ticket) : null);
     } catch (e) {
@@ -146,6 +156,9 @@ function KaizenMado() {
         {messages.map((m, i) => (
           <div key={i} className={`row ${m.role}`}>
             <div className="bubble">{m.content}</div>
+            {m.role === "assistant" && fallbackIdx.has(i) && (
+              <div className="fallback-note">※ いまは簡易モードで受付中です</div>
+            )}
           </div>
         ))}
 
@@ -202,6 +215,15 @@ function KaizenMado() {
               onClick={() => {
                 setPhase("clarify");
                 setTicket(null);
+                // 無言の入力欄に取り残さない：どこを直すか尋ねる一言を足して会話を続ける。
+                setMessages((m) => [
+                  ...m,
+                  {
+                    role: "assistant",
+                    content:
+                      "どこを直しましょう？ 違う点や、足したいことを教えてください。",
+                  },
+                ]);
               }}
               disabled={status === "submitting"}
             >

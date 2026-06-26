@@ -76,14 +76,17 @@ describe("recall", () => {
     expect(await recallSimilar(ticket)).toEqual([]);
   });
 
-  it("buildRecallNote：0件はnull、ヒット時は件数と代表例90字以内を含む", () => {
+  it("buildRecallNote：0件はnull、ヒット時はやさしい1行（素人語・件数や生ノウハウを露出しない）", () => {
     expect(buildRecallNote([])).toBeNull();
     const note = buildRecallNote([
       { content: "あ".repeat(200), score: 0.9, tags: [] },
       { content: "別の学び", score: 0.5, tags: [] },
     ]);
-    expect(note).toContain("2件");
-    expect(note).toContain("あ".repeat(90));
-    expect(note).not.toContain("あ".repeat(91));
+    // やさしい1行：そのまま送ってよいと伝える。
+    expect(note).toContain("そのまま送ってください");
+    // 1行（改行なし）・固い言葉や件数・生のノウハウ本文は出さない。
+    expect(note).not.toContain("\n");
+    expect(note).not.toContain("2件");
+    expect(note).not.toContain("あ".repeat(20));
   });
 });
