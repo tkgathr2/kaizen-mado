@@ -19,6 +19,7 @@ export const SYSTEMS: { slug: string; name: string }[] = [
   { slug: "leadforge-ky", name: "爆裂リード獲得くん（交通誘導）" },
   { slug: "buppin", name: "かいたくん（物品購入）" },
   { slug: "mamoru", name: "まもるくん" },
+  { slug: "knowhow", name: "ノウハウキング" },
   { slug: "other", name: "その他" },
 ];
 
