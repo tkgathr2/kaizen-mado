@@ -20,6 +20,13 @@ export const SYSTEMS: { slug: string; name: string }[] = [
   { slug: "buppin", name: "かいたくん（物品購入）" },
   { slug: "mamoru", name: "まもるくん" },
   { slug: "knowhow", name: "ノウハウキング" },
+  { slug: "daikou", name: "採用管理システム" },  // alias（saiyo-kanri の追加スラグ）
+  { slug: "rakuraku-contract", name: "らくらく契約くん" },  // alias（rakuraku の追加スラグ）
+  { slug: "schedule-relay", name: "スケジュール調整くん" },
+  { slug: "mieruka", name: "ミエルカくん" },
+  { slug: "iride", name: "入退社管理くん" },
+  { slug: "daily-report", name: "簡単日報くん" },
+  { slug: "tsunagee", name: "Tsunagee" },
   { slug: "other", name: "その他" },
 ];
 
