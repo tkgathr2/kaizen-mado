@@ -95,10 +95,12 @@ jobs:
           fetch-depth: 0
 
       # 自走時の Verify を ci.yml と同じ Node に固定（バージョンドリフト防止）。
+      # cache:"npm" は付けない＝package-lock.json が無い対象リポ（Python等の非Node系）でも
+      # このステップが失敗せず、AI改修→PR作成まで進む（ポリグロット対応）。非Node系は後段の
+      # npm検証が通らない＝自動マージされず PR で止まる（人がレビュー）＝安全側。
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "npm"
 
       - name: Create work branch
         id: branch
