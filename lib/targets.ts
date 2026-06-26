@@ -56,7 +56,7 @@ export const TARGETS: TargetMeta[] = [
   // 初回ライブ試走＝カイゼンくん自身（自己改修・最低リスク）。PRレビュー型なのでPRを作るだけ。
   { system: "カイゼンくん本体", repo: "tkgathr2/kaizen-mado", healthUrl: "https://kaizen.takagi.bz", forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
   { system: "AIOダッシュボードくん", repo: "tkgathr2/aio-checker", healthUrl: "https://aio.takagi.bz/api/dashboard", forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
-  { system: "採用管理システム", repo: "tkgathr2/saiyo-kanri", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
+  { system: "採用管理システム", repo: "tkgathr2/daikou", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
   // メンション秘書くん＝Slack mention検知→早乙女返信案→LINE社長OK→Bot送信。
   { system: "メンション秘書くん", repo: "tkgathr2/mention-hisho", healthUrl: "https://mention.takagi.bz/api/health", forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
   { system: "爆裂リード獲得くん（交通誘導）", repo: "tkgathr2/leadforge", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
