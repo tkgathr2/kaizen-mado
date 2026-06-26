@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { buildSpec, dispatchEnabled, dispatchExecution, buildDispatchPayload } from "../orchestrate";
+import {
+  buildSpec,
+  dispatchEnabled,
+  dispatchExecution,
+  buildDispatchPayload,
+  sanitizeField,
+} from "../orchestrate";
 import type { TicketRow } from "../tickets";
 import type { TargetMeta } from "../targets";
 

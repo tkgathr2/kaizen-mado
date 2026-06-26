@@ -2,12 +2,17 @@
 // CRON_SECRET を2方式で受ける：
 //  - x-cron-secret: <secret>            （手動/自前cron）
 //  - Authorization: Bearer <secret>     （Vercel Cron が自動付与）
-// 本番で CRON_SECRET 未設定なら fail-closed（false）。開発(NODE_ENV!==production)は通す。
+// CRON_SECRET 未設定なら、環境に関わらず原則拒否（fail-closed）。
+// preview/誤設定で内部APIが素通しになる事故を防ぐ。
+// 開発の利便のためにだけ、明示フラグ ALLOW_INSECURE_CRON=1 のときに限り未設定でも通す。
 import type { NextRequest } from "next/server";
 
 export function checkCronSecret(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
-  if (!secret) return process.env.NODE_ENV !== "production";
+  if (!secret) {
+    // secret 未設定：明示的に許可された開発環境だけ通す。それ以外は拒否。
+    return process.env.ALLOW_INSECURE_CRON === "1";
+  }
   const x = req.headers.get("x-cron-secret");
   if (x && safeEqual(x, secret)) return true;
   const auth = req.headers.get("authorization");
