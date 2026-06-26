@@ -1,7 +1,8 @@
 // ── POST /api/chat ── 会話1ターン処理（履歴→Claude→{reply,phase,ticket}）
 import { NextRequest, NextResponse } from "next/server";
 import { buildSystemPrompt, toAnthropicMessages } from "@/lib/prompt";
-import { callClaude } from "@/lib/anthropic";
+import { callClaude, callClaudeWithSlack } from "@/lib/anthropic";
+import { slackAvailableForSystem } from "@/lib/slack";
 import { fallbackTurn } from "@/lib/fallback";
 import { resolveSystem } from "@/lib/systems";
 import { isRecallEnabled, recallSimilar, buildRecallNote } from "@/lib/recall";
@@ -68,11 +69,15 @@ export async function POST(req: NextRequest) {
   }
 
   // まず Claude を試し、失敗したらフォールバックへ。会話は決して止めない。
+  // Slack調査が使える窓口（トークン＋許可チャンネルあり）だけ read_slack 付きの経路にする。
+  const useSlack = slackAvailableForSystem(system);
   let result: TurnResult;
   let usedFallback = false;
   try {
-    const prompt = buildSystemPrompt(system);
-    result = await callClaude(prompt, toAnthropicMessages(history));
+    const prompt = buildSystemPrompt(system, { slack: useSlack });
+    result = useSlack
+      ? await callClaudeWithSlack(prompt, toAnthropicMessages(history), system)
+      : await callClaude(prompt, toAnthropicMessages(history));
   } catch (err) {
     console.error("[chat] Claude failed, using fallback:", (err as Error).message);
     result = fallbackTurn(system, history);
