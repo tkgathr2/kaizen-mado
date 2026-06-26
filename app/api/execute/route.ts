@@ -121,9 +121,15 @@ export async function POST(req: NextRequest) {
         skipped.push({ ticketId: ticket.ticketId, reason: "dispatch未設定（GITHUB_DISPATCH_TOKEN）" });
         continue;
       }
+      // ── 競合（レース）対策：dispatch の「前」に「実装中」へ更新する ──
+      // 旧実装は dispatch成功 → その後 Notion更新 の順だった。短いCIジョブだと、
+      // Notion更新が反映される前に execute/callback が走り、ガードが「着手」を見て skip し、
+      // 完了通知が出ず残置していた（非アトミック）。先に「実装中」へ進めておけば、
+      // どれだけCIが速くても callback は必ず「実装中」を見て正しく処理できる。
+      // dispatch が失敗したら「着手」へ巻き戻して次回の再実行に委ねる。
+      await updateTicketState(ticket.pageId, "実装中");
       const ok = await dispatchExecution({ ticket, target });
       if (ok) {
-        await updateTicketState(ticket.pageId, "実装中");
         await appendDiscussionBlocks(ticket.pageId, [
           { heading: "自動着手", body: `実行ワークフローを起動（${target.repo}）。AIが改修→PR作成→レビュー待ち（PRレビュー型）。` },
         ]);
@@ -139,6 +145,10 @@ export async function POST(req: NextRequest) {
         );
         dispatched.push(ticket.ticketId);
       } else {
+        // dispatch失敗：先に進めた「実装中」を「着手」へ巻き戻す（次のexecuteで再試行できるように）。
+        await updateTicketState(ticket.pageId, "着手").catch((e) => {
+          console.error("[execute] 巻き戻し失敗", ticket.ticketId, (e as Error).message);
+        });
         skipped.push({ ticketId: ticket.ticketId, reason: "dispatch失敗" });
       }
     }

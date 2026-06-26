@@ -14,10 +14,12 @@ export interface ApplyResult {
   skipped?: boolean;
 }
 
-/** GO/修正/却下 を適用する。GO待ちでなければ何もしない（冪等）。 */
+/** GO/修正/却下 を適用する。GO待ちでなければ何もしない（冪等）。
+ * note＝社長が修正(fix)時に添えた本文（「◯◯を直して」）。議論へ反映するため保存する。 */
 export async function applyGoAction(
   action: GoAction,
-  ticket: TicketRow
+  ticket: TicketRow,
+  note?: string
 ): Promise<ApplyResult> {
   if (ticket.state !== "GO待ち") {
     return {
@@ -47,15 +49,23 @@ export async function applyGoAction(
 
   if (action === "fix") {
     await updateTicketState(ticket.pageId, "差し戻し");
-    await appendDiscussionBlocks(ticket.pageId, [
+    // 社長が添えた修正本文(note)があれば議論ブロックに保存し、再提案で必ず反映できるようにする。
+    // 旧実装は note を捨てていたため「修正 KZ-12 ◯◯を直して」の◯◯が議論に残らなかった。
+    const trimmed = (note ?? "").trim();
+    const blocks: { heading?: string; body?: string }[] = [
       { heading: "修正要望", body: "社長より修正要望 → 議論へ差し戻し。内容を反映して再提案する。" },
-    ]);
+    ];
+    if (trimmed) {
+      blocks.push({ heading: "社長の修正指示", body: trimmed.slice(0, 1900) });
+    }
+    await appendDiscussionBlocks(ticket.pageId, blocks);
     return {
       ok: true,
       newState: "差し戻し",
       reply:
         `${msgHead("✏️", "修正ですね", ticket.system, ticket.title)}\n` +
-        `（${ticket.ticketId}）議論に戻して、見直してから再提案します。`,
+        `（${ticket.ticketId}）議論に戻して、見直してから再提案します。` +
+        (trimmed ? `\n承りました：${trimmed.slice(0, 40)}` : ""),
     };
   }
 

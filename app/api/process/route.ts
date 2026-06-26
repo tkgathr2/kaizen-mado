@@ -4,6 +4,7 @@
 // （対外・対人告知ではなく、社長への承認伺い1通。LINE鍵が未設定なら静かにスキップ）。
 // CRON_SECRET が設定されていれば認証を要求（x-cron-secret または Vercel Cron の Bearer）。
 import { NextRequest, NextResponse } from "next/server";
+import { waitUntil } from "@vercel/functions";
 import {
   fetchTicketsByState,
   updateTicketState,
@@ -16,6 +17,7 @@ import { checkCronSecret } from "@/lib/cronAuth";
 import { returnLearningFromCompleted } from "@/lib/learn";
 import { findTarget } from "@/lib/targets";
 import { preGate, autopilotEnabled } from "@/lib/gate";
+import { kickEndpoint } from "@/lib/trigger";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -78,6 +80,10 @@ export async function POST(req: NextRequest) {
               body: "安全な改善のため、社長へのGO伺いを省略し真田の判断で着手。危険・対人・課金・本番破壊に該当する場合のみ社長確認（preGate=auto）。",
             },
           ]);
+          // 「着手」にしたら即 /api/execute を起こして実改修へ進める（応答はブロックしない）。
+          // line/webhook・admin/go と同じ形。vercel.json の crons は空＝安全網がないため、
+          // ここで kick しないと自動GOチケットが「着手」のまま実装パイプラインに乗らず残置する。
+          waitUntil(kickEndpoint("/api/execute"));
           // FYI（質問ではなく報告）：何の件かを先頭に。
           const fyi = await pushText(
             [
@@ -106,6 +112,17 @@ export async function POST(req: NextRequest) {
           });
         }
       } catch (err) {
+        // ── 宙づり対策：先に「議論中」へ進めた後で後続のNotion書込みがthrowすると、
+        // catchで状態が戻らず「議論中」のまま残置していた（fetchTicketsByStateは「受付」しか
+        // 再取得しないため二度と拾われない）。失敗したら「受付」へ戻し、次回cronで再処理させる。
+        // 戻し自体が失敗しても本来のエラーは errors に積んで他チケットの処理は続ける。
+        await updateTicketState(ticket.pageId, "受付").catch((e) => {
+          console.error(
+            "[process] 受付への巻き戻し失敗",
+            ticket.ticketId,
+            (e as Error).message
+          );
+        });
         // 1件失敗しても他を続行する
         errors.push({
           ticketId: ticket.ticketId,

@@ -88,14 +88,40 @@ describe("line（純関数）", () => {
   });
 
   it("parseTextCommand：GO/却下/修正を判定、雑談は null", () => {
-    expect(parseTextCommand("GO KZ-12")).toEqual({ action: "go", ticketId: "KZ-12" });
-    expect(parseTextCommand("ok kz-7")).toEqual({ action: "go", ticketId: "KZ-7" });
-    expect(parseTextCommand("却下 KZ-3")).toEqual({ action: "reject", ticketId: "KZ-3" });
-    expect(parseTextCommand("修正して")).toEqual({ action: "fix", ticketId: null });
-    expect(parseTextCommand("GO")).toEqual({ action: "go", ticketId: null });
+    expect(parseTextCommand("GO KZ-12")).toEqual({ action: "go", ticketId: "KZ-12", body: "" });
+    expect(parseTextCommand("ok kz-7")).toEqual({ action: "go", ticketId: "KZ-7", body: "" });
+    expect(parseTextCommand("却下 KZ-3")).toEqual({ action: "reject", ticketId: "KZ-3", body: "" });
+    expect(parseTextCommand("修正して")).toEqual({ action: "fix", ticketId: null, body: "" });
+    expect(parseTextCommand("GO")).toEqual({ action: "go", ticketId: null, body: "" });
     expect(parseTextCommand("今日は寒いね")).toBeNull();
     expect(parseTextCommand("")).toBeNull();
     expect(parseTextCommand(null)).toBeNull();
+  });
+
+  it("parseTextCommand：修正本文(body)を抽出する（コマンド語・ID除去）", () => {
+    expect(parseTextCommand("修正 KZ-12 ボタンの色を青に直して")).toEqual({
+      action: "fix",
+      ticketId: "KZ-12",
+      body: "ボタンの色を青に直して",
+    });
+    // ID表記揺れ・区切り記号も除去して本文だけ残す
+    expect(parseTextCommand("修正KZ12、一覧を新着順にして")).toEqual({
+      action: "fix",
+      ticketId: "KZ-12",
+      body: "一覧を新着順にして",
+    });
+    // ID無し＋本文
+    expect(parseTextCommand("修正 文言をやわらかく")).toEqual({
+      action: "fix",
+      ticketId: null,
+      body: "文言をやわらかく",
+    });
+    // GO/却下にも本文が付けば拾う（保存はfix時のみだが抽出は一貫させる）
+    expect(parseTextCommand("却下 KZ-3 今回は見送り")).toEqual({
+      action: "reject",
+      ticketId: "KZ-3",
+      body: "今回は見送り",
+    });
   });
 
   it("buildProposalText はID・対象・推奨・返信ガイドを含む", () => {
