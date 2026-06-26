@@ -10,9 +10,15 @@ import type { Ticket } from "./types";
 // 同一内容とみなす時間窓（ミリ秒）。連打対策が目的なので短く。
 export const DEDUP_WINDOW_MS = 10_000;
 
+/** dedup用の文字列正規化（前後空白・連続空白・大小・全半角を吸収）。
+ * メモリ段（dedupKey）とNotion段（tickets.ts の重複照合）で同じ規則を使う。 */
+export function normalizeForDedup(s: string): string {
+  return s.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
 /** 起票者＋チケット内容から決定的なキーを作る（前後空白・大小は正規化）。 */
 export function dedupKey(ticket: Ticket, reporter: string | null): string {
-  const norm = (s: string) => s.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
+  const norm = normalizeForDedup;
   const who = norm(reporter || "");
   return [
     who,

@@ -8,6 +8,7 @@ import { normalizeSystemForTicket } from "@/lib/systems";
 import { isAuthEnabled, isOriginAllowed } from "@/lib/authz";
 import { kickEndpoint } from "@/lib/trigger";
 import { acceptSubmit } from "@/lib/dedup";
+import { findRecentDuplicate } from "@/lib/tickets";
 import type { Ticket, TicketType, Importance } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -58,10 +59,25 @@ export async function POST(req: NextRequest) {
     reporter = session?.user?.name || session?.user?.email || reporter;
   }
 
-  // 二重起票ガード：同一起票者＋同一内容を短時間に連打しても、2回目以降はNotionに作らない。
-  // UI（ボタン無効化）の穴を抜けても物理的に重複チケットを防ぐ。利用者には完了表示を返す。
+  // ── 二重起票ガード（二段構え） ──
+  // 第1段：プロセス内メモリの高速フィルタ。連打の大半は同一インスタンスに連続到達するので
+  //        ここで即弾く（Notion APIコールを節約）。利用者には完了表示を返す。
   if (!acceptSubmit(ticket, reporter)) {
     return NextResponse.json({ ok: true, duplicate: true });
+  }
+
+  // 第2段：インスタンス跨ぎの真の冪等化。serverless で連打が別インスタンスに分かれると
+  //        第1段（メモリ）をすり抜ける。createTicket の直前に Notion を1回問い合わせ、
+  //        直近N秒以内・完全同一内容の既存チケットがあれば新規作成せずそれを返す。
+  //        ★fail-safe：照合失敗時は null が返り、通常どおり作成にフォールバック（声を止めない）。
+  const dup = await findRecentDuplicate(ticket, reporter);
+  if (dup) {
+    return NextResponse.json({
+      ok: true,
+      duplicate: true,
+      ticketId: dup.ticketId,
+      pageId: dup.pageId,
+    });
   }
 
   try {
