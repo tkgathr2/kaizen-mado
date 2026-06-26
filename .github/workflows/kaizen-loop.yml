@@ -117,11 +117,12 @@ jobs:
         run: printf '%s' "$SPEC" > "${{ runner.temp }}/kaizen_spec.md"
 
       - name: Implement with Claude
-        env:
-          ANTHROPIC_MODEL: claude-opus-4-5
         uses: anthropics/claude-code-base-action@beta
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # モデルはアクションの入力(model)で渡す。env の ANTHROPIC_MODEL はこのアクションに
+          # 拾われず既定の旧モデル(claude-sonnet-4-20250514)になり 404 not_found で失敗していた。
+          model: claude-sonnet-4-6
           allowed_tools: "Read,Glob,Grep,Edit,MultiEdit,Write,Bash(npm install),Bash(npm ci),Bash(npm run build),Bash(npm run lint),Bash(npx vitest run),Bash(npx tsc --noEmit)"
           prompt: |
             このリポジトリに最小差分の変更を加えてください。
