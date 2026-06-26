@@ -163,8 +163,39 @@ export function parseTextCommand(
   return { action, ticketId, body };
 }
 
+// ── 引用返信のための「送信メッセージID → チケットID」対応（best-effort・揮発） ──
+// LINEの送信API応答は sentMessages[].id を返す。社長がその提案メッセージを
+// 「引用返信」すると webhook に message.quotedMessageId が乗る。これを使い
+// 「どのメッセージ＝どのチケットか」を特定するための軽量な対応表。
+//
+// ★限界（重要）：Vercel serverless は連続リクエストを別インスタンスで受けうるため、
+//   この in-memory マップは「同じインスタンスに当たれば効く」程度の best-effort。
+//   外れたら resolveTicket が自然文（システム名／直近）にフォールバックする設計（converse.ts）。
+//   恒久対応は外部KV（Redis等）への移設だが、本実装では依存を増やさず軽量同居に留める。
+const QUOTED_MAP_MAX = 200;
+const quotedMap = new Map<string, string>(); // messageId → ticketId
+
+/** 送信メッセージID→チケットID を記録（古いものから捨てる簡易LRU）。 */
+export function recordSentMessage(messageId: string, ticketId: string): void {
+  if (!messageId || !ticketId) return;
+  if (quotedMap.has(messageId)) quotedMap.delete(messageId);
+  quotedMap.set(messageId, ticketId);
+  while (quotedMap.size > QUOTED_MAP_MAX) {
+    const oldest = quotedMap.keys().next().value;
+    if (oldest === undefined) break;
+    quotedMap.delete(oldest);
+  }
+}
+
+/** 現在の「メッセージID→チケットID」対応の浅いコピーを返す（resolveTicket に渡す）。 */
+export function getQuotedMap(): Record<string, string> {
+  return Object.fromEntries(quotedMap);
+}
+
 // ── 送信系（失敗してもthrowしない：呼び出し元の改善ループを止めないため fail-safe） ──
-async function postLine(endpoint: string, payload: unknown): Promise<boolean> {
+// 返値：失敗時は null、成功時は LINE応答（sentMessages を含む）。旧来の boolean 判定は
+// `!!await postLine(...)` で互換。
+async function postLine(endpoint: string, payload: unknown): Promise<any | null> {
   try {
     const res = await fetch(endpoint, {
       method: "POST",
@@ -177,31 +208,35 @@ async function postLine(endpoint: string, payload: unknown): Promise<boolean> {
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
       console.error("[line] post失敗", { endpoint, status: res.status, detail: detail.slice(0, 200) });
-      return false;
+      return null;
     }
-    return true;
+    return await res.json().catch(() => ({}));
   } catch (e) {
     console.error("[line] post例外", { error: e instanceof Error ? e.message : String(e) });
-    return false;
+    return null;
   }
 }
 
 /** 任意テキストを高木さん宛にpushする（完了報告・警告等）。 */
 export async function pushText(text: string): Promise<boolean> {
   if (!lineEnabled()) return false;
-  return postLine(LINE_PUSH_ENDPOINT, {
-    to: targetUserId(),
-    messages: [{ type: "text", text }],
-  });
+  return Boolean(
+    await postLine(LINE_PUSH_ENDPOINT, {
+      to: targetUserId(),
+      messages: [{ type: "text", text }],
+    })
+  );
 }
 
 /** postback応答用の簡易reply（「着手します」等の受領返信）。 */
 export async function replyText(replyToken: string, text: string): Promise<boolean> {
   if (!process.env.LINE_CHANNEL_ACCESS_TOKEN) return false;
-  return postLine(LINE_REPLY_ENDPOINT, {
-    replyToken,
-    messages: [{ type: "text", text }],
-  });
+  return Boolean(
+    await postLine(LINE_REPLY_ENDPOINT, {
+      replyToken,
+      messages: [{ type: "text", text }],
+    })
+  );
 }
 
 // ── 文面ヘルパ（スマホのLINEは1行が短く折り返されるため、短文・要点先頭で組む） ──
@@ -336,10 +371,12 @@ export function buildProposalText(ticket: TicketRow, d: DiscussResult): string {
   ].join("\n");
 }
 
-/** GO待ちチケットの提案を高木さん宛にpushする。GO/修正/却下のquick reply付き。 */
+/** GO待ちチケットの提案を高木さん宛にpushする。GO/修正/却下のquick reply付き。
+ * 送信成功時は応答の sentMessages[].id を「引用返信→チケット」対応として記録する
+ * （社長がこの提案を引用返信で操作できるように）。 */
 export async function pushProposal(ticket: TicketRow, d: DiscussResult): Promise<boolean> {
   if (!lineEnabled()) return false;
-  return postLine(LINE_PUSH_ENDPOINT, {
+  const res = await postLine(LINE_PUSH_ENDPOINT, {
     to: targetUserId(),
     messages: [
       {
@@ -349,4 +386,10 @@ export async function pushProposal(ticket: TicketRow, d: DiscussResult): Promise
       },
     ],
   });
+  if (!res) return false;
+  const sent = Array.isArray(res?.sentMessages) ? res.sentMessages : [];
+  for (const m of sent) {
+    if (m?.id) recordSentMessage(String(m.id), ticket.ticketId);
+  }
+  return true;
 }
