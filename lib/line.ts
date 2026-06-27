@@ -443,6 +443,56 @@ export function buildNextStepLines(
   return lines;
 }
 
+// ── 基盤エラー（インフラ/認証/権限/設定）の判定 ──
+// 自動改修の失敗には2種類ある：
+//   (a) AI改修そのものの失敗（コードが直せなかった・テストが通らない 等）＝人の助けが要る詰まり。
+//   (b) 仕組み側（CI/認証/権限/env）の不調＝真田が裏で直せば再走できる技術障害。
+// (b) は社長に「直せませんでした」と出すと誤解を招く（社長の手は要らない）。そこで detail の
+// 文言から (b) を検出し、文面を「仕組み側の不調・自動で再挑戦」に切り替え、状態も差し戻さない。
+// 判定は保守的に：認証/権限/設定系の確度の高いパターンだけを基盤エラーとみなす。
+const INFRA_ERROR_PATTERNS: RegExp[] = [
+  /could not read Username/i,
+  /could not read Password/i,
+  /Authentication failed/i,
+  /permission denied/i,
+  /Permission to .+ denied/i,
+  /not permitted/i,
+  /\b403\b/,
+  /\b401\b/,
+  /Unauthorized/i,
+  /Forbidden/i,
+  /invalid (?:token|credential|api[\s_-]?key)/i,
+  /bad credentials/i,
+  /token .*(?:expired|revoked)/i,
+  /secret .*(?:not set|missing)/i,
+  /env(?:ironment)? .*(?:not set|missing)/i,
+  /\b[A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|CREDENTIAL)S?\b[^\n]*(?:not set|is missing|missing|undefined)/i,
+  /fatal: (?:Authentication|could not read|unable to access)/i,
+];
+
+/** detail（実行ワークフローのエラー詳細）が「基盤エラー（認証/権限/設定系）」かどうか。
+ * true のとき＝真田が裏で直せる仕組み側の不調。社長に「直せません」と出さず、差し戻さない。 */
+export function isInfraError(detail: string | null | undefined): boolean {
+  const t = (detail || "").trim();
+  if (!t) return false;
+  return INFRA_ERROR_PATTERNS.some((re) => re.test(t));
+}
+
+/** 基盤エラー時の文面（社長に「自動で再挑戦します・社長の手は不要」を伝える）。 */
+export function buildInfraNoticeText(
+  ticket: { ticketId?: string | null; system?: string | null; title?: string | null }
+): string {
+  return [
+    msgHead("⚙️", "仕組み側の不調です", ticket.system, ticket.title),
+    `（${ticket.ticketId || "KZ-?"}）この件は、いまカイゼンくんの仕組み側（連携/権限/設定）が`,
+    `一時的に不調で自動改修まで進めませんでした。`,
+    `真田が対処します。直りしだい自動でもう一度挑戦するので、社長の操作は不要です。`,
+    ``,
+    stageBar(4), // ④着手（仕組み側の不調で一時停止）
+    `全体像 ▶ ${BOARD_URL}`,
+  ].join("\n");
+}
+
 /** GO待ちチケットの提案を高木さん宛にpushする。GO/修正/却下のquick reply付き。
  * 送信成功時は応答の sentMessages[].id を「引用返信→チケット」対応として記録する
  * （社長がこの提案を引用返信で操作できるように）。 */
