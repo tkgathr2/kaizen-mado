@@ -20,7 +20,7 @@ import {
   buildDispatchPayload,
   type DispatchPayload,
 } from "@/lib/orchestrate";
-import { pushText, truncateForLine, notionPageUrl, stageBar, BOARD_URL, msgHead } from "@/lib/line";
+import { pushText, truncateForLine, notionPageUrl, stageBar, BOARD_URL, msgHead, buildNextStepLines } from "@/lib/line";
 import { checkCronSecret } from "@/lib/cronAuth";
 
 export const runtime = "nodejs";
@@ -111,7 +111,8 @@ export async function POST(req: NextRequest) {
             ...decision.reasons.slice(0, 3).map((r) => `・${truncateForLine(r, 38)}`),
             ...(decision.reasons.length > 3 ? [`・ほか${decision.reasons.length - 3}件（詳細はNotion）`] : []),
             ``,
-            `進め方は社長のご判断をお願いします。`,
+            // 理由だけで終わらせず「具体的な次の一手」を示す（W5）。
+            ...buildNextStepLines(ticket, decision.reasons),
             ``,
             stageBar(3), // ③のGO段で社長判断へ分岐
             `詳細 ▶ ${notionPageUrl(ticket.pageId)}`,

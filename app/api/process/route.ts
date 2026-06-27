@@ -54,8 +54,10 @@ export async function POST(req: NextRequest) {
         const d = await discussTicket(ticket);
         await appendDiscussionBlocks(ticket.pageId, [
           { heading: "方針", body: d.houshin },
+          { heading: "改善手順", body: d.steps.length ? d.steps.map((s) => `・${s}`).join("\n") : "（追ってヒアリング）" },
           { heading: "工数見積", body: d.kousuu },
           { heading: "リスク", body: d.risks.length ? d.risks.map((r) => `・${r}`).join("\n") : "（特になし）" },
+          { heading: "重要度 / 緊急度", body: `重要度：${d.importance}　/　緊急度：${d.urgency}` },
           { heading: "推奨", body: d.recommendation },
           { heading: "GO伺いドラフト（未送信）", body: d.goDraft },
         ]);

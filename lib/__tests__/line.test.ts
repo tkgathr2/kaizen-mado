@@ -139,8 +139,11 @@ describe("line（純関数）", () => {
     } as TicketRow;
     const d: DiscussResult = {
       houshin: "ページングを導入",
+      steps: ["①一覧にページングを追加", "②並び順テストを足す"],
       kousuu: "1〜2日",
       risks: ["既存ソート互換"],
+      importance: "高",
+      urgency: "中",
       recommendation: "GO推奨",
       goDraft: "...",
       source: "claude",
@@ -153,6 +156,70 @@ describe("line（純関数）", () => {
     // 読みやすさ改修（2026-06-12）：返信ガイド1行化＋Notion詳細リンク
     expect(text).toContain("GO KZ-12／修正 KZ-12／却下 KZ-12");
     expect(text).toContain("https://www.notion.so/p1");
+    // W4：具体手順・リスク・重要度・緊急度を出す
+    expect(text).toContain("どう直す（手順）");
+    expect(text).toContain("①一覧にページングを追加");
+    expect(text).toContain("⚠ リスク：既存ソート互換");
+    expect(text).toContain("📊 重要度：高");
+    expect(text).toContain("⏱ 緊急度：中");
+  });
+
+  // W4：steps が空ならhoushinを「どう直す」一言にフォールバック、risksが空なら「特になし」
+  it("buildProposalText：steps無しはhoushin一言、risks無しは特になし", () => {
+    const ticket = {
+      pageId: "p9", ticketId: "KZ-9", system: "プロレポ", type: "改善",
+      importance: "中", title: "t", detail: "d", reporter: "現場", state: "GO待ち", fgsUrl: null,
+    } as TicketRow;
+    const d: DiscussResult = {
+      houshin: "ここを直す方針です",
+      steps: [],
+      kousuu: "半日",
+      risks: [],
+      importance: "低",
+      urgency: "低",
+      recommendation: "要検討",
+      goDraft: "",
+      source: "fallback",
+    };
+    const text = buildProposalText(ticket, d);
+    expect(text).toContain("🛠 どう直す：ここを直す方針です");
+    expect(text).toContain("⚠ リスク：特になし");
+  });
+});
+
+import { buildNextStepLines } from "../line";
+
+describe("buildNextStepLines（社長案件の具体的な次の一手・W5）", () => {
+  it("PCのClaude Codeへ貼れる指示文の雛形（system/titleから）を出す", () => {
+    const lines = buildNextStepLines(
+      { system: "プロレポ", title: "一覧が重い" },
+      ["repo未確定"]
+    );
+    const text = lines.join("\n");
+    expect(text).toContain("Claude Code");
+    expect(text).toContain("プロレポ");
+    expect(text).toContain("一覧が重い");
+    expect(text).toContain("真田");
+  });
+
+  it("認証切れ系の理由なら復旧の暫定手順を添える", () => {
+    const lines = buildNextStepLines(
+      { system: "ほうこちゃん", title: "通知が来ない" },
+      ["認証情報の再設定が必要"]
+    );
+    const text = lines.join("\n");
+    expect(text).toContain("暫定対応");
+    expect(text).toContain("再ログイン");
+    // 認証以外の理由のときは暫定対応行を出さない
+    const noAuth = buildNextStepLines({ system: "ほうこちゃん", title: "x" }, ["repo未確定"]);
+    expect(noAuth.join("\n")).not.toContain("暫定対応");
+  });
+
+  it("system/title が空でも既定文言で落ちない", () => {
+    const lines = buildNextStepLines({}, []);
+    const text = lines.join("\n");
+    expect(text).toContain("該当リポ");
+    expect(text).toContain("この件");
   });
 });
 
@@ -197,7 +264,7 @@ describe("工程ステッパー stageBar", () => {
       importance: "低", title: "一覧を新着順に", detail: "y", reporter: "現場",
       state: "GO待ち", fgsUrl: null,
     } as TicketRow;
-    const d: DiscussResult = { houshin: "a", kousuu: "b", risks: [], recommendation: "GO推奨", goDraft: "", source: "claude" };
+    const d: DiscussResult = { houshin: "a", steps: [], kousuu: "b", risks: [], importance: "中", urgency: "低", recommendation: "GO推奨", goDraft: "", source: "claude" };
     const text = buildProposalText(t, d);
     const lines = text.split("\n");
     // 1行目=やさしいシステム名（最上段）、2行目=種別、3行目=ざっくり何を
