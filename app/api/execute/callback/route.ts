@@ -14,6 +14,7 @@ import {
 import { returnLearningFromCompleted } from "@/lib/learn";
 import { notifyStuckOnce } from "@/lib/notify";
 import { checkCronSecret } from "@/lib/cronAuth";
+import { isInfraError, buildInfraNoticeText, pushText } from "@/lib/line";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -84,10 +85,25 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, state: "レビュー" });
     }
 
-    // failed → 差し戻し。これは「人の助けが要る詰まり」として詰まり連絡を1回だけ送る。
-    // ※ 真田が裏で直せるシステム故障（モデル切れ等の技術障害）と、人の助けが要る詰まりの
-    //   自動切り分けは将来の死活監視で扱う＝今はスコープ外。ここでは failed をそのまま
-    //   「人の助けが要る詰まり」として扱い、同じチケットでは1回だけ通知（de-dup）する。
+    // failed → 失敗の中身で2分岐する（KZ-9）。
+    //  (A) 基盤エラー（認証/権限/設定系の仕組み側不調）：真田が裏で直せば再走できる。
+    //      → 状態は「実装中」のまま保持（差し戻さない＝基盤復旧後に自動で再走できる）。
+    //         社長LINEは「⚙️ 仕組み側の不調・自動で再挑戦」系に切り替える（「直せません」と出さない）。
+    //  (B) それ以外（AI改修そのものの失敗）：従来どおり「差し戻し」＋詰まり連絡を1回だけ送る。
+    if (isInfraError(detail)) {
+      // 状態は変えない（実装中のまま）。経緯だけ議論に残し、復旧後の再走に備える。
+      await appendDiscussionBlocks(pageId, [
+        {
+          heading: "基盤エラー（実装中のまま保持）",
+          body: `仕組み側（認証/権限/設定）の不調で自動改修まで進めませんでした。基盤復旧後に再走します。\n詳細：${detail || "(理由不明)"}`,
+        },
+      ]);
+      // 文面分岐：詰まり連絡ではなく「仕組み側の不調・自動で再挑戦」を送る。
+      await pushText(buildInfraNoticeText(current)).catch(() => false);
+      return NextResponse.json({ ok: true, state: "実装中", infra: true });
+    }
+
+    // (B) AI改修の失敗 → 差し戻し。「人の助けが要る詰まり」として詰まり連絡を1回だけ送る（de-dup）。
     await updateTicketState(pageId, "差し戻し");
     await appendDiscussionBlocks(pageId, [
       { heading: "実装失敗（差し戻し）", body: detail || "(理由不明)" },

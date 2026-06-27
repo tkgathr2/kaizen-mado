@@ -201,7 +201,7 @@ export default function BoardPage() {
         カイゼンくん 状況ボード ／ 読み取り専用（操作はLINE・Notion・GitHubで） ／{" "}
         <a href="/dashboard">成長ダッシュボード</a>
           {" ／ "}
-          <span style={{fontSize:"0.75rem",opacity:0.7}}>⚙️ 自律ループ稼働中</span>
+          <span style={{ fontSize: "0.75rem", opacity: 0.7 }}>🔁 自動ループ稼働中</span>
       </div>
     </div>
   );
