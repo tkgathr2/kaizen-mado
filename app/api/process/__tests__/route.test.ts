@@ -130,8 +130,11 @@ describe("/api/process 失敗時の状態巻き戻し", () => {
     // 安全（auto）＋自走ON＋GO推奨 → 自動GOで「着手」へ進む分岐。
     discussTicket.mockResolvedValueOnce({
       houshin: "h",
+      steps: ["①なおす"],
       kousuu: "k",
       risks: [],
+      importance: "中",
+      urgency: "中",
       recommendation: "GO推奨",
       goDraft: "g",
       source: "fallback",

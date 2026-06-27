@@ -8,32 +8,55 @@ const API_URL = "https://api.anthropic.com/v1/messages";
 const DEFAULT_MODEL = "claude-sonnet-4-6";
 
 export type Recommendation = "GO推奨" | "要検討" | "非推奨";
+export type Level = "高" | "中" | "低";
 
 export interface DiscussResult {
   houshin: string;
+  /** 具体的な改善手順（番号つきの実作業ステップ）。社長が「どう直すか」を具体的に掴めるように。 */
+  steps: string[];
   kousuu: string;
   risks: string[];
+  /** 重要度（高/中/低）＝直さないと困る度合い。 */
+  importance: Level;
+  /** 緊急度（高/中/低）＝今すぐやるべき度合い。 */
+  urgency: Level;
   recommendation: Recommendation;
   goDraft: string;
   source: "claude" | "fallback";
 }
 
 const SYSTEM_PROMPT =
-  "あなたは高木産業グループ CTO Agent Lab。改善チケットについて方針・工数見積・リスク・GO可否の推奨・社長へのGO伺いドラフトを簡潔に出す。GO伺いドラフトは\"送信用の下書き\"であり実送信はしない。";
+  "あなたは高木産業グループ CTO Agent Lab。改善チケットについて、方針・具体的な改善手順・工数見積・リスク・重要度・緊急度・GO可否の推奨・社長へのGO伺いドラフトを簡潔かつ具体的に出す。手順は『何をどう直すか』が分かる実作業ステップにする。GO伺いドラフトは\"送信用の下書き\"であり実送信はしない。";
 
 const DISCUSS_TOOL = {
   name: "record_discussion",
   description:
-    "改善チケットの議論結果を記録する。方針・工数見積・リスク・推奨・GO伺いドラフトを構造化して返す。",
+    "改善チケットの議論結果を記録する。方針・具体的な改善手順・工数見積・リスク・重要度・緊急度・推奨・GO伺いドラフトを構造化して返す。",
   input_schema: {
     type: "object",
     properties: {
       houshin: { type: "string", description: "対応方針（2〜4文）" },
+      steps: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          "具体的な改善手順（実作業ステップ。例：『①該当画面の◯◯を××に変更』『②テスト追加』のように、何をどう直すかが分かる粒度で2〜5個）",
+      },
       kousuu: { type: "string", description: "工数見積（例: 半日 / 2〜3日 など）" },
       risks: {
         type: "array",
         items: { type: "string" },
         description: "想定リスク（箇条書き）",
+      },
+      importance: {
+        type: "string",
+        enum: ["高", "中", "低"],
+        description: "重要度＝直さないと困る度合い（高/中/低）",
+      },
+      urgency: {
+        type: "string",
+        enum: ["高", "中", "低"],
+        description: "緊急度＝今すぐやるべき度合い（高/中/低）",
       },
       recommendation: {
         type: "string",
@@ -45,7 +68,16 @@ const DISCUSS_TOOL = {
         description: "社長へのGO伺いドラフト（送信用下書き・実送信はしない）",
       },
     },
-    required: ["houshin", "kousuu", "risks", "recommendation", "go_ukagai_draft"],
+    required: [
+      "houshin",
+      "steps",
+      "kousuu",
+      "risks",
+      "importance",
+      "urgency",
+      "recommendation",
+      "go_ukagai_draft",
+    ],
   },
 } as const;
 
@@ -53,13 +85,26 @@ function coerceRecommendation(v: unknown): Recommendation {
   return v === "GO推奨" || v === "非推奨" ? v : "要検討";
 }
 
-/** ツール入力（または任意のオブジェクト）を安全に整形する */
-export function coerceDiscussion(obj: any): Omit<DiscussResult, "source"> {
+function coerceLevel(v: unknown, fallback: Level): Level {
+  return v === "高" || v === "中" || v === "低" ? v : fallback;
+}
+
+/** ツール入力（または任意のオブジェクト）を安全に整形する。
+ * importance/urgency が欠落・不正なときの既定は fallbackLevel（既定『中』）。 */
+export function coerceDiscussion(
+  obj: any,
+  fallbackLevel: Level = "中"
+): Omit<DiscussResult, "source"> {
   const houshin = typeof obj?.houshin === "string" ? obj.houshin.trim() : "";
+  const toStrArray = (v: unknown): string[] =>
+    Array.isArray(v)
+      ? v.filter((r) => typeof r === "string" && r.trim()).map((r) => (r as string).trim())
+      : [];
+  const steps = toStrArray(obj?.steps);
   const kousuu = typeof obj?.kousuu === "string" ? obj.kousuu.trim() : "";
-  const risks = Array.isArray(obj?.risks)
-    ? obj.risks.filter((r: unknown) => typeof r === "string" && r.trim()).map((r: string) => r.trim())
-    : [];
+  const risks = toStrArray(obj?.risks);
+  const importance = coerceLevel(obj?.importance, fallbackLevel);
+  const urgency = coerceLevel(obj?.urgency, fallbackLevel);
   const recommendation = coerceRecommendation(obj?.recommendation);
   const goDraft =
     typeof obj?.go_ukagai_draft === "string"
@@ -67,13 +112,13 @@ export function coerceDiscussion(obj: any): Omit<DiscussResult, "source"> {
       : typeof obj?.goDraft === "string"
         ? obj.goDraft.trim()
         : "";
-  return { houshin, kousuu, risks, recommendation, goDraft };
+  return { houshin, steps, kousuu, risks, importance, urgency, recommendation, goDraft };
 }
 
 /** APIキー未設定・失敗時に使う定型の議論結果を生成する */
 function fallbackDiscussion(ticket: TicketRow): DiscussResult {
   const type = ticket.type || "改善";
-  const importance = ticket.importance || "中";
+  const importance: Level = coerceLevel(ticket.importance, "中");
 
   // 既定は「要検討」。重要度「高」のときだけ「GO推奨」に上げる。
   // （「低」「中」は既定の「要検討」のまま＝以前の `else if (低) = 要検討` は
@@ -81,8 +126,31 @@ function fallbackDiscussion(ticket: TicketRow): DiscussResult {
   let recommendation: Recommendation = "要検討";
   if (importance === "高") recommendation = "GO推奨";
 
+  // 緊急度はチケット種別から推定（bug＝今すぐ困る/高、新機能＝低、改善＝中）。
+  const urgency: Level = type === "bug" ? "高" : type === "新機能" ? "低" : "中";
+
   const kousuu =
     type === "新機能" ? "2〜5日（要見積）" : type === "bug" ? "半日〜1日" : "1〜2日";
+
+  // 具体的な改善手順（鍵未設定でも"次に何をするか"が分かる定型ステップ）。
+  const steps: string[] =
+    type === "bug"
+      ? [
+          "①再現条件を特定する（どの画面・操作・データで起きるか）",
+          "②原因箇所を直し、再発防止の回帰テストを追加する",
+          "③本番で直っていることを確認する",
+        ]
+      : type === "新機能"
+        ? [
+            "①要望の要件を1枚に整理し、影響範囲を確認する",
+            "②画面・データ設計を決めて実装する",
+            "③テストを足して本番反映する",
+          ]
+        : [
+            "①現状のどこを、どう変えるかを具体化する",
+            "②該当箇所を改修してテストを足す",
+            "③本番で改善されたことを確認する",
+          ];
 
   const risks: string[] = [];
   if (type === "bug") risks.push("再発防止のための回帰テストが必要");
@@ -93,7 +161,17 @@ function fallbackDiscussion(ticket: TicketRow): DiscussResult {
 
   const goDraft = `【GO伺い（下書き・未送信）】\n対象: ${ticket.system || "未特定"}\n件名: ${ticket.title || "改善のご要望"}\n種別/重要度: ${type} / ${importance}\n推奨: ${recommendation}\n工数見積: ${kousuu}\n上記内容で着手してよろしいでしょうか。`;
 
-  return { houshin, kousuu, risks, recommendation, goDraft, source: "fallback" };
+  return {
+    houshin,
+    steps,
+    kousuu,
+    risks,
+    importance,
+    urgency,
+    recommendation,
+    goDraft,
+    source: "fallback",
+  };
 }
 
 /**
@@ -142,7 +220,9 @@ export async function discussTicket(ticket: TicketRow): Promise<DiscussResult> {
       : null;
     if (!toolUse?.input) return fallbackDiscussion(ticket);
 
-    return { ...coerceDiscussion(toolUse.input), source: "claude" };
+    // importance/urgency が欠落していたら、まずチケット自身の重要度→無ければ「中」を既定に。
+    const fb = coerceLevel(ticket.importance, "中");
+    return { ...coerceDiscussion(toolUse.input, fb), source: "claude" };
   } catch {
     return fallbackDiscussion(ticket);
   }

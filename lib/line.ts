@@ -356,10 +356,31 @@ export function buildProposalText(ticket: TicketRow, d: DiscussResult): string {
   // 方針＝どう直すかを、やさしい一言に（長い技術説明は詳細リンクへ逃がす）。
   // 文字化けしていれば呪文を出さず警告に置換（cleanForLine）。
   const how = cleanForLine(d.houshin, 50);
+
+  // 具体的な改善手順（最大3ステップだけLINEに出す。残りはNotion詳細へ）。
+  const steps = (d.steps || []).filter((s) => s && s.trim()).map((s) => cleanForLine(s, 44));
+  const stepLines =
+    steps.length > 0
+      ? [
+          `🛠 どう直す（手順）：`,
+          ...steps.slice(0, 3).map((s) => `　${s}`),
+          ...(steps.length > 3 ? [`　…ほか${steps.length - 3}件（詳細はNotion）`] : []),
+        ]
+      : [`🛠 どう直す：${how}`];
+
+  // リスクは先頭2件だけ要約（無ければ「特になし」）。
+  const risks = (d.risks || []).filter((r) => r && r.trim()).map((r) => cleanForLine(r, 40));
+  const riskLine =
+    risks.length > 0
+      ? `⚠ リスク：${risks.slice(0, 2).join(" / ")}${risks.length > 2 ? ` ほか${risks.length - 2}件` : ""}`
+      : `⚠ リスク：特になし`;
+
   return [
     msgHead("💡", "カイゼンの提案", ticket.system, ticket.title), // ①種別②システム③何を
-    `🔧 どう直す：${how}`, // ④どう直すか（やさしく一言）
-    `🧭 おすすめ：${truncateForLine(d.recommendation, 24)}（目安 ${looksGarbled(d.kousuu) ? "未記載" : truncateForLine(d.kousuu, 16)}）`,
+    ...stepLines, // ④どう直すか（具体手順）
+    riskLine, // ⚠ リスク
+    `📊 重要度：${truncateForLine(d.importance, 4)}　⏱ 緊急度：${truncateForLine(d.urgency, 4)}`,
+    `🧭 おすすめ：${truncateForLine(d.recommendation, 24)}（⏳目安 ${looksGarbled(d.kousuu) ? "未記載" : truncateForLine(d.kousuu, 16)}）`,
     ``,
     `▼ 直していい？ 返信で（どれか1つ）`,
     `GO ${id}／修正 ${id}／却下 ${id}`,
@@ -369,6 +390,42 @@ export function buildProposalText(ticket: TicketRow, d: DiscussResult): string {
     `くわしく ▶ ${notionPageUrl(ticket.pageId)}`,
     `全体像 ▶ ${BOARD_URL}`,
   ].join("\n");
+}
+
+// ── 社長案件（escalate）の「具体的な次の一手」生成 ──
+// 「社長に相談です」を理由だけで終わらせず、社長が"どうすれば直せるか"を具体的に示す。
+// チケットの system / title から指示文の雛形を1行作り、必要なら復旧の暫定手順を添える。
+
+/** reasons の文面から「認証情報の再設定が必要」系かどうかを判定する。 */
+function reasonsMentionAuth(reasons: string[]): boolean {
+  return reasons.some((r) => /認証|ログイン|トークン|鍵|key|token|secret|credential|連携が切/i.test(r));
+}
+
+/**
+ * 社長案件の「具体的な次の一手」を組み立てる（LINE表示用・複数行）。
+ * - ▶ 直し方：PCのClaude Codeで指示するか、真田へ振る（system/titleから雛形を1行生成）。
+ * - ▶ 暫定対応：認証切れ等なら、その復旧の具体手順を1〜2行添える。
+ */
+export function buildNextStepLines(
+  ticket: { system?: string | null; title?: string | null },
+  reasons: string[]
+): string[] {
+  const sys = looksGarbled(ticket.system) ? "該当システム" : truncateForLine(ticket.system || "該当リポ", 20);
+  const what = cleanForLine(ticket.title || "この件", 30);
+  // PCのClaude Codeへ貼れる指示文の雛形（1行）。
+  const order = `「${sys}の『${what}』を直して」`;
+
+  const lines: string[] = [
+    `▶ 直し方：PCのClaude Codeで ${order} と指示するか、担当(真田)に振ってください。`,
+  ];
+
+  // 認証切れ系なら、復旧の暫定手順を具体的に添える。
+  if (reasonsMentionAuth(reasons)) {
+    lines.push(
+      `▶ 暫定対応：${sys}の認証（ログイン/トークン）が切れています。再ログイン→トークン再発行→env更新で復旧します。`
+    );
+  }
+  return lines;
 }
 
 /** GO待ちチケットの提案を高木さん宛にpushする。GO/修正/却下のquick reply付き。
