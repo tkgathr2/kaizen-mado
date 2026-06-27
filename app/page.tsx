@@ -7,6 +7,7 @@ import { useSearchParams } from "next/navigation";
 // optional auth：このサイトで Google ログイン済みなら起票者名を自動で引き継ぐ（任意・強制しない）。
 import { useSession, signIn } from "next-auth/react";
 import { resolveSystem } from "@/lib/systems";
+import { lowerPriority } from "@/lib/priority";
 import { isEmbed } from "@/lib/embed";
 import { isEmbeddedContext, shouldShowLoginGate } from "@/lib/loginGate";
 import { resolveReporter } from "@/lib/reporter";
@@ -745,6 +746,22 @@ function KaizenMado() {
             <button className="primary" onClick={submit} disabled={status === "submitting"}>
               {status === "submitting" ? "送信中…" : "この内容で送る"}
             </button>
+            {/* 優先度を1段下げる（高→中→低・§4.14）。本人算出が既定で、利用者が手で微調整できる。
+                既に「低」のときや優先度が無いとき（旧チケット相当）は出さない。 */}
+            {ticket.priority && ticket.priority !== "低" && (
+              <button
+                className="ghost"
+                onClick={() =>
+                  setTicket((t) =>
+                    t && t.priority ? { ...t, priority: lowerPriority(t.priority) } : t
+                  )
+                }
+                disabled={status === "submitting"}
+                title="優先度を1段下げます（高→中→低）"
+              >
+                優先度を下げる
+              </button>
+            )}
             <button
               className="ghost"
               onClick={() => {
