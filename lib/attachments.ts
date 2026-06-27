@@ -3,7 +3,8 @@
 // 保存方式は base64 data URL を会話履歴で持ち回る最小実装（外部ストレージ非依存）。
 // Anthropic へは data URL から {type:"image",source:{type:"base64",...}} ブロックを組む。
 
-import type { Attachment, AttachmentMime } from "./types";
+import type { Attachment, AttachmentMime, FileMime } from "./types";
+import { extractOfficeText } from "./fileExtract";
 
 // 対応する画像 MIME（公開窓口なので png/jpeg/gif/webp に限定）。
 export const ALLOWED_MIMES: readonly AttachmentMime[] = [
@@ -13,12 +14,39 @@ export const ALLOWED_MIMES: readonly AttachmentMime[] = [
   "image/webp",
 ] as const;
 
+// 対応するファイル MIME（PDF＋テキスト系＋xlsx/docx）。
+export const ALLOWED_FILE_MIMES: readonly FileMime[] = [
+  "application/pdf",
+  "text/plain",
+  "text/csv",
+  "text/markdown",
+  "application/json",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+] as const;
+
+// 抽出してテキスト連結する系（base64→text）。
+const TEXT_FILE_MIMES: readonly FileMime[] = [
+  "text/plain",
+  "text/csv",
+  "text/markdown",
+  "application/json",
+] as const;
+
 // 1枚あたり上限（デコード後 5MB）。data URL は base64 で約 4/3 倍に膨らむ点に注意。
 export const MAX_BYTES_PER_IMAGE = 5 * 1024 * 1024;
-// 合計上限（10MB）。トークン肥大・ペイロード肥大の両方を抑える。
+// ファイル1点あたり上限（デコード後 10MB）。
+export const MAX_BYTES_PER_FILE = 10 * 1024 * 1024;
+// 合計上限（10MB）。トークン肥大・ペイロード肥大の両方を抑える（画像のみ経路の既定）。
 export const MAX_TOTAL_BYTES = 10 * 1024 * 1024;
-// 1ターンあたりの枚数上限。
+// ファイル添付を含む経路の合計上限（20MB）。
+export const MAX_TOTAL_FILE_BYTES = 20 * 1024 * 1024;
+// 1ターンあたりの点数上限（画像のみ経路）。
 export const MAX_ATTACHMENTS = 3;
+// ファイル添付を含む経路の点数上限。
+export const MAX_FILE_ATTACHMENTS = 5;
+// テキスト系を text ブロックに連結するときの 1 ファイルあたり文字数上限（1.5万字）。
+export const MAX_TEXT_CHARS = 15000;
 
 export type ValidationError =
   | "empty"
@@ -50,6 +78,25 @@ function isAllowedMime(mime: string): mime is AttachmentMime {
   return (ALLOWED_MIMES as readonly string[]).includes(mime);
 }
 
+function isAllowedFileMime(mime: string): mime is FileMime {
+  return (ALLOWED_FILE_MIMES as readonly string[]).includes(mime);
+}
+
+function isTextFileMime(mime: string): boolean {
+  return (TEXT_FILE_MIMES as readonly string[]).includes(mime);
+}
+
+function isPdfMime(mime: string): boolean {
+  return mime === "application/pdf";
+}
+
+function isOfficeMime(mime: string): boolean {
+  return (
+    mime === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+    mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+  );
+}
+
 // base64 をデコードしてバイト列（先頭のみで十分）を得る。失敗時は null。
 function decodeBase64Head(base64: string): Uint8Array | null {
   try {
@@ -70,6 +117,35 @@ function atobUniversal(b64: string): string {
   if (typeof atob === "function") return atob(b64);
   // Node フォールバック（テスト等）。
   return Buffer.from(b64, "base64").toString("binary");
+}
+
+// base64 全体をデコードして Uint8Array を得る（office 抽出・テキスト復号用）。失敗時 null。
+export function decodeBase64Full(base64: string): Uint8Array | null {
+  const clean = base64.replace(/\s+/g, "");
+  if (clean.length === 0) return null;
+  try {
+    if (typeof Buffer !== "undefined") {
+      return new Uint8Array(Buffer.from(clean, "base64"));
+    }
+    const bin = atobUniversal(clean);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+// バイト列を UTF-8 文字列へ。失敗時 null。
+function bytesToUtf8(bytes: Uint8Array): string | null {
+  try {
+    if (typeof TextDecoder !== "undefined") {
+      return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+    }
+    return Buffer.from(bytes).toString("utf-8");
+  } catch {
+    return null;
+  }
 }
 
 // base64 のデコード後バイト数を計算（実デコードせず長さから算出）。
@@ -128,6 +204,61 @@ function magicMatches(mime: AttachmentMime, head: Uint8Array): boolean {
     default:
       return false;
   }
+}
+
+// ファイル系のマジックバイト一致判定（PDF=%PDF / xlsx・docx=PKzip）。
+// テキスト系（csv/txt/md/json）は固有のマジックが無いので、宣言 MIME のみで通す。
+function fileMagicMatches(mime: FileMime, head: Uint8Array): boolean {
+  const b = head;
+  if (isPdfMime(mime)) {
+    // "%PDF" = 25 50 44 46
+    return b.length >= 4 && b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46;
+  }
+  if (isOfficeMime(mime)) {
+    // ZIP ローカルファイルヘッダ "PK\x03\x04"（空 zip 等の "PK\x05\x06"/"PK\x07\x08" も許容）。
+    return (
+      b.length >= 4 &&
+      b[0] === 0x50 &&
+      b[1] === 0x4b &&
+      (b[2] === 0x03 || b[2] === 0x05 || b[2] === 0x07) &&
+      (b[3] === 0x04 || b[3] === 0x06 || b[3] === 0x08)
+    );
+  }
+  // テキスト系はマジック検証なし（宣言 MIME と許可リストで担保）。
+  return isTextFileMime(mime);
+}
+
+/**
+ * ファイル添付候補1件を検証して安全な Attachment（kind:"file"）に整形する。
+ * - data URL 形式／ファイル MIME ホワイトリスト／マジックバイト／サイズ上限。
+ * - PDF・office・テキスト系を許可。画像は validateAttachment 側で扱う。
+ */
+export function validateFileAttachment(input: unknown): ValidateOneResult {
+  if (!input || typeof input !== "object") return { ok: false, error: "empty" };
+  const parsed = parseDataUrl((input as any).dataUrl);
+  if (!parsed) return { ok: false, error: "bad-format" };
+  if (!isAllowedFileMime(parsed.mime)) return { ok: false, error: "unsupported-mime" };
+
+  const bytes = base64ByteLength(parsed.base64);
+  if (bytes <= 0) return { ok: false, error: "empty" };
+  if (bytes > MAX_BYTES_PER_FILE) return { ok: false, error: "too-large" };
+
+  // バイナリ（PDF/office）はマジックバイトで裏取り。テキスト系は head を取れれば良い。
+  const head = decodeBase64Head(parsed.base64);
+  if (!head) return { ok: false, error: "decode-failed" };
+  if (!fileMagicMatches(parsed.mime as FileMime, head)) {
+    return { ok: false, error: "magic-mismatch" };
+  }
+
+  const attachment: Attachment = {
+    kind: "file",
+    dataUrl: `data:${parsed.mime};base64,${parsed.base64}`,
+    mime: parsed.mime as FileMime,
+    bytes,
+  };
+  const name = sanitizeName((input as any).name);
+  if (name) attachment.name = name;
+  return { ok: true, attachment };
 }
 
 /**
@@ -226,4 +357,121 @@ export function buildImageBlocks(
     });
   }
   return blocks;
+}
+
+// Anthropic の document（PDF）ブロック。
+export interface AnthropicDocumentBlock {
+  type: "document";
+  source: { type: "base64"; media_type: "application/pdf"; data: string };
+}
+
+export type AnthropicContentBlock =
+  | AnthropicImageBlock
+  | AnthropicDocumentBlock
+  | AnthropicTextBlock;
+
+// 添付が画像 or ファイルかを判定（kind 省略の旧データは MIME から推定）。
+export function isFileAttachment(a: Attachment): boolean {
+  if (a?.kind === "file") return true;
+  if (a?.kind === "image") return false;
+  // 旧データ（kind 省略）は MIME で判定（既存は画像のみ）。
+  const parsed = parseDataUrl(a?.dataUrl ?? "");
+  return parsed ? isAllowedFileMime(parsed.mime) : false;
+}
+
+/**
+ * ファイル添付（PDF / テキスト系 / xlsx・docx）を Anthropic のブロック配列へ変換する。
+ * - PDF：document ブロック（base64）。
+ * - テキスト系：base64→UTF-8 復号し「【添付ファイル: name】\n<中身(上限)>」を text ブロックに。
+ * - xlsx/docx：extractOfficeText でサーバ側抽出 → text ブロックに。失敗時はプレースホルダ。
+ * 不正・抽出失敗は会話を止めず握りつぶす（fail-safe）。
+ */
+export function buildFileBlocks(
+  attachments: Attachment[] | undefined
+): AnthropicContentBlock[] {
+  if (!Array.isArray(attachments)) return [];
+  const blocks: AnthropicContentBlock[] = [];
+  for (const a of attachments) {
+    const parsed = parseDataUrl(a?.dataUrl ?? "");
+    if (!parsed || !isAllowedFileMime(parsed.mime)) continue;
+    const mime = parsed.mime as FileMime;
+    const label = a?.name ? a.name : "ファイル";
+
+    if (isPdfMime(mime)) {
+      blocks.push({
+        type: "document",
+        source: { type: "base64", media_type: "application/pdf", data: parsed.base64 },
+      });
+      continue;
+    }
+
+    if (isTextFileMime(mime)) {
+      const bytes = decodeBase64Full(parsed.base64);
+      const text = bytes ? bytesToUtf8(bytes) : null;
+      const body = text != null ? clampText(text) : null;
+      blocks.push({
+        type: "text",
+        text:
+          body != null
+            ? `【添付ファイル: ${label}】\n${body}`
+            : `（中身を読めませんでした: ${label}）`,
+      });
+      continue;
+    }
+
+    if (isOfficeMime(mime)) {
+      const bytes = decodeBase64Full(parsed.base64);
+      const extracted = bytes ? extractOfficeText(mime, bytes) : null;
+      blocks.push({
+        type: "text",
+        text:
+          extracted != null && extracted.length > 0
+            ? `【添付ファイル: ${label}】\n${clampText(extracted)}`
+            : `（中身を読めませんでした: ${label}）`,
+      });
+      continue;
+    }
+  }
+  return blocks;
+}
+
+function clampText(text: string): string {
+  return text.length > MAX_TEXT_CHARS
+    ? text.slice(0, MAX_TEXT_CHARS) + "\n…（以下省略）"
+    : text;
+}
+
+/**
+ * 画像とファイルが混在した添付配列を検証する（withFiles=true の経路用）。
+ * - 各要素を画像 or ファイルとして検証（kind / MIME で振り分け）。
+ * - 点数 MAX_FILE_ATTACHMENTS・合計 MAX_TOTAL_FILE_BYTES の上限を適用。
+ * - allowImages=false（既定）のとき画像は通さない（画像は KAIZEN_VISION_ENABLED で別管理）。
+ * 返り値は安全な Attachment[]（画像は kind 省略のまま＝後方互換、ファイルは kind:"file"）。
+ */
+export function validateAttachmentsMixed(
+  input: unknown,
+  opts: { allowImages?: boolean } = {}
+): Attachment[] {
+  if (!Array.isArray(input)) return [];
+  const allowImages = opts.allowImages === true;
+  const out: Attachment[] = [];
+  let total = 0;
+  for (const item of input) {
+    if (out.length >= MAX_FILE_ATTACHMENTS) break;
+    // MIME から画像かファイルかを見て、適切な検証器に回す。
+    const parsed = parseDataUrl((item as any)?.dataUrl);
+    let res: ValidateOneResult;
+    if (parsed && isAllowedFileMime(parsed.mime)) {
+      res = validateFileAttachment(item);
+    } else if (allowImages) {
+      res = validateAttachment(item);
+    } else {
+      continue; // 画像は許可されていない（ファイル経路のみ）。
+    }
+    if (!res.ok || !res.attachment) continue;
+    if (total + res.attachment.bytes > MAX_TOTAL_FILE_BYTES) continue;
+    total += res.attachment.bytes;
+    out.push(res.attachment);
+  }
+  return out;
 }
