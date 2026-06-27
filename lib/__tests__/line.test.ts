@@ -146,6 +146,9 @@ describe("line（純関数）", () => {
       urgency: "中",
       recommendation: "GO推奨",
       goDraft: "...",
+      problemPlain: "一覧が重くて開くのが遅い",
+      fixPlain: ["表示を軽くする", "並び順を確かめる"],
+      riskPlain: "今の並び順がずれないか確認します",
       source: "claude",
     };
     const text = buildProposalText(ticket, d);
@@ -153,37 +156,51 @@ describe("line（純関数）", () => {
     expect(text).toContain("プロレポ");
     expect(text).toContain("GO推奨");
     expect(text).toContain("GO KZ-12");
-    // 読みやすさ改修（2026-06-12）：返信ガイド1行化＋Notion詳細リンク
-    expect(text).toContain("GO KZ-12／修正 KZ-12／却下 KZ-12");
     expect(text).toContain("https://www.notion.so/p1");
-    // W4：具体手順・リスク・重要度・緊急度を出す
-    expect(text).toContain("どう直す（手順）");
-    expect(text).toContain("①一覧にページングを追加");
-    expect(text).toContain("⚠ リスク：既存ソート互換");
-    expect(text).toContain("📊 重要度：高");
-    expect(text).toContain("⏱ 緊急度：中");
+    // 読みやすさ改修（2026-06-27）：素人語の見出し＋空行レイアウト
+    expect(text).toContain("❓ こまりごと");
+    expect(text).toContain("一覧が重くて開くのが遅い");
+    expect(text).toContain("🔧 直し方");
+    expect(text).toContain("・表示を軽くする");
+    expect(text).toContain("⚠ 気をつけること");
+    expect(text).toContain("今の並び順がずれないか確認します");
+    expect(text).toContain("📊 重要度 高／緊急度 中");
+    // GO/修正/却下 とID付き返信ガイドを含む
+    expect(text).toContain("GO ／ 修正 ／ 却下");
+    expect(text).toContain("GO KZ-12");
+    // mid-word の「…ほか○件」ぶつ切りは出さない
+    expect(text).not.toContain("…ほか");
+    // セクション間に空行（余白）がある
+    expect(text).toContain("\n\n❓ こまりごと");
   });
 
-  // W4：steps が空ならhoushinを「どう直す」一言にフォールバック、risksが空なら「特になし」
-  it("buildProposalText：steps無しはhoushin一言、risks無しは特になし", () => {
+  // plain が空なら houshin/steps/risks へフォールバックして破綻しない
+  it("buildProposalText：plain無しは houshin/steps/risks にフォールバック", () => {
     const ticket = {
       pageId: "p9", ticketId: "KZ-9", system: "プロレポ", type: "改善",
       importance: "中", title: "t", detail: "d", reporter: "現場", state: "GO待ち", fgsUrl: null,
     } as TicketRow;
     const d: DiscussResult = {
       houshin: "ここを直す方針です",
-      steps: [],
+      steps: ["①該当箇所を直す"],
       kousuu: "半日",
       risks: [],
       importance: "低",
       urgency: "低",
       recommendation: "要検討",
       goDraft: "",
+      problemPlain: "",
+      fixPlain: [],
+      riskPlain: "",
       source: "fallback",
     };
     const text = buildProposalText(ticket, d);
-    expect(text).toContain("🛠 どう直す：ここを直す方針です");
-    expect(text).toContain("⚠ リスク：特になし");
+    // problemPlain 空 → title/houshin から
+    expect(text).toContain("❓ こまりごと");
+    // fixPlain 空 → steps から
+    expect(text).toContain("・①該当箇所を直す");
+    // riskPlain 空・risks 空 → 特になし
+    expect(text).toContain("特になし");
   });
 });
 
@@ -258,19 +275,25 @@ describe("工程ステッパー stageBar", () => {
     expect(bar).toContain("🔵反映");
     expect(bar).not.toContain("・");
   });
-  it("提案文は主題（システム・タイトル）が先頭、工程バー・リンクは後ろ", () => {
+  it("提案文は主題（システム）が先頭、工程バー・リンクは後ろ", () => {
     const t = {
       pageId: "p1", ticketId: "KZ-20", system: "プロレポ", type: "改善",
       importance: "低", title: "一覧を新着順に", detail: "y", reporter: "現場",
       state: "GO待ち", fgsUrl: null,
     } as TicketRow;
-    const d: DiscussResult = { houshin: "a", steps: [], kousuu: "b", risks: [], importance: "中", urgency: "低", recommendation: "GO推奨", goDraft: "", source: "claude" };
+    const d: DiscussResult = {
+      houshin: "a", steps: [], kousuu: "b", risks: [],
+      importance: "中", urgency: "低", recommendation: "GO推奨", goDraft: "",
+      problemPlain: "一覧を新着順にしたい", fixPlain: ["並び順を新着順に変える"], riskPlain: "特になし",
+      source: "claude",
+    };
     const text = buildProposalText(t, d);
     const lines = text.split("\n");
-    // 1行目=やさしいシステム名（最上段）、2行目=種別、3行目=ざっくり何を
+    // 1行目=やさしいシステム名（最上段）、2行目=「カイゼンの提案」
     expect(lines[0]).toContain("プロレポ");
     expect(lines[1]).toContain("提案");
-    expect(lines[2]).toContain("一覧を新着順に");
+    // こまりごとに plain が出る
+    expect(text).toContain("一覧を新着順にしたい");
     // 工程バーとリンクは存在しつつ、主題より後ろ
     expect(text).toContain("🔵提案");
     expect(text).toContain("/board");

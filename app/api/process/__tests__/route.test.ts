@@ -137,6 +137,9 @@ describe("/api/process 失敗時の状態巻き戻し", () => {
       urgency: "中",
       recommendation: "GO推奨",
       goDraft: "g",
+      problemPlain: "こまりごと",
+      fixPlain: ["なおす"],
+      riskPlain: "特になし",
       source: "fallback",
     });
     preGate.mockReturnValue({ mode: "auto", reasons: [] });
