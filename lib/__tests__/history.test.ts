@@ -64,4 +64,17 @@ describe("sanitizeHistory（画像ゲート）", () => {
     expect(out[0].content.length).toBe(4000);
     expect(sanitizeHistory(null, true)).toEqual([]);
   });
+
+  it("10万件送られても末尾30件しか結果に残らない（早期 slice DoS 対策）", () => {
+    // 10万件の messages を生成 → sanitizeHistory は内部で slice(-31) してからループするので
+    // 最終出力は最大 30 件（slice(-30) 後）に収まる。
+    const many = Array.from({ length: 100_000 }, (_, i) => ({
+      role: i % 2 === 0 ? "user" : "assistant",
+      content: `msg${i}`,
+    }));
+    const out = sanitizeHistory(many, false);
+    expect(out.length).toBeLessThanOrEqual(30);
+    // 末尾側のメッセージが残っていることを確認（先頭が切られている）。
+    expect(out[out.length - 1].content).toBe("msg99999");
+  });
 });

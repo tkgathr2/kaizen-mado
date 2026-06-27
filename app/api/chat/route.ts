@@ -19,25 +19,25 @@ function visionEnabled(): boolean {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// 巨大ペイロードの JSON パース前に Content-Length ヘッダで弾く（DoS 対策）。
+// base64 画像3枚（各5MB）＋テキスト30ターン分でも ~20MB 以内に収まる想定で上限を設ける。
+// ヘッダが無い場合（chunked 転送など）はスキップし、後段のサイズ検証に委ねる。
+const CONTENT_LENGTH_LIMIT = 20 * 1024 * 1024; // 20MB
+
 export async function POST(req: NextRequest) {
-  let body: any;
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
+  // ── ① Content-Length による早期 413（JSON パース前）──
+  const clHeader = req.headers.get("content-length");
+  if (clHeader !== null) {
+    const cl = parseInt(clHeader, 10);
+    if (!isNaN(cl) && cl > CONTENT_LENGTH_LIMIT) {
+      return NextResponse.json(
+        { error: "payload too large" },
+        { status: 413 }
+      );
+    }
   }
 
-  const system = resolveSystem(body?.system);
-  const history = sanitizeHistory(body?.messages, visionEnabled());
-
-  if (history.length === 0 || history[history.length - 1].role !== "user") {
-    return NextResponse.json(
-      { error: "messages must end with a user turn" },
-      { status: 400 }
-    );
-  }
-
-  // ── 濫用・コスト保護（best-effort の第一防衛線）──
+  // ── ② レート制限（base64 の regex 走査前に効かせる）──
   // /api/chat は公開窓口で、1ターンごとに課金API（Anthropic）を呼ぶ。認証OFF時は完全公開のため、
   // スクリプトで叩かれるとコスト爆発・DoS になる。プロセス内メモリのスライディングウィンドウで
   // IP（無ければセッション/フォールバック）単位に控えめな上限を課す。例外時はブロックせず通す。
@@ -61,6 +61,24 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     // レート制限の内部エラーで会話を止めない（degrade-safe）。
     console.error("[chat] rate-limit check failed (ignored):", (err as Error).message);
+  }
+
+  // ── ③ JSON パース（レート制限後） ──
+  let body: any;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
+  }
+
+  const system = resolveSystem(body?.system);
+  const history = sanitizeHistory(body?.messages, visionEnabled());
+
+  if (history.length === 0 || history[history.length - 1].role !== "user") {
+    return NextResponse.json(
+      { error: "messages must end with a user turn" },
+      { status: 400 }
+    );
   }
 
   // まず Claude を試し、失敗したらフォールバックへ。会話は決して止めない。

@@ -51,7 +51,7 @@ function isAllowedMime(mime: string): mime is AttachmentMime {
 }
 
 // base64 をデコードしてバイト列（先頭のみで十分）を得る。失敗時は null。
-function decodeBase64Head(base64: string, maxBytes: number): Uint8Array | null {
+function decodeBase64Head(base64: string): Uint8Array | null {
   try {
     // 先頭 16 バイトだけ判定できれば十分（マジックバイト用）。ただし長さチェックは別途行う。
     const head = base64.slice(0, 64); // 約 48 バイト分
@@ -146,7 +146,7 @@ export function validateAttachment(input: unknown): ValidateOneResult {
   if (bytes <= 0) return { ok: false, error: "empty" };
   if (bytes > MAX_BYTES_PER_IMAGE) return { ok: false, error: "too-large" };
 
-  const head = decodeBase64Head(parsed.base64, MAX_BYTES_PER_IMAGE);
+  const head = decodeBase64Head(parsed.base64);
   if (!head) return { ok: false, error: "decode-failed" };
   if (!magicMatches(parsed.mime, head)) return { ok: false, error: "magic-mismatch" };
 

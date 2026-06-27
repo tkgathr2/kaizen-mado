@@ -6,8 +6,12 @@ import type { ChatMessage } from "./types";
 
 export function sanitizeHistory(input: unknown, withVision: boolean): ChatMessage[] {
   if (!Array.isArray(input)) return [];
+  // 先頭で末尾31件に絞る（暴走・DoS対策）。
+  // ループ内の magic-byte 検証・base64 走査を末尾31件だけに限定し、
+  // 10万件送られても O(1) で境界を入れる。
+  const trimmed = input.length > 31 ? input.slice(-31) : input;
   const out: ChatMessage[] = [];
-  for (const m of input) {
+  for (const m of trimmed) {
     const role = m?.role === "assistant" ? "assistant" : m?.role === "user" ? "user" : null;
     const content = typeof m?.content === "string" ? m.content : "";
     // 画像添付があるターンは content が空でも残す（画像だけ送るケース）。
