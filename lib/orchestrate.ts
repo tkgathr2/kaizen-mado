@@ -129,20 +129,23 @@ export function buildDispatchPayload(
 export interface DispatchInput {
   ticket: TicketRow;
   target: TargetMeta;
+  /** 真田自走：ゲート通過時にPRを自動マージ→本番反映まで進めてよいか。
+   * 「着手」＝社長GO済みのチケットは true（反映まで全自動）。 */
+  autoMerge?: boolean;
 }
 
 /**
  * 実行ワークフローを起動する。成功で true。
  * トークン未設定・失敗時は false（throwしない＝呼び出し元のループを止めない）。
  */
-export async function dispatchExecution({ ticket, target }: DispatchInput): Promise<boolean> {
+export async function dispatchExecution({ ticket, target, autoMerge = false }: DispatchInput): Promise<boolean> {
   const token = process.env.GITHUB_DISPATCH_TOKEN;
   if (!token) return false;
   if (!target.repo) return false;
 
   const payload = {
     event_type: DISPATCH_EVENT,
-    client_payload: buildDispatchPayload(ticket, target),
+    client_payload: buildDispatchPayload(ticket, target, autoMerge),
   };
 
   try {

@@ -85,6 +85,22 @@ describe("orchestrate", () => {
     expect(body.client_payload.ticketId).toBe("KZ-9");
     expect(body.client_payload.targetRepo).toBe("tkgathr2/sterepo");
     expect(body.client_payload.callbackUrl).toContain("/api/execute/callback");
+    // 既定（autoMerge未指定）は false。
+    expect(body.client_payload.autoMerge).toBe(false);
+  });
+
+  it("dispatchExecution(autoMerge:true) で client_payload.autoMerge=true（GO後＝反映まで）", async () => {
+    process.env.GITHUB_DISPATCH_TOKEN = "tok";
+    let captured: { url: string; init: any } | null = null;
+    global.fetch = vi.fn().mockImplementation((url: string, init: any) => {
+      captured = { url, init };
+      return Promise.resolve({ status: 204, text: async () => "" });
+    }) as any;
+
+    const ok = await dispatchExecution({ ticket: ticket(), target, autoMerge: true });
+    expect(ok).toBe(true);
+    const body = JSON.parse(captured!.init.body);
+    expect(body.client_payload.autoMerge).toBe(true);
   });
 
   it("非204応答は false", async () => {
