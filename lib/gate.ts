@@ -73,14 +73,13 @@ const SENSITIVE_EN_REGEXES = [
  * 社長を呼ぶのは preGate=escalate（金額/個人情報/認証/破壊/新機能/自動未許可システム）だけ。
  * ＝「社長と真田の関係」と同じ：安全は任せて事後報告、危険だけ確認。
  *
- * 既定ON（社長指示2026-06-13「いちいち聞くの面倒・真田との関係と同じに」）。
- * 影響範囲は autoEligible なシステム（現状カイゼンくん本体のみ）に限定され、さらに
- * GO推奨＋ジョブ内実検証(tsc/test/build)緑のときだけ自動マージするため安全。
- * 全停止したいときだけ env KAIZEN_AUTOPILOT=off|0|false を設定（キルスイッチ）。 */
+ * 既定OFF（安全側・フェイルクローズ）。無人で社長GOを飛ばして実改修→自動マージまで進むのは
+ * 影響が大きいため、明示的に env KAIZEN_AUTOPILOT=on|1|true|yes を入れたときだけ有効化する。
+ * 未設定・空・その他の値はすべて OFF（＝従来どおり GO待ち＋社長へGO伺い push）。
+ * これにより「設定漏れ／preview環境／誤設定」で無人自動実行が暴発する事故を防ぐ。 */
 export function autopilotEnabled(): boolean {
-  const v = (process.env.KAIZEN_AUTOPILOT || "").toLowerCase();
-  if (v === "off" || v === "0" || v === "false" || v === "no") return false;
-  return true;
+  const v = (process.env.KAIZEN_AUTOPILOT || "").trim().toLowerCase();
+  return v === "on" || v === "1" || v === "true" || v === "yes";
 }
 
 /** 着手前ゲート。自動可なら "auto"、危険要因があれば "escalate"（理由つき）。 */

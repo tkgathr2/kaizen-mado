@@ -196,6 +196,26 @@ function parseStatsRow(page: any): StatsRow {
   };
 }
 
+// ── 起票者名(PII)のマスキング ──
+// /api/stats は認証OFFの間（OAuth鍵未投入時）middleware に保護されず公開で叩ける。
+// その状態で起票者（社員氏名＝個人情報）を素のまま返すと第三者に漏れる。
+// 未認証アクセスでは起票者名を伏せる（集計値は維持）。日本語/英語の氏名を想定し、
+// 先頭1文字＋伏字にする（空は空のまま）。1文字の場合はそのまま伏字1個。
+export function maskReporterName(name: string): string {
+  const s = (name ?? "").trim();
+  if (!s) return "";
+  const head = Array.from(s)[0];
+  return `${head}***`;
+}
+
+/** KaizenStats の recent[].reporter をマスクした新オブジェクトを返す（非破壊）。 */
+export function maskStatsReporters(stats: KaizenStats): KaizenStats {
+  return {
+    ...stats,
+    recent: stats.recent.map((r) => ({ ...r, reporter: maskReporterName(r.reporter) })),
+  };
+}
+
 export async function fetchAllTicketRows(): Promise<StatsRow[]> {
   const token = process.env.NOTION_TOKEN;
   const databaseId = process.env.NOTION_DATABASE_ID;

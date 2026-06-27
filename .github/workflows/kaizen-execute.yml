@@ -93,17 +93,26 @@ jobs:
           LINES=$(git diff --cached --numstat | awk '{a+=$1; d+=$2} END {print a+d}')
           echo "diff lines: $LINES"
           TOUCHED=$(git diff --cached --name-only)
+          # 禁止パス判定（kaizen-loop.yml と同一の強化ロジック）。旧 grep -qiE のセグメント完全一致は
+          # 認可中核(authz/cronAuth/gate/targets)・ワークフロー自身(.github/)・prisma/schema・
+          # 複数形(payments/invoices)・ディレクトリ(app/members/)を素通しにしていた。
+          # (A)常に守る中核＋(B)概念マッチで塞ぐ。対象リポに scripts が無くてもよう、ここに展開する。
           HIT=""
+          TOUCHED_LC="$(printf '%s' "$TOUCHED" | tr '[:upper:]' '[:lower:]')"
+          contains() { case "$TOUCHED_LC" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
+          ALWAYS_FORBIDDEN="authz cronauth /gate gate.ts targets.ts .github/ workflows/ prisma schema .sql migration migrations members roster meibo cast pii personal billing payment payments invoice invoices secrets .env auth middleware credential"
+          for kw in $ALWAYS_FORBIDDEN; do contains "$kw" && HIT="$HIT $kw"; done
           IFS=',' read -ra PATHS <<< "$FORBIDDEN"
           for p in "${PATHS[@]}"; do
+            p="$(printf '%s' "$p" | tr '[:upper:]' '[:lower:]' | sed 's/^ *//; s/ *$//')"
             [ -z "$p" ] && continue
-            # パスセグメント境界で判定する。素の grep -qi は部分一致のため
-            #   "auth" が AuthorCard.tsx を誤検知（過剰review）／逆に意図した境界での取りこぼし
-            # を起こしていた。TOUCHED は改行区切り（git --name-only）なので、各パスの
-            # 区切り（行頭/スラッシュ/カンマ ～ スラッシュ/行末/ドット/カンマ）で挟まれた時だけ当てる。
-            if echo "$TOUCHED" | grep -qiE "(^|[/,])$p(/|$|\.|,)"; then HIT="$HIT $p"; fi
+            if contains "$p"; then HIT="$HIT $p"; continue; fi
+            stem="${p%.*}"
+            if [ "$stem" != "$p" ] && [ -n "$stem" ] && contains "$stem"; then HIT="$HIT $p"; continue; fi
+            contains "${p}s" && HIT="$HIT $p"
           done
           if [ -n "$HIT" ]; then
+            HIT="$(printf '%s\n' $HIT | sort -u | tr '\n' ' ' | sed 's/ *$//')"
             echo "verdict=review" >> "$GITHUB_OUTPUT"
             echo "detail=禁止パス接触:$HIT" >> "$GITHUB_OUTPUT"
           elif [ "${LINES:-0}" -ge 50 ]; then

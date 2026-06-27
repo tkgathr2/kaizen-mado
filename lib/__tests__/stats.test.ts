@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { aggregateTickets, type StatsRow } from "@/lib/stats";
+import {
+  aggregateTickets,
+  maskReporterName,
+  maskStatsReporters,
+  type StatsRow,
+} from "@/lib/stats";
 
 // 固定の「今」：2026-06-11(木) 12:00 JST想定（ローカルタイムで生成）
 const NOW = new Date(2026, 5, 11, 12, 0, 0);
@@ -108,5 +113,30 @@ describe("aggregateTickets", () => {
     expect(s.recent).toHaveLength(10);
     const times = s.recent.map((r) => Date.parse(r.createdTime));
     expect([...times].sort((a, b) => b - a)).toEqual(times);
+  });
+});
+
+describe("起票者(PII)マスキング", () => {
+  it("maskReporterName は先頭1文字＋伏字（空は空）", () => {
+    expect(maskReporterName("高木 篤宏")).toBe("高***");
+    expect(maskReporterName("Wakimoto")).toBe("W***");
+    expect(maskReporterName(" 脇本 ")).toBe("脇***"); // 前後空白除去
+    expect(maskReporterName("")).toBe("");
+    expect(maskReporterName("   ")).toBe("");
+  });
+
+  it("maskStatsReporters は recent の reporter だけ伏せ、集計値は不変・非破壊", () => {
+    const base = aggregateTickets([
+      row({ ticketId: "KZ-1", reporter: "高木 篤宏", createdTime: new Date(2026, 5, 10).toISOString() }),
+      row({ ticketId: "KZ-2", reporter: "脇本", state: "完了", createdTime: new Date(2026, 5, 9).toISOString() }),
+    ], NOW);
+    const masked = maskStatsReporters(base);
+    expect(masked.recent.map((r) => r.reporter)).toEqual(["高***", "脇***"]);
+    // 集計値（total/done/doneRate）は変わらない。
+    expect(masked.total).toBe(base.total);
+    expect(masked.done).toBe(base.done);
+    expect(masked.doneRate).toBe(base.doneRate);
+    // 非破壊：元の base は生のまま。
+    expect(base.recent.some((r) => r.reporter.includes("***"))).toBe(false);
   });
 });

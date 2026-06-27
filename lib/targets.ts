@@ -21,18 +21,54 @@ export interface TargetMeta {
 }
 
 // 共通の禁止パス（秘密情報・認証・課金・マイグレーション・PII）。
+// ワークフロー側ゲートは「概念マッチ（部分一致＋複数形＋拡張子無視）」で判定するため、
+// ここは概念キーワードを並べれば members.ts / app/members/ / payments / invoices なども捕捉される。
+// ※ ゲートには target に依らず常に守る ALWAYS_FORBIDDEN（authz/cronAuth/gate/targets/.github/
+//    prisma/schema 等）が別途あるが、ここでも明示しておき「データ＝forbiddenPaths」だけ見ても
+//    意図が分かるようにする（多層防御）。
 const COMMON_FORBIDDEN = [
+  // 秘密情報・認証・セッション
   ".env",
   "secrets",
   "auth",
+  "authz",
+  "credential",
+  "token",
   "middleware",
+  // DBスキーマ・マイグレーション
+  "prisma",
+  "schema",
+  ".sql",
   "migration",
   "migrations",
+  // 課金（複数形はゲートが補完するが明示しておく）
   "billing",
   "payment",
   "invoice",
-  "members.ts",
+  // PII（個人情報の気配）
+  "members",
+  "roster",
   "meibo",
+  "cast",
+  "pii",
+  "personal",
+];
+
+// PII（個人情報）を恒常的に保有する対象は、共通に加えてより厳しい禁止語を足す。
+// 例：キャスト名簿くん（cast-meibo）= 氏名・連絡先等を扱うため、より広く自動改修を止める。
+const PII_HEAVY_FORBIDDEN = [
+  ...COMMON_FORBIDDEN,
+  "user",
+  "users",
+  "profile",
+  "contact",
+  "phone",
+  "email",
+  "address",
+  "name",
+  "csv",
+  "export",
+  "import",
 ];
 
 // repo は確証のあるものだけ記載。未確定は null（=自動不可＝PR先が無いため物理的に直せない）。
@@ -47,7 +83,8 @@ export const TARGETS: TargetMeta[] = [
   { system: "ほうこちゃん", repo: "tkgathr2/security-report-system", healthUrl: "https://houko-control-production.up.railway.app", forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
   { system: "mfc-invoice-upload", repo: null, healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
   { system: "Indeed応募通知", repo: "tkgathr2/recruit", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
-  { system: "キャスト名簿くん", repo: "tkgathr2/cast-meibo", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
+  // キャスト名簿くん＝氏名・連絡先等のPIIを恒常保有＝より厳しい PII_HEAVY_FORBIDDEN。
+  { system: "キャスト名簿くん", repo: "tkgathr2/cast-meibo", healthUrl: null, forbiddenPaths: PII_HEAVY_FORBIDDEN, autoEligible: true },
   { system: "らくらく契約くん", repo: null, healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
   // 巡回くん＝Indeed公開ページ巡回ツール（テレアポリスト自動収集・Node.js/Railway）。https://junkai.takagi.bz
   { system: "巡回くん", repo: "tkgathr2/junkai-kun", healthUrl: "https://junkai.takagi.bz", forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },

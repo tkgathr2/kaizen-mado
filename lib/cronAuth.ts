@@ -6,6 +6,7 @@
 // preview/誤設定で内部APIが素通しになる事故を防ぐ。
 // 開発の利便のためにだけ、明示フラグ ALLOW_INSECURE_CRON=1 のときに限り未設定でも通す。
 import type { NextRequest } from "next/server";
+import { createHmac, timingSafeEqual } from "node:crypto";
 
 export function checkCronSecret(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
@@ -22,10 +23,40 @@ export function checkCronSecret(req: NextRequest): boolean {
   return false;
 }
 
-// 長さ非依存の簡易定数時間比較（タイミング差を減らす）。
+// ── admin/go 専用認証 ──
+// /api/admin/go は「GO/修正/却下を直接適用する」強い操作（社長GOの奪取に直結）。
+// 共用の CRON_SECRET だけに依存すると、cron 用の鍵を知る者が誰でも GO を奪える。
+// そこで CRON_SECRET から分離する：
+//   - ADMIN_GO_SECRET が設定されていれば、それと一致する x-admin-go-secret を必須にする
+//     （CRON_SECRET では通さない＝鍵を完全分離）。
+//   - ADMIN_GO_SECRET 未設定なら、本番(production)では無効化（呼び出し側で 404）。
+//     非本番では従来どおり CRON_SECRET で通す（デモ・切り分け検証の利便を維持）。
+// 返り値：
+//   "ok"           … 認証成功
+//   "unauthorized" … 認証失敗（401）
+//   "disabled"     … 本番で ADMIN_GO_SECRET 未設定＝この口は塞ぐ（404 で存在を隠す）
+export function checkAdminGoAuth(req: NextRequest): "ok" | "unauthorized" | "disabled" {
+  const adminSecret = process.env.ADMIN_GO_SECRET;
+  if (adminSecret && adminSecret.trim()) {
+    const x = req.headers.get("x-admin-go-secret");
+    return x && safeEqual(x, adminSecret) ? "ok" : "unauthorized";
+  }
+  // ADMIN_GO_SECRET 未設定：本番では塞ぐ（共用CRON_SECRETでのGO奪取を防ぐ）。
+  if (process.env.NODE_ENV === "production") return "disabled";
+  // 非本番のみ、従来の CRON_SECRET 認証にフォールバック（デモ・検証用）。
+  return checkCronSecret(req) ? "ok" : "unauthorized";
+}
+
+// 長さに依存しない定数時間比較。
+// 入力長そのものがタイミング/例外で漏れないよう、まず両者を HMAC で固定長(32byte)に畳んでから
+// crypto.timingSafeEqual で比較する（timingSafeEqual は長さ不一致で throw するため、HMAC化で
+// 必ず同じ長さにそろえる）。鍵は実行ごとにランダムでよい（同一プロセス内で a/b を同条件に揃える目的）。
+const HMAC_KEY = createHmac("sha256", "cronAuth")
+  .update(String(Date.now()) + Math.random())
+  .digest();
+
 function safeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
+  const ha = createHmac("sha256", HMAC_KEY).update(a, "utf8").digest();
+  const hb = createHmac("sha256", HMAC_KEY).update(b, "utf8").digest();
+  return timingSafeEqual(ha, hb);
 }

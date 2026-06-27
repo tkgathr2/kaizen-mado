@@ -20,4 +20,29 @@ describe("targets", () => {
     const repoNull = TARGETS.filter((t) => t.repo === null);
     expect(repoNull.length).toBeGreaterThan(0);
   });
+
+  it("共通 forbiddenPaths は概念キーワードへ拡張済み（members.ts 単一依存を脱却）", () => {
+    // 全システムの forbiddenPaths に、PII/認可/スキーマ系の概念語が入っていること。
+    for (const t of TARGETS) {
+      const fp = t.forbiddenPaths;
+      // PII＝members 1ファイル名依存ではなく概念語(members/meibo)で守る
+      expect(fp).toContain("members");
+      expect(fp).toContain("meibo");
+      // 認可・スキーマ・課金の概念
+      expect(fp).toContain("authz");
+      expect(fp).toContain("prisma");
+      expect(fp).toContain("schema");
+      expect(fp).toContain("payment");
+    }
+  });
+
+  it("PII保有対象（キャスト名簿くん）はより厳しい禁止語を持つ", () => {
+    const cast = findTarget("キャスト名簿くん")!;
+    // 共通には無い PII_HEAVY 専用語が乗っていること。
+    expect(cast.forbiddenPaths).toContain("phone");
+    expect(cast.forbiddenPaths).toContain("email");
+    expect(cast.forbiddenPaths).toContain("export");
+    // 共通語も含む（スーパーセット）。
+    expect(cast.forbiddenPaths).toContain("meibo");
+  });
 });

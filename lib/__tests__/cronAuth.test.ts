@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { checkCronSecret } from "../cronAuth";
+import { checkCronSecret, checkAdminGoAuth } from "../cronAuth";
 import type { NextRequest } from "next/server";
 
 // headers.get だけ使う最小のリクエストを作る。
@@ -82,5 +82,62 @@ describe("checkCronSecret", () => {
     expect(checkCronSecret(reqWith({ "x-cron-secret": "s3cret" }))).toBe(true);
     expect(checkCronSecret(reqWith({ "x-cron-secret": "wrong" }))).toBe(false);
     expect(checkCronSecret(reqWith({}))).toBe(false);
+  });
+
+  // ── timingSafeEqual ベースの比較は、長さの違う秘密でも throw せず false を返す ──
+  it("長さの異なる秘密でも例外を投げず正しく拒否する（HMAC固定長化＋timingSafeEqual）", () => {
+    process.env.CRON_SECRET = "short";
+    // 与える x-cron-secret は長さがまちまち。timingSafeEqual は本来長さ不一致で throw するが、
+    // HMACで固定長化しているため throw せず false を返すこと。
+    expect(() => checkCronSecret(reqWith({ "x-cron-secret": "a-much-longer-value" }))).not.toThrow();
+    expect(checkCronSecret(reqWith({ "x-cron-secret": "a-much-longer-value" }))).toBe(false);
+    expect(checkCronSecret(reqWith({ "x-cron-secret": "" }))).toBe(false);
+    expect(checkCronSecret(reqWith({ "x-cron-secret": "short" }))).toBe(true);
+  });
+});
+
+describe("checkAdminGoAuth（GO奪取防止・CRON_SECRETから分離）", () => {
+  let savedCron: string | undefined;
+  let savedAdmin: string | undefined;
+  let savedEnv: string | undefined;
+
+  beforeEach(() => {
+    savedCron = process.env.CRON_SECRET;
+    savedAdmin = process.env.ADMIN_GO_SECRET;
+    savedEnv = process.env.NODE_ENV;
+  });
+  afterEach(() => {
+    if (savedCron === undefined) delete process.env.CRON_SECRET;
+    else process.env.CRON_SECRET = savedCron;
+    if (savedAdmin === undefined) delete process.env.ADMIN_GO_SECRET;
+    else process.env.ADMIN_GO_SECRET = savedAdmin;
+    if (savedEnv === undefined) delete (process.env as any).NODE_ENV;
+    else (process.env as any).NODE_ENV = savedEnv;
+  });
+
+  it("ADMIN_GO_SECRET 設定時は専用ヘッダ必須・CRON_SECRETでは通らない", () => {
+    process.env.ADMIN_GO_SECRET = "admin-key";
+    process.env.CRON_SECRET = "cron-key";
+    (process.env as any).NODE_ENV = "production";
+    expect(checkAdminGoAuth(reqWith({ "x-admin-go-secret": "admin-key" }))).toBe("ok");
+    expect(checkAdminGoAuth(reqWith({ "x-admin-go-secret": "wrong" }))).toBe("unauthorized");
+    // cron鍵を知っていてもGOは奪えない（分離）。
+    expect(checkAdminGoAuth(reqWith({ "x-cron-secret": "cron-key" }))).toBe("unauthorized");
+  });
+
+  it("本番でADMIN_GO_SECRET未設定なら disabled（口を塞ぐ）", () => {
+    delete process.env.ADMIN_GO_SECRET;
+    process.env.CRON_SECRET = "cron-key";
+    (process.env as any).NODE_ENV = "production";
+    // cron鍵が一致しても本番では塞ぐ。
+    expect(checkAdminGoAuth(reqWith({ "x-cron-secret": "cron-key" }))).toBe("disabled");
+  });
+
+  it("非本番でADMIN_GO_SECRET未設定ならCRON_SECRETにフォールバック（デモ/検証）", () => {
+    delete process.env.ADMIN_GO_SECRET;
+    process.env.CRON_SECRET = "cron-key";
+    (process.env as any).NODE_ENV = "development";
+    expect(checkAdminGoAuth(reqWith({ "x-cron-secret": "cron-key" }))).toBe("ok");
+    expect(checkAdminGoAuth(reqWith({ "x-cron-secret": "wrong" }))).toBe("unauthorized");
   });
 });

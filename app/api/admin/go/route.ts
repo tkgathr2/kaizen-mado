@@ -6,14 +6,20 @@ import { findGoMachiByTicketId, fetchTicketsByState } from "@/lib/tickets";
 import { applyGoAction } from "@/lib/govote";
 import type { GoAction } from "@/lib/line";
 import { kickEndpoint } from "@/lib/trigger";
-import { checkCronSecret } from "@/lib/cronAuth";
+import { checkAdminGoAuth } from "@/lib/cronAuth";
 import { waitUntil } from "@vercel/functions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
-  if (!checkCronSecret(req)) {
+  // GO奪取防止：共用CRON_SECRETから分離した専用認証。
+  // 本番で ADMIN_GO_SECRET 未設定なら 404（口を塞ぎ存在も隠す）。設定時は x-admin-go-secret 必須。
+  const auth = checkAdminGoAuth(req);
+  if (auth === "disabled") {
+    return NextResponse.json({ error: "not found" }, { status: 404 });
+  }
+  if (auth !== "ok") {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
