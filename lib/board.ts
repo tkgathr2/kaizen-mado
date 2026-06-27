@@ -75,6 +75,10 @@ export interface BoardCard {
   lastEdited: string;
   /** Notionの該当チケットページ（クリックで全文＝議論結果・PRリンクが見られる）。 */
   url: string;
+  // ── 優先度スコアリング（§4.5.1・PIIではないので公開可。旧チケットは undefined＝「—」）──
+  urgency?: number;
+  importanceScore?: number;
+  priority?: string;
 }
 
 export interface BoardColumn {
@@ -100,6 +104,10 @@ export function toBoardCard(t: TicketRow): BoardCard {
     state: t.state || "未設定",
     lastEdited: t.lastEdited || "",
     url: notionUrlFromPageId(t.pageId),
+    // 優先度スコアリング（任意・PIIではない）。旧チケットは undefined。
+    ...(typeof t.urgency === "number" ? { urgency: t.urgency } : {}),
+    ...(typeof t.importanceScore === "number" ? { importanceScore: t.importanceScore } : {}),
+    ...(t.priority ? { priority: t.priority } : {}),
   };
 }
 

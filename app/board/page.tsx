@@ -19,6 +19,8 @@ interface BoardData {
 }
 
 const IMP_COLOR: Record<string, string> = { 高: "#b4452b", 中: "#9a5a16", 低: "#83807a" };
+// 優先度バッジ色（仕様書 §4.13・確認カードと同色）。
+const PRIO_COLOR: Record<string, string> = { 高: "#A32D2D", 中: "#BA7517", 低: "#5F5E5A" };
 
 const POLL_MS = 20000;
 
@@ -154,12 +156,29 @@ export default function BoardPage() {
                         <div className="board-card-title">{c.title}</div>
                         <div className="board-card-foot">
                           {c.type && <span className="board-tag">{c.type}</span>}
-                          {c.importance && (
+                          {/* 優先度バッジ（新）。旧チケット（priority無し）は出さず重要度のみ表示。 */}
+                          {c.priority ? (
                             <span
-                              className="board-tag"
-                              style={{ color: IMP_COLOR[c.importance] ?? "#83807a" }}
+                              className="board-prio"
+                              style={{ background: PRIO_COLOR[c.priority] ?? "#5F5E5A" }}
                             >
-                              重要度{c.importance}
+                              優先度{c.priority}
+                            </span>
+                          ) : (
+                            c.importance && (
+                              <span
+                                className="board-tag"
+                                style={{ color: IMP_COLOR[c.importance] ?? "#83807a" }}
+                              >
+                                重要度{c.importance}
+                              </span>
+                            )
+                          )}
+                          {(typeof c.urgency === "number" ||
+                            typeof c.importanceScore === "number") && (
+                            <span className="board-tag" title="緊急度／重要度（各10点満点）">
+                              {typeof c.urgency === "number" ? c.urgency : "—"}／
+                              {typeof c.importanceScore === "number" ? c.importanceScore : "—"}
                             </span>
                           )}
                           {c.lastEdited && (

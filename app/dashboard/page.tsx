@@ -11,6 +11,9 @@ import { metaOf } from "@/lib/board";
 // 進行中件数の純粋ロジックは app/dashboard/inProgress.ts に分離（テスト可能にするため）。
 import { inProgressFromFunnel } from "./inProgress";
 
+// 優先度バッジ色（仕様書 §4.13・確認カード／ボードと同色）。
+const PRIO_COLOR: Record<string, string> = { 高: "#A32D2D", 中: "#BA7517", 低: "#5F5E5A" };
+
 function fmtDate(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
@@ -126,9 +129,22 @@ export default function DashboardPage() {
               </span>
               <span className="dash-recent-title">
                 {r.title}
+                {r.priority && (
+                  <span
+                    className="dash-recent-prio"
+                    style={{ background: PRIO_COLOR[r.priority] ?? "#5F5E5A" }}
+                  >
+                    {r.priority}
+                  </span>
+                )}
                 <small>
                   {r.system}
                   {r.reporter ? `／${r.reporter}` : ""}（{r.ticketId}）
+                  {(typeof r.urgency === "number" ||
+                    typeof r.importanceScore === "number") &&
+                    ` 緊急${typeof r.urgency === "number" ? r.urgency : "—"}/重要${
+                      typeof r.importanceScore === "number" ? r.importanceScore : "—"
+                    }`}
                 </small>
               </span>
             </div>

@@ -1,8 +1,9 @@
 // ── Anthropic API 呼び出し（サーバ側のみ。キーはクライアントへ出さない） ──
 // LLMのフリーテキストJSONをパースすると壊れやすいため、tool use（構造化出力）を
 // 強制して、モデルには検証済みのオブジェクトを直接返させる。文字列パースに依存しない。
-import type { TurnResult, Ticket, Phase, TicketType, Importance } from "./types";
+import type { TurnResult, Ticket, Phase, TicketType, Importance, Priority } from "./types";
 import { readSlackForSystem } from "./slack";
+import { clampScore, computePriority, isPriority } from "./priority";
 
 const API_URL = "https://api.anthropic.com/v1/messages";
 const DEFAULT_MODEL = "claude-sonnet-4-6";
@@ -57,8 +58,39 @@ const TURN_TOOL = {
           title: { type: "string", description: "短い件名（30字程度）" },
           detail: { type: "string", description: "背景・困りごと・要望を3〜6文で" },
           importance: { type: "string", enum: ["高", "中", "低"] },
+          // ── 優先度スコアリング（§4.5.1・ユーザーには優先度を聞かず本人が算出）──
+          urgency: {
+            type: "number",
+            description:
+              "緊急度 1〜10。9-10=今まさに業務が止まる／5-6=たまに困る・回避策あり／1-2=気になる程度。会話内容から判定。",
+          },
+          importanceScore: {
+            type: "number",
+            description:
+              "重要度 1〜10。9-10=売上・採用・法令・安全に直結／多人数が毎日使う／5-6=一部業務に影響／1-2=あれば嬉しい。会話内容から判定。",
+          },
+          priority: {
+            type: "string",
+            enum: ["高", "中", "低"],
+            description:
+              "優先度。高=緊急度か重要度が8以上かつ合計14以上／中=合計8-13／低=合計7以下。",
+          },
+          priorityReason: {
+            type: "string",
+            description: "優先度の算出根拠を1行で（例：業務が止まる×全員が使う＝高）。",
+          },
         },
-        required: ["system", "type", "title", "detail", "importance"],
+        required: [
+          "system",
+          "type",
+          "title",
+          "detail",
+          "importance",
+          "urgency",
+          "importanceScore",
+          "priority",
+          "priorityReason",
+        ],
       },
     },
     required: ["reply", "phase"],
@@ -224,9 +256,48 @@ export function coerceTurn(obj: any): TurnResult {
       title: String(t.title ?? "").slice(0, 100) || "改善のご要望",
       detail: String(t.detail ?? "").slice(0, 1800),
       importance: coerceImportance(t.importance),
+      ...coerceScoring(t),
     };
   }
   return { reply, phase, ticket };
+}
+
+/**
+ * 優先度スコアリングの安全整形（§4.5.1）。
+ * - urgency / importanceScore を 1〜10 にクランプ（数値でなければ undefined＝未算出）。
+ * - priority は 高/中/低 のみ採用。欠落／不正で両点数が揃っていれば点数から算出（フォールバック）。
+ * - priorityReason は文字列のみ・長すぎる根拠は切る。
+ * 旧チケット互換：点数が無いケースでは各フィールドを undefined のままにする（表示は「—」）。
+ */
+function coerceScoring(t: any): {
+  urgency?: number;
+  importanceScore?: number;
+  priority?: Priority;
+  priorityReason?: string;
+} {
+  const urgency = clampScore(t?.urgency);
+  const importanceScore = clampScore(t?.importanceScore);
+
+  let priority: Priority | undefined = isPriority(t?.priority) ? t.priority : undefined;
+  // 優先度が欠落／不正でも、両点数が揃っていれば点数から導く（欠落時の点数フォールバック）。
+  if (!priority && urgency != null && importanceScore != null) {
+    priority = computePriority(urgency, importanceScore);
+  }
+
+  const reasonRaw = typeof t?.priorityReason === "string" ? t.priorityReason.trim() : "";
+  const priorityReason = reasonRaw ? reasonRaw.slice(0, 200) : undefined;
+
+  const out: {
+    urgency?: number;
+    importanceScore?: number;
+    priority?: Priority;
+    priorityReason?: string;
+  } = {};
+  if (urgency != null) out.urgency = urgency;
+  if (importanceScore != null) out.importanceScore = importanceScore;
+  if (priority) out.priority = priority;
+  if (priorityReason) out.priorityReason = priorityReason;
+  return out;
 }
 
 function coerceType(v: unknown): TicketType {

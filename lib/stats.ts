@@ -16,6 +16,10 @@ export interface StatsRow {
   reporter: string;
   createdTime: string; // ISO
   learned: boolean; // FGSリンク有り＝学びDB還元済み
+  // 優先度スコアリング（任意・旧チケットは undefined＝表示は「—」）。
+  urgency?: number;
+  importanceScore?: number;
+  priority?: string;
 }
 
 export interface WeekPoint {
@@ -34,7 +38,17 @@ export interface KaizenStats {
   byState: { name: string; count: number }[];
   bySystem: { name: string; total: number; done: number }[];
   weekly: WeekPoint[]; // 直近8週（古→新）
-  recent: { ticketId: string; title: string; system: string; state: string; reporter: string; createdTime: string }[];
+  recent: {
+    ticketId: string;
+    title: string;
+    system: string;
+    state: string;
+    reporter: string;
+    createdTime: string;
+    urgency?: number;
+    importanceScore?: number;
+    priority?: string;
+  }[];
   generatedAt: string;
 }
 
@@ -104,14 +118,29 @@ export function aggregateTickets(rows: StatsRow[], now: Date = new Date()): Kaiz
   const recent = [...rows]
     .sort((a, b) => Date.parse(b.createdTime) - Date.parse(a.createdTime))
     .slice(0, 10)
-    .map(({ ticketId, title, system, state, reporter, createdTime }) => ({
-      ticketId,
-      title,
-      system,
-      state,
-      reporter,
-      createdTime,
-    }));
+    .map(
+      ({
+        ticketId,
+        title,
+        system,
+        state,
+        reporter,
+        createdTime,
+        urgency,
+        importanceScore,
+        priority,
+      }) => ({
+        ticketId,
+        title,
+        system,
+        state,
+        reporter,
+        createdTime,
+        ...(typeof urgency === "number" ? { urgency } : {}),
+        ...(typeof importanceScore === "number" ? { importanceScore } : {}),
+        ...(priority ? { priority } : {}),
+      })
+    );
 
   return {
     total,
@@ -156,6 +185,14 @@ function parseStatsRow(page: any): StatsRow {
     reporter: plain(props["起票者"], "rich_text"),
     createdTime: page?.created_time ?? "",
     learned: typeof props["FGSリンク"]?.url === "string" && !!props["FGSリンク"].url,
+    // 優先度スコアリング（プロパティが無ければ undefined＝旧チケット互換）。
+    urgency:
+      typeof props["緊急度"]?.number === "number" ? props["緊急度"].number : undefined,
+    importanceScore:
+      typeof props["重要度スコア"]?.number === "number"
+        ? props["重要度スコア"].number
+        : undefined,
+    priority: props["優先度"]?.select?.name || undefined,
   };
 }
 
