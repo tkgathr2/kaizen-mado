@@ -1,7 +1,7 @@
 // ── POST /api/chat ── 会話1ターン処理（履歴→Claude→{reply,phase,ticket}）
 import { NextRequest, NextResponse } from "next/server";
 import { buildSystemPrompt, toAnthropicMessages } from "@/lib/prompt";
-import { callClaude, callClaudeWithSlack } from "@/lib/anthropic";
+import { callClaude, callClaudeWithSlack, chunkReply } from "@/lib/anthropic";
 import { slackAvailableForSystem } from "@/lib/slack";
 import { fallbackTurn } from "@/lib/fallback";
 import { resolveSystem } from "@/lib/systems";
@@ -11,18 +11,29 @@ import { sanitizeHistory } from "@/lib/history";
 import type { TurnResult } from "@/lib/types";
 
 // 画像をモデルへ渡すか（既定OFF＝従来テキスト挙動・回帰ゼロ）。
-// "true" のときだけ各 user ターンの attachments を検証して通す。
+// "true" のときだけ各 user ターンの画像 attachments を検証して通す。
 function visionEnabled(): boolean {
   return process.env.KAIZEN_VISION_ENABLED === "true";
+}
+
+// ファイル（PDF/テキスト/xlsx/docx）をモデルへ渡すか（既定OFF＝回帰ゼロ）。
+function filesEnabled(): boolean {
+  return process.env.KAIZEN_FILES_ENABLED === "true";
+}
+
+// SSE ストリーミングを有効にするか（既定OFF＝従来の一括 JSON 応答）。
+function streamEnabled(): boolean {
+  return process.env.KAIZEN_STREAM_ENABLED === "true";
 }
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // 巨大ペイロードの JSON パース前に Content-Length ヘッダで弾く（DoS 対策）。
-// base64 画像3枚（各5MB）＋テキスト30ターン分でも ~20MB 以内に収まる想定で上限を設ける。
+// base64 画像/ファイル（合計~20MB）＋テキスト30ターン分でも収まる想定。
+// ファイル添付経路では合計20MBまで許すため、ヘッダ上限は 25MB に拡張（超は 413）。
 // ヘッダが無い場合（chunked 転送など）はスキップし、後段のサイズ検証に委ねる。
-const CONTENT_LENGTH_LIMIT = 20 * 1024 * 1024; // 20MB
+const CONTENT_LENGTH_LIMIT = 25 * 1024 * 1024; // 25MB
 
 export async function POST(req: NextRequest) {
   // ── ① Content-Length による早期 413（JSON パース前）──
@@ -72,7 +83,10 @@ export async function POST(req: NextRequest) {
   }
 
   const system = resolveSystem(body?.system);
-  const history = sanitizeHistory(body?.messages, visionEnabled());
+  const history = sanitizeHistory(body?.messages, {
+    withVision: visionEnabled(),
+    withFiles: filesEnabled(),
+  });
 
   if (history.length === 0 || history[history.length - 1].role !== "user") {
     return NextResponse.json(
@@ -81,7 +95,27 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // まず Claude を試し、失敗したらフォールバックへ。会話は決して止めない。
+  // ── ④ ストリーミング判定（フラグON かつ クライアントが要求したとき） ──
+  // 要求＝body.stream===true もしくは Accept: text/event-stream。
+  const wantsStream =
+    body?.stream === true || (req.headers.get("accept") || "").includes("text/event-stream");
+
+  if (wantsStream && streamEnabled()) {
+    return streamResponse(system, history);
+  }
+
+  const { result, usedFallback } = await runTurn(system, history);
+  return NextResponse.json({ ...result, fallback: usedFallback });
+}
+
+/**
+ * 1ターンを処理して TurnResult を得る共通ロジック（非ストリーム／ストリーム両用）。
+ * Claude 失敗時はフォールバックへ。会話は決して止めない。
+ */
+async function runTurn(
+  system: string | null,
+  history: ReturnType<typeof sanitizeHistory>
+): Promise<{ result: TurnResult; usedFallback: boolean }> {
   // Slack調査が使える窓口（トークン＋許可チャンネルあり）だけ read_slack 付きの経路にする。
   const useSlack = slackAvailableForSystem(system);
   let result: TurnResult;
@@ -110,5 +144,54 @@ export async function POST(req: NextRequest) {
     if (note) result = { ...result, reply: `${result.reply}\n\n${note}` };
   }
 
-  return NextResponse.json({ ...result, fallback: usedFallback });
+  return { result, usedFallback };
+}
+
+/**
+ * SSE（text/event-stream）で返す。record_turn の構造化出力を壊さないため、
+ * まず通常どおり確定結果を得てから reply を分割して delta を逐次送り、最後に done を送る
+ * （契約 §6：難しければ「確定後に分割送出＋本物の typing は B 側」で可・安全側）。
+ *   event: delta  data: {"text": "<差分>"}
+ *   event: done   data: {"phase","ticket","reply","fallback"}
+ *   event: error  data: {"message"}
+ */
+function streamResponse(
+  system: string | null,
+  history: ReturnType<typeof sanitizeHistory>
+): Response {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const send = (event: string, data: unknown) => {
+        controller.enqueue(
+          encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+        );
+      };
+      try {
+        const { result, usedFallback } = await runTurn(system, history);
+        for (const piece of chunkReply(result.reply)) {
+          send("delta", { text: piece });
+        }
+        send("done", {
+          phase: result.phase,
+          ticket: result.ticket,
+          reply: result.reply,
+          fallback: usedFallback,
+        });
+      } catch (err) {
+        send("error", { message: (err as Error).message || "stream failed" });
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+    },
+  });
 }

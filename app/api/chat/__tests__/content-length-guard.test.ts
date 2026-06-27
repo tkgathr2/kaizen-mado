@@ -1,12 +1,12 @@
 // Content-Length ガードのロジックを純粋関数として単体テスト。
-// route.ts の CONTENT_LENGTH_LIMIT 定数と同じ値（20MB）を使い、
+// route.ts の CONTENT_LENGTH_LIMIT 定数と同じ値（25MB＝ファイル添付経路対応）を使い、
 // 境界値・欠落・非数値の各ケースを網羅する。
 
 import { describe, it, expect } from "vitest";
 
 // ── テスト対象：Content-Length を評価して 413 を返すかどうか ──
 // route.ts のガードと完全に同じロジックを抽出した純粋関数。
-const CONTENT_LENGTH_LIMIT = 20 * 1024 * 1024; // 20MB
+const CONTENT_LENGTH_LIMIT = 25 * 1024 * 1024; // 25MB
 
 function shouldReject413(contentLengthHeader: string | null): boolean {
   if (contentLengthHeader === null) return false; // ヘッダ欠落はスルー
@@ -16,11 +16,11 @@ function shouldReject413(contentLengthHeader: string | null): boolean {
 }
 
 describe("Content-Length 413 ガード（DoS 早期排除）", () => {
-  it("20MB 以内は通す（境界値 = 許容）", () => {
+  it("25MB 以内は通す（境界値 = 許容）", () => {
     expect(shouldReject413(String(CONTENT_LENGTH_LIMIT))).toBe(false);
   });
 
-  it("20MB+1 byte は 413（境界値 + 1 = 拒否）", () => {
+  it("25MB+1 byte は 413（境界値 + 1 = 拒否）", () => {
     expect(shouldReject413(String(CONTENT_LENGTH_LIMIT + 1))).toBe(true);
   });
 

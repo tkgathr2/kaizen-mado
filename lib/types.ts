@@ -30,16 +30,33 @@ export interface TurnResult {
   ticket: Ticket | null;
 }
 
-// ── 画像添付（Phase 2・base64 最小実装） ──
+// ── 添付（Phase 2: 画像 / Phase 3: ファイル・base64 最小実装） ──
 // 公開窓口なので外部ストレージ（Blob 等）を増やさず、base64 を会話履歴で持ち回る。
-// API へ渡すのは直近の user ターンの画像だけに絞り（lib/prompt.ts）、トークン肥大を防ぐ。
-// Notion/チケットには生画像を入れず「画像添付あり」程度に丸める（PII 観点・lib/notion.ts）。
+// API へ渡すのは直近の user ターンの添付だけに絞り（lib/prompt.ts）、トークン肥大を防ぐ。
+// Notion/チケットには生データを入れず「添付あり」程度に丸める（PII 観点・lib/notion.ts）。
 export type AttachmentMime = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
 
+// ファイル添付で受け付ける非画像 MIME（公開窓口なので限定）。
+//  - PDF：Anthropic の document ブロックでモデルへ。
+//  - text/csv/markdown/json：サーバ側で base64 復号→テキスト連結。
+//  - xlsx/docx：lib/fileExtract.ts でサーバ側テキスト抽出。
+export type FileMime =
+  | "application/pdf"
+  | "text/plain"
+  | "text/csv"
+  | "text/markdown"
+  | "application/json"
+  | "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" // xlsx
+  | "application/vnd.openxmlformats-officedocument.wordprocessingml.document"; // docx
+
 export interface Attachment {
-  // data URL（"data:image/png;base64,...."）。表示・Anthropic への受け渡しに使う。
+  // 種別。既存（旧データ・画像）は kind を省略 → "image" 扱い（後方互換）。
+  kind?: "image" | "file";
+  // data URL（"data:<mime>;base64,...."）。表示・Anthropic への受け渡しに使う。
   dataUrl: string;
-  mime: AttachmentMime;
+  // 画像のときは AttachmentMime、ファイルのときは FileMime。
+  // 既存コードとの互換のため mime を主フィールドとして残す。
+  mime: AttachmentMime | FileMime;
   bytes: number; // デコード後のバイト数（上限チェック用）
   name?: string; // 元ファイル名（サニタイズ済み・表示用・任意）
 }

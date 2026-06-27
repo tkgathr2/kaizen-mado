@@ -243,6 +243,32 @@ export async function callClaudeWithSlack(
   throw new Error("tool loop exhausted without record_turn");
 }
 
+/**
+ * 擬似ストリーミング用：確定済み reply を自然な単位（句読点・空白・絵文字境界）で
+ * 分割して返す。record_turn の構造化出力を壊さずに「逐次表示」体験を出すための分割。
+ * Anthropic の tool_use は partial_json でしかストリームできず文章として流せないため、
+ * 安全側に倒して「確定後に分割送出」する（契約 §6 の許容案）。
+ * code point 単位で扱い、サロゲートペア（絵文字）を割らない。
+ */
+export function chunkReply(reply: string, maxChunk = 24): string[] {
+  const text = typeof reply === "string" ? reply : "";
+  if (!text) return [];
+  const cps = Array.from(text); // code point 配列（絵文字を割らない）
+  const chunks: string[] = [];
+  let buf = "";
+  for (const ch of cps) {
+    buf += ch;
+    // 句読点・改行・空白・閉じ括弧で区切る、または上限長で区切る。
+    const isBoundary = /[。．！？!?、,\n\s）)」』】]/.test(ch);
+    if (buf.length >= maxChunk || (isBoundary && buf.length >= 6)) {
+      chunks.push(buf);
+      buf = "";
+    }
+  }
+  if (buf) chunks.push(buf);
+  return chunks;
+}
+
 /** ツール入力（または任意のオブジェクト）を安全に TurnResult へ整える */
 export function coerceTurn(obj: any): TurnResult {
   const phase: Phase = obj?.phase === "confirm" ? "confirm" : "clarify";

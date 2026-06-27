@@ -1,6 +1,12 @@
 // ── 会話システムプロンプト（仕様書 §8 の雛型を実装） ──
 import type { ChatMessage } from "./types";
-import { buildImageBlocks, type AnthropicImageBlock, type AnthropicTextBlock } from "./attachments";
+import {
+  buildImageBlocks,
+  buildFileBlocks,
+  type AnthropicImageBlock,
+  type AnthropicTextBlock,
+  type AnthropicContentBlock,
+} from "./attachments";
 
 export function buildSystemPrompt(
   system: string | null,
@@ -84,11 +90,19 @@ export function toAnthropicMessages(history: ChatMessage[]) {
       return { role: m.role, content: text };
     }
     const images: AnthropicImageBlock[] = buildImageBlocks(m.attachments);
-    if (images.length === 0) {
+    const files: AnthropicContentBlock[] = buildFileBlocks(m.attachments);
+    if (images.length === 0 && files.length === 0) {
       return { role: m.role, content: text };
     }
-    // text ブロックを先頭に置き、続けて画像ブロック（空テキストでも text ブロックは必要）。
-    const textBlock: AnthropicTextBlock = { type: "text", text: text || "（画像を添付しました）" };
-    return { role: m.role, content: [textBlock, ...images] };
+    // text ブロックを先頭に置き、続けて画像／ファイル（document・抽出 text）ブロック。
+    // 空テキストでも text ブロックは必要（API 制約）。
+    const note =
+      files.length > 0 && images.length > 0
+        ? "（画像とファイルを添付しました）"
+        : files.length > 0
+          ? "（ファイルを添付しました）"
+          : "（画像を添付しました）";
+    const textBlock: AnthropicTextBlock = { type: "text", text: text || note };
+    return { role: m.role, content: [textBlock, ...images, ...files] };
   });
 }
