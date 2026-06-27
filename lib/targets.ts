@@ -62,8 +62,9 @@ export const TARGETS: TargetMeta[] = [
   { system: "爆裂リード獲得くん（交通誘導）", repo: "tkgathr2/leadforge", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
   // かいたくん（物品購入）＝物品購入管理Webアプリ（Next.js+Railway）。https://kaitakun.takagi.bz
   { system: "かいたくん（物品購入）", repo: "tkgathr2/buppin", healthUrl: "https://kaitakun.takagi.bz", forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
-  // まもるくん＝SNS投稿リスクチェックWeb（ローカルリポ・GitHubリモートなし）。
-  { system: "まもるくん", repo: null, healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
+  // まもるくん＝SNS投稿リスクチェックWeb（Next.js+Railway）。警備・人材派遣会社向け。
+  // 2026-06-27 GitHub/Railway本番化完了。
+  { system: "まもるくん", repo: "tkgathr2/mamoru-web", healthUrl: "https://mamoru-web-production.up.railway.app", forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
   // ノウハウキング＝社内ナレッジ基盤（Python・Railway）。自律ループの"練習台"（ミスってもよい安全な対象）。
   // autoEligible=true だが Python製のため npm検証が通らず自動マージはされない＝AIがPRを作って止まる（人がレビュー）。
   { system: "ノウハウキング", repo: "tkgathr2/knowhow", healthUrl: "https://knowhow.up.railway.app", forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
