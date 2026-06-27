@@ -101,10 +101,10 @@ export async function POST(req: NextRequest) {
     body?.stream === true || (req.headers.get("accept") || "").includes("text/event-stream");
 
   if (wantsStream && streamEnabled()) {
-    return streamResponse(system, history);
+    return streamResponse(system, history, req.signal);
   }
 
-  const { result, usedFallback } = await runTurn(system, history);
+  const { result, usedFallback } = await runTurn(system, history, req.signal);
   return NextResponse.json({ ...result, fallback: usedFallback });
 }
 
@@ -114,7 +114,8 @@ export async function POST(req: NextRequest) {
  */
 async function runTurn(
   system: string | null,
-  history: ReturnType<typeof sanitizeHistory>
+  history: ReturnType<typeof sanitizeHistory>,
+  signal?: AbortSignal
 ): Promise<{ result: TurnResult; usedFallback: boolean }> {
   // Slack調査が使える窓口（トークン＋許可チャンネルあり）だけ read_slack 付きの経路にする。
   const useSlack = slackAvailableForSystem(system);
@@ -122,10 +123,12 @@ async function runTurn(
   let usedFallback = false;
   try {
     const prompt = buildSystemPrompt(system, { slack: useSlack });
+    // req.signal を下流 fetch まで伝播（クライアント切断・タイムアウトで中断）。
     result = useSlack
-      ? await callClaudeWithSlack(prompt, toAnthropicMessages(history), system)
-      : await callClaude(prompt, toAnthropicMessages(history));
+      ? await callClaudeWithSlack(prompt, toAnthropicMessages(history), system, signal)
+      : await callClaude(prompt, toAnthropicMessages(history), signal);
   } catch (err) {
+    // タイムアウト/中断は会話を壊さずフォールバックに倒す（fail-safe）。
     console.error("[chat] Claude failed, using fallback:", (err as Error).message);
     result = fallbackTurn(system, history);
     usedFallback = true;
@@ -157,18 +160,39 @@ async function runTurn(
  */
 function streamResponse(
   system: string | null,
-  history: ReturnType<typeof sanitizeHistory>
+  history: ReturnType<typeof sanitizeHistory>,
+  signal?: AbortSignal
 ): Response {
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
+      let closed = false;
+      const close = () => {
+        if (closed) return;
+        closed = true;
+        try {
+          controller.close();
+        } catch {
+          // すでに閉じている場合は無視（degrade-safe）。
+        }
+      };
+      // クライアント切断時は即ストリームを閉じる（下流 fetch は req.signal で中断される）。
+      if (signal) {
+        if (signal.aborted) {
+          close();
+          return;
+        }
+        signal.addEventListener("abort", close, { once: true });
+      }
       const send = (event: string, data: unknown) => {
+        if (closed) return;
         controller.enqueue(
           encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
         );
       };
       try {
-        const { result, usedFallback } = await runTurn(system, history);
+        // req.signal を下流まで伝播（abort/タイムアウトで fetch を止める）。
+        const { result, usedFallback } = await runTurn(system, history, signal);
         for (const piece of chunkReply(result.reply)) {
           send("delta", { text: piece });
         }
@@ -179,9 +203,12 @@ function streamResponse(
           fallback: usedFallback,
         });
       } catch (err) {
-        send("error", { message: (err as Error).message || "stream failed" });
+        // 中断時はクライアントが既に居ないので error 送出は best-effort。
+        if (!signal?.aborted) {
+          send("error", { message: (err as Error).message || "stream failed" });
+        }
       } finally {
-        controller.close();
+        close();
       }
     },
   });

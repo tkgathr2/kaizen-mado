@@ -298,13 +298,18 @@ export function validateAttachment(input: unknown): ValidateOneResult {
  * - 各要素を validateAttachment にかけ、不正は捨てる（fail-safe・会話を止めない）。
  * - 合計サイズが MAX_TOTAL_BYTES を超えたら、それ以降を捨てる。
  * 返り値は安全な Attachment[]（最大 MAX_ATTACHMENTS 件）。
+ *
+ * DoS 対策（増幅DoS）：上限は「入力インデックス基準」で切る。
+ * 無効添付は continue で out.length が増えないため、成功件数基準だと break が
+ * 発火せず、大量の無効添付に対して全件 regex/atob 走査が走る（増幅DoS）。
+ * 先頭 MAX_ATTACHMENTS 件だけを走査対象にして O(上限) で打ち切る。
  */
 export function validateAttachments(input: unknown): Attachment[] {
   if (!Array.isArray(input)) return [];
   const out: Attachment[] = [];
   let total = 0;
-  for (const item of input) {
-    if (out.length >= MAX_ATTACHMENTS) break;
+  // 入力インデックス基準で上限を切る（無効要素でも走査を増幅させない）。
+  for (const item of input.slice(0, MAX_ATTACHMENTS)) {
     const res = validateAttachment(item);
     if (!res.ok || !res.attachment) continue;
     if (total + res.attachment.bytes > MAX_TOTAL_BYTES) continue;
@@ -456,8 +461,10 @@ export function validateAttachmentsMixed(
   const allowImages = opts.allowImages === true;
   const out: Attachment[] = [];
   let total = 0;
-  for (const item of input) {
-    if (out.length >= MAX_FILE_ATTACHMENTS) break;
+  // 入力インデックス基準で上限を切る（無効要素でも走査を増幅させない＝増幅DoS対策）。
+  // 成功件数基準だと無効添付で out.length が増えず break が発火せず、
+  // 大量の無効添付で全件 regex/atob 走査が走ってしまう。
+  for (const item of input.slice(0, MAX_FILE_ATTACHMENTS)) {
     // MIME から画像かファイルかを見て、適切な検証器に回す。
     const parsed = parseDataUrl((item as any)?.dataUrl);
     let res: ValidateOneResult;

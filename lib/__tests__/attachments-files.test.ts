@@ -112,6 +112,24 @@ describe("validateAttachmentsMixed", () => {
   it("配列でなければ空配列", () => {
     expect(validateAttachmentsMixed(null)).toEqual([]);
   });
+
+  it("無効要素が大量でも上限は入力インデックス基準で効く（増幅DoS対策）", () => {
+    // 1万件の無効添付でも走査は先頭 MAX_FILE_ATTACHMENTS 件で打ち切る。
+    let accessed = 0;
+    const evil = Object.defineProperty({}, "dataUrl", {
+      get() {
+        accessed++;
+        return "nope"; // 必ず無効（parseDataUrl が null）。
+      },
+      enumerable: true,
+    });
+    const arr = new Array(10000).fill(evil);
+    const out = validateAttachmentsMixed(arr, { allowImages: true });
+    expect(out.length).toBe(0);
+    // parseDataUrl と各検証器で複数回 dataUrl を読むため、件数そのものではなく
+    // 「先頭 MAX_FILE_ATTACHMENTS 件分の小さな定数倍」に収まることを確認する。
+    expect(accessed).toBeLessThanOrEqual(MAX_FILE_ATTACHMENTS * 3);
+  });
 });
 
 describe("buildFileBlocks", () => {
