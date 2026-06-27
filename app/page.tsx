@@ -9,12 +9,15 @@ import { useSession, signIn } from "next-auth/react";
 import { resolveSystem } from "@/lib/systems";
 import { isEmbed } from "@/lib/embed";
 import { resolveReporter } from "@/lib/reporter";
+import MarkdownMessage from "@/lib/MarkdownMessage";
+import { SUGGESTION_TEMPLATES } from "@/lib/templates";
 import {
-  ALLOWED_MIMES,
-  MAX_ATTACHMENTS,
-  MAX_BYTES_PER_IMAGE,
-  MAX_TOTAL_BYTES,
-} from "@/lib/attachments";
+  ATTACH_ACCEPT,
+  UX_MAX_ATTACHMENTS,
+  attachErrorMessage,
+  checkAttachOne,
+  fileIcon,
+} from "./attachUx";
 import type { Attachment, ChatMessage, Ticket } from "@/lib/types";
 
 // File を data URL（base64）へ読み込む。
@@ -30,6 +33,22 @@ function fileToDataUrl(file: File): Promise<string> {
 // 優先度バッジの CSS クラス接尾辞（高=赤/中=橙/低=灰。色は globals.css）。
 function prioClass(priority: "高" | "中" | "低"): string {
   return priority === "高" ? "high" : priority === "中" ? "mid" : "low";
+}
+
+// SSE の1イベント（"event: x\ndata: {...}"）をパースする。data が JSON でなければ null。
+function parseSseEvent(raw: string): { event: string; data: any } | null {
+  let event = "message";
+  const dataLines: string[] = [];
+  for (const line of raw.split("\n")) {
+    if (line.startsWith("event:")) event = line.slice(6).trim();
+    else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+  }
+  if (dataLines.length === 0) return null;
+  try {
+    return { event, data: JSON.parse(dataLines.join("\n")) };
+  } catch {
+    return null;
+  }
 }
 
 function greeting(systemName: string | null): string {
@@ -81,47 +100,51 @@ function KaizenMado() {
   const [dragging, setDragging] = useState(false);
   // 拡大表示（lightbox）中の画像 dataUrl（null で閉じる）。
   const [lightbox, setLightbox] = useState<string | null>(null);
+  // ストリーミング中の途中テキスト（assistant 行に逐次反映）。null＝非ストリーミング。
+  const [streaming, setStreaming] = useState<string | null>(null);
+  // コピー完了の一時表示（メッセージ index → true）。
+  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null); // スマホ撮影用（capture）
   const dragDepth = useRef(0); // dragenter/leave のネスト相殺カウンタ
   const inFlightRef = useRef(false); // send/submit 実行中フラグ（同期・二重発火防止）
 
-  // 添付候補を取り込む（型・サイズ・枚数を弾く）。複数ファイル可。
+  // 添付が画像かどうか（kind 省略の旧データは mime から推定）。
+  function isImageAttachment(a: Attachment): boolean {
+    if (a.kind === "image") return true;
+    if (a.kind === "file") return false;
+    return typeof a.mime === "string" && a.mime.startsWith("image/");
+  }
+
+  // 添付候補を取り込む（型・サイズ・点数を弾く）。画像＋ファイル混在可・複数可。
+  // 検証は純粋ヘルパ checkAttachOne（テスト済み）に委譲。サーバ側 lib/attachments.ts が最終防衛。
   async function addFiles(files: FileList | File[]) {
     setAttachError("");
     const list = Array.from(files);
     const accepted: Attachment[] = [];
     let total = pending.reduce((s, a) => s + a.bytes, 0);
-    let slots = MAX_ATTACHMENTS - pending.length;
+    let count = pending.length;
     for (const f of list) {
-      if (slots <= 0) {
-        setAttachError(`画像は最大${MAX_ATTACHMENTS}枚までです`);
-        break;
-      }
-      if (!(ALLOWED_MIMES as readonly string[]).includes(f.type)) {
-        setAttachError("対応していない画像形式です（png / jpeg / gif / webp）");
-        continue;
-      }
-      if (f.size > MAX_BYTES_PER_IMAGE) {
-        setAttachError(`1枚あたり${Math.floor(MAX_BYTES_PER_IMAGE / (1024 * 1024))}MBまでです`);
-        continue;
-      }
-      if (total + f.size > MAX_TOTAL_BYTES) {
-        setAttachError(`合計${Math.floor(MAX_TOTAL_BYTES / (1024 * 1024))}MBまでです`);
+      const res = checkAttachOne({ type: f.type, name: f.name, size: f.size }, count, total);
+      if (!res.ok) {
+        setAttachError(attachErrorMessage(res.error!));
+        if (res.error === "slots") break; // これ以上は入らない
         continue;
       }
       try {
         const dataUrl = await fileToDataUrl(f);
         accepted.push({
+          kind: res.kind,
           dataUrl,
-          mime: f.type as Attachment["mime"],
+          mime: res.mime as Attachment["mime"],
           bytes: f.size,
           name: f.name,
         });
         total += f.size;
-        slots--;
+        count++;
       } catch {
-        setAttachError("画像の読み込みに失敗しました");
+        setAttachError("ファイルの読み込みに失敗しました");
       }
     }
     if (accepted.length > 0) setPending((p) => [...p, ...accepted]);
@@ -190,9 +213,116 @@ function KaizenMado() {
     return () => cancelAnimationFrame(id);
   }, [messages, busy, status, phase, ticket]);
 
+  // 1ターン送信の中核。
+  //  - override 指定時（再生成・編集）は input/pending を使わず、与えられた本文で送る。
+  //  - 履歴は呼び出し側が組み立て済み（baseMessages）を渡す（末尾は user ターン）。
+  // 送信は常に stream:true + Accept:text/event-stream で投げ、レスポンスの Content-Type で分岐：
+  //   text/event-stream → delta を逐次描画（KAIZEN_STREAM_ENABLED 有効時）。
+  //   application/json  → 従来どおり一括表示（フラグOFF時に自然フォールバック）。
+  async function runTurn(baseMessages: ChatMessage[]) {
+    setBusy(true);
+    setStreaming(null);
+    let res: Response;
+    try {
+      res = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "text/event-stream",
+        },
+        body: JSON.stringify({ system: sysRaw, messages: baseMessages, stream: true }),
+      });
+    } catch {
+      appendAssistantError();
+      setBusy(false);
+      inFlightRef.current = false;
+      return;
+    }
+
+    const ctype = res.headers.get("content-type") || "";
+    try {
+      if (res.ok && ctype.includes("text/event-stream") && res.body) {
+        await consumeStream(res);
+      } else {
+        // 非ストリーム（フラグOFF / 429 / エラー）：従来の一括 JSON。
+        const data = await res.json();
+        if (!res.ok) throw new Error(data?.error || "通信に失敗しました");
+        applyResult(data);
+      }
+    } catch {
+      appendAssistantError();
+    } finally {
+      setStreaming(null);
+      setBusy(false);
+      inFlightRef.current = false;
+    }
+  }
+
+  // SSE（delta/done/error）を読み取り、reply を逐次描画して最後に確定する。
+  async function consumeStream(res: Response) {
+    const reader = res.body!.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    let acc = ""; // ここまでの reply
+    let doneData: any = null;
+    setStreaming("");
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      // SSE は "\n\n" 区切りのイベント。完結したものから処理する。
+      let sep: number;
+      while ((sep = buf.indexOf("\n\n")) >= 0) {
+        const raw = buf.slice(0, sep);
+        buf = buf.slice(sep + 2);
+        const evt = parseSseEvent(raw);
+        if (!evt) continue;
+        if (evt.event === "delta" && typeof evt.data?.text === "string") {
+          acc += evt.data.text;
+          setStreaming(acc);
+        } else if (evt.event === "done") {
+          doneData = evt.data;
+        } else if (evt.event === "error") {
+          throw new Error(evt.data?.message || "stream error");
+        }
+      }
+    }
+    // done が来ていれば確定結果を適用、無ければ acc を最終 reply として確定。
+    if (doneData) {
+      applyResult({ ...doneData, reply: doneData.reply ?? acc });
+    } else {
+      applyResult({ reply: acc, phase: "clarify", ticket: null });
+    }
+  }
+
+  // 確定結果（done もしくは一括 JSON）を会話へ反映する。
+  function applyResult(data: any) {
+    setMessages((m) => {
+      if (data?.fallback) {
+        const idx = m.length;
+        setFallbackIdx((s) => new Set(s).add(idx));
+      }
+      return [...m, { role: "assistant", content: String(data?.reply ?? "") }];
+    });
+    setPhase(data?.phase === "confirm" ? "confirm" : "clarify");
+    setTicket(data?.phase === "confirm" ? (data.ticket as Ticket) : null);
+  }
+
+  function appendAssistantError() {
+    setMessages((m) => [
+      ...m,
+      {
+        role: "assistant",
+        content:
+          "すみません、うまく受け取れませんでした。もう一度だけ、要点を教えていただけますか？",
+      },
+    ]);
+  }
+
   async function send() {
     const text = input.trim();
-    // 画像だけ（テキスト空）でも送れるようにする。
+    // 画像/ファイルだけ（テキスト空）でも送れるようにする。
     if ((!text && pending.length === 0) || busy || status !== "chatting" || inFlightRef.current)
       return;
     inFlightRef.current = true;
@@ -205,40 +335,73 @@ function KaizenMado() {
     if (attachments.length > 0) userMsg.attachments = attachments;
     const next: ChatMessage[] = [...messages, userMsg];
     setMessages(next);
-    setBusy(true);
+    await runTurn(next);
+  }
 
+  // 🔄 再生成：最後の assistant 発話を捨て、直前の user ターンで再送する。
+  async function regenerate() {
+    if (busy || status !== "chatting" || inFlightRef.current) return;
+    // 末尾が assistant のときだけ（その1つを差し替える）。直前に user が必要。
+    const lastUser = (() => {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].role === "user") return i;
+      }
+      return -1;
+    })();
+    if (lastUser < 0) return;
+    inFlightRef.current = true;
+    setError("");
+    // user ターンまでを履歴として残し、その後の assistant を落として再送。
+    const base = messages.slice(0, lastUser + 1);
+    setMessages(base);
+    setPhase("clarify");
+    setTicket(null);
+    await runTurn(base);
+  }
+
+  // ✏️ 直前の自分の送信を編集して送り直す：入力欄に戻し、その user ターン以降を会話から外す。
+  function editLastUser() {
+    if (busy || status !== "chatting") return;
+    let idx = -1;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === "user") {
+        idx = i;
+        break;
+      }
+    }
+    if (idx < 0) return;
+    const target = messages[idx];
+    setInput(target.content);
+    // 添付があれば下書きへ戻す。
+    if (target.attachments && target.attachments.length > 0) {
+      setPending(target.attachments);
+    }
+    setMessages(messages.slice(0, idx));
+    setPhase("clarify");
+    setTicket(null);
+    setError("");
+  }
+
+  // 📋 コピー：AI返答の本文（生 markdown）をクリップボードへ。
+  async function copyMessage(idx: number, content: string) {
     try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ system: sysRaw, messages: next }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || "通信に失敗しました");
-
-      setMessages((m) => {
-        // このアシスタント発話が簡易モード（fallback）なら index を控える。
-        if (data?.fallback) {
-          const idx = m.length;
-          setFallbackIdx((s) => new Set(s).add(idx));
-        }
-        return [...m, { role: "assistant", content: data.reply }];
-      });
-      setPhase(data.phase === "confirm" ? "confirm" : "clarify");
-      setTicket(data.phase === "confirm" ? (data.ticket as Ticket) : null);
-    } catch (e) {
-      // ここに来るのは想定外（API側でフォールバック済み）。会話は続けられるようにする。
-      setMessages((m) => [
-        ...m,
-        {
-          role: "assistant",
-          content:
-            "すみません、うまく受け取れませんでした。もう一度だけ、要点を教えていただけますか？",
-        },
-      ]);
-    } finally {
-      setBusy(false);
-      inFlightRef.current = false;
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(content);
+      } else {
+        // フォールバック（古い環境）。
+        const ta = document.createElement("textarea");
+        ta.value = content;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      }
+      setCopiedIdx(idx);
+      setTimeout(() => setCopiedIdx((c) => (c === idx ? null : c)), 1500);
+    } catch {
+      /* コピー失敗は黙って無視（致命的でない） */
     }
   }
 
@@ -300,7 +463,7 @@ function KaizenMado() {
       onDragLeave={onDragLeave}
     >
       {dragging && !embed && (
-        <div className="drop-overlay">画像をここにドロップして添付</div>
+        <div className="drop-overlay">ここにドロップして添付（画像・PDF・ファイル）</div>
       )}
       {lightbox && (
         <div className="lightbox" onClick={() => setLightbox(null)} role="dialog" aria-label="画像拡大表示">
@@ -327,32 +490,107 @@ function KaizenMado() {
       )}
 
       <div className="chat" ref={scrollRef}>
-        {messages.map((m, i) => (
-          <div key={i} className={`row ${m.role}`}>
-            {m.attachments && m.attachments.length > 0 && (
-              <div className="msg-images">
-                {m.attachments.map((a, j) => (
-                  <button
-                    key={j}
-                    type="button"
-                    className="msg-image"
-                    onClick={() => setLightbox(a.dataUrl)}
-                    title="クリックで拡大"
-                  >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={a.dataUrl} alt={a.name || "添付画像"} />
-                  </button>
+        {messages.map((m, i) => {
+          const isLastAssistant =
+            m.role === "assistant" && i === messages.length - 1 && status !== "done";
+          return (
+            <div key={i} className={`row ${m.role}`}>
+              {m.attachments && m.attachments.length > 0 && (
+                <>
+                  {/* 画像はサムネプレビュー（拡大可）。 */}
+                  {m.attachments.some(isImageAttachment) && (
+                    <div className="msg-images">
+                      {m.attachments.filter(isImageAttachment).map((a, j) => (
+                        <button
+                          key={j}
+                          type="button"
+                          className="msg-image"
+                          onClick={() => setLightbox(a.dataUrl)}
+                          title="クリックで拡大"
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={a.dataUrl} alt={a.name || "添付画像"} />
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {/* 非画像は 📄＋ファイル名チップ。 */}
+                  {m.attachments.some((a) => !isImageAttachment(a)) && (
+                    <div className="msg-files">
+                      {m.attachments
+                        .filter((a) => !isImageAttachment(a))
+                        .map((a, j) => (
+                          <span className="msg-file-chip" key={j} title={a.name || "添付ファイル"}>
+                            <span className="msg-file-icon" aria-hidden="true">
+                              {fileIcon(String(a.mime))}
+                            </span>
+                            <span className="msg-file-name">{a.name || "添付ファイル"}</span>
+                          </span>
+                        ))}
+                    </div>
+                  )}
+                </>
+              )}
+              {m.content &&
+                (m.role === "assistant" ? (
+                  <div className="bubble">
+                    <MarkdownMessage content={m.content} />
+                  </div>
+                ) : (
+                  <div className="bubble">{m.content}</div>
                 ))}
-              </div>
-            )}
-            {m.content && <div className="bubble">{m.content}</div>}
-            {m.role === "assistant" && fallbackIdx.has(i) && (
-              <div className="fallback-note">※ いまは簡易モードで受付中です</div>
-            )}
-          </div>
-        ))}
+              {m.role === "assistant" && fallbackIdx.has(i) && (
+                <div className="fallback-note">※ いまは簡易モードで受付中です</div>
+              )}
+              {/* AI返答のアクション（コピー／最後の返答は再生成）。busy 中は出さない。 */}
+              {m.role === "assistant" && m.content && !busy && (
+                <div className="msg-actions">
+                  <button
+                    type="button"
+                    className="msg-action"
+                    onClick={() => copyMessage(i, m.content)}
+                    title="コピー"
+                    aria-label="この返答をコピー"
+                  >
+                    {copiedIdx === i ? "✓ コピーしました" : "📋 コピー"}
+                  </button>
+                  {isLastAssistant && (
+                    <button
+                      type="button"
+                      className="msg-action"
+                      onClick={regenerate}
+                      title="もう一度回答してもらう"
+                      aria-label="再生成"
+                    >
+                      🔄 再生成
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
 
-        {busy && <div className="typing">入力中…</div>}
+        {/* ストリーミング中の途中テキスト（確定前）。 */}
+        {streaming !== null && streaming.length > 0 && (
+          <div className="row assistant">
+            <div className="bubble">
+              <MarkdownMessage content={streaming} />
+            </div>
+          </div>
+        )}
+
+        {/* 考え中インジケータ（送信後は常に表示・待ち不安の解消）。 */}
+        {busy && (streaming === null || streaming.length === 0) && (
+          <div className="typing thinking" aria-live="polite">
+            <span>考え中</span>
+            <span className="dots">
+              <span className="dot" />
+              <span className="dot" />
+              <span className="dot" />
+            </span>
+          </div>
+        )}
 
         {showConfirm && ticket && (
           <div className="confirm-card">
@@ -476,23 +714,62 @@ function KaizenMado() {
 
       {status !== "done" && (
         <div className="composer-wrap">
-          {pending.length > 0 && (
-            <div className="attach-previews">
-              {pending.map((a, i) => (
-                <div className="attach-thumb" key={i}>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={a.dataUrl} alt={a.name || "添付画像"} />
+          {/* テンプレ例文：入力が空＆会話が浅い（挨拶のみ＝user発言なし）ときだけチップ表示。
+              タップで入力欄へ挿入（自動送信しない＝編集できる）。 */}
+          {!input.trim() &&
+            pending.length === 0 &&
+            !busy &&
+            status === "chatting" &&
+            !messages.some((m) => m.role === "user") && (
+              <div className="templates" aria-label="よくあるご相談">
+                {SUGGESTION_TEMPLATES.map((t, i) => (
                   <button
                     type="button"
-                    className="attach-remove"
-                    onClick={() => removePending(i)}
-                    aria-label="この画像を削除"
-                    title="削除"
+                    className="template-chip"
+                    key={i}
+                    onClick={() => setInput(t.text)}
+                    title={t.text}
                   >
-                    ×
+                    {t.label}
                   </button>
-                </div>
-              ))}
+                ))}
+              </div>
+            )}
+          {pending.length > 0 && (
+            <div className="attach-previews">
+              {pending.map((a, i) =>
+                isImageAttachment(a) ? (
+                  <div className="attach-thumb" key={i}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={a.dataUrl} alt={a.name || "添付画像"} />
+                    <button
+                      type="button"
+                      className="attach-remove"
+                      onClick={() => removePending(i)}
+                      aria-label="この画像を削除"
+                      title="削除"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ) : (
+                  <div className="attach-file" key={i} title={a.name || "添付ファイル"}>
+                    <span className="attach-file-icon" aria-hidden="true">
+                      {fileIcon(String(a.mime))}
+                    </span>
+                    <span className="attach-file-name">{a.name || "添付ファイル"}</span>
+                    <button
+                      type="button"
+                      className="attach-file-remove"
+                      onClick={() => removePending(i)}
+                      aria-label="このファイルを削除"
+                      title="削除"
+                    >
+                      ×
+                    </button>
+                  </div>
+                )
+              )}
             </div>
           )}
           {attachError && <div className="attach-error">{attachError}</div>}
@@ -500,7 +777,7 @@ function KaizenMado() {
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/png,image/jpeg,image/gif,image/webp"
+              accept={ATTACH_ACCEPT}
               multiple
               hidden
               onChange={(e) => {
@@ -508,15 +785,37 @@ function KaizenMado() {
                 e.target.value = ""; // 同じファイルの連続選択を許可
               }}
             />
+            {/* スマホ撮影：capture でカメラを直接起動。 */}
+            <input
+              ref={cameraInputRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              hidden
+              onChange={(e) => {
+                if (e.target.files) void addFiles(e.target.files);
+                e.target.value = "";
+              }}
+            />
             <button
               type="button"
               className="attach-btn"
               onClick={() => fileInputRef.current?.click()}
-              disabled={busy || status === "submitting" || pending.length >= MAX_ATTACHMENTS}
-              aria-label="画像を添付"
-              title="画像を添付"
+              disabled={busy || status === "submitting" || pending.length >= UX_MAX_ATTACHMENTS}
+              aria-label="画像・ファイルを添付"
+              title="画像・ファイルを添付（PDF / CSV / Excel / Word など）"
             >
               ＋
+            </button>
+            <button
+              type="button"
+              className="attach-btn camera-btn"
+              onClick={() => cameraInputRef.current?.click()}
+              disabled={busy || status === "submitting" || pending.length >= UX_MAX_ATTACHMENTS}
+              aria-label="カメラで撮影して添付"
+              title="カメラで撮影して添付"
+            >
+              📷
             </button>
             <textarea
               value={input}
@@ -527,6 +826,22 @@ function KaizenMado() {
               rows={1}
               disabled={busy || status === "submitting"}
             />
+            {/* ✏️ 直前の自分の送信を編集して送り直す（直前が user のときだけ意味がある）。 */}
+            {!busy &&
+              status === "chatting" &&
+              !input.trim() &&
+              pending.length === 0 &&
+              messages.some((m) => m.role === "user") && (
+                <button
+                  type="button"
+                  className="attach-btn edit-btn"
+                  onClick={editLastUser}
+                  aria-label="直前の送信を編集"
+                  title="直前の自分の送信を編集して送り直す"
+                >
+                  ✏️
+                </button>
+              )}
             <button
               className="send"
               onClick={send}

@@ -408,3 +408,128 @@ button.attach-btn:disabled { opacity: 0.4; cursor: not-allowed; }
   cursor: pointer; display: grid; place-items: center; line-height: 1;
 }
 .app.embed .footer { display: none; }
+
+/* ───── Markdown 表示（assistant の reply・#5） ───── */
+/* バブルは pre-wrap だが、Markdown 要素は通常フローで描く（block 要素に上書き）。 */
+.row.assistant .bubble :where(p, ul, ol, table, pre, blockquote, h1, h2, h3, h4) {
+  white-space: normal;
+}
+.row.assistant .bubble p { margin: 0 0 10px; line-height: 1.75; }
+.row.assistant .bubble p:last-child { margin-bottom: 0; }
+.row.assistant .bubble ul,
+.row.assistant .bubble ol { margin: 6px 0 10px; padding-left: 1.4em; line-height: 1.7; }
+.row.assistant .bubble li { margin: 2px 0; }
+.row.assistant .bubble li > ul,
+.row.assistant .bubble li > ol { margin: 2px 0; }
+.row.assistant .bubble h1,
+.row.assistant .bubble h2,
+.row.assistant .bubble h3,
+.row.assistant .bubble h4 {
+  font-family: "Tiempos Text", "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", Georgia, serif;
+  line-height: 1.35; margin: 14px 0 8px; font-weight: 600;
+}
+.row.assistant .bubble h1 { font-size: 1.3em; }
+.row.assistant .bubble h2 { font-size: 1.18em; }
+.row.assistant .bubble h3 { font-size: 1.08em; }
+.row.assistant .bubble h4 { font-size: 1em; }
+.row.assistant .bubble a { color: var(--brand); text-decoration: underline; word-break: break-word; }
+.row.assistant .bubble a:hover { color: var(--brand-hover); }
+.row.assistant .bubble strong { font-weight: 700; }
+.row.assistant .bubble code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.88em; background: #f1eee6; border: 1px solid var(--line);
+  border-radius: 5px; padding: 1px 5px;
+}
+.row.assistant .bubble pre {
+  background: #2b2924; color: #f3efe6; border-radius: 12px;
+  padding: 12px 14px; overflow-x: auto; margin: 8px 0 12px; line-height: 1.55;
+}
+.row.assistant .bubble pre code {
+  background: transparent; border: none; padding: 0; color: inherit; font-size: 0.86em;
+}
+.row.assistant .bubble blockquote {
+  margin: 8px 0; padding: 4px 14px; border-left: 3px solid var(--line); color: var(--muted);
+}
+.row.assistant .bubble table {
+  border-collapse: collapse; margin: 8px 0 12px; font-size: 0.93em; display: block;
+  overflow-x: auto; max-width: 100%;
+}
+.row.assistant .bubble th,
+.row.assistant .bubble td {
+  border: 1px solid var(--line); padding: 6px 10px; text-align: left;
+}
+.row.assistant .bubble th { background: #f6f3ec; font-weight: 600; }
+.row.assistant .bubble hr { border: none; border-top: 1px solid var(--line); margin: 14px 0; }
+.row.assistant .bubble img { max-width: 100%; border-radius: 8px; }
+
+/* ───── 考え中インジケータ（3点ドット・#6） ───── */
+.typing.thinking { display: flex; align-items: center; gap: 6px; font-style: normal; }
+.typing.thinking .dots { display: inline-flex; gap: 4px; align-items: center; }
+.typing.thinking .dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--muted);
+  display: inline-block; animation: kz-bounce 1.2s ease-in-out infinite;
+}
+.typing.thinking .dot:nth-child(2) { animation-delay: 0.18s; }
+.typing.thinking .dot:nth-child(3) { animation-delay: 0.36s; }
+@keyframes kz-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.45; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .typing.thinking .dot { animation: none; opacity: 0.6; }
+}
+
+/* ───── AI返答のアクション（コピー／再生成・#7） ───── */
+.msg-actions { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.msg-action {
+  border: 1px solid var(--line); background: #fff; color: var(--muted);
+  font-size: 12px; padding: 4px 10px; border-radius: 999px; cursor: pointer;
+  font-family: inherit; line-height: 1.4; transition: background 0.15s ease, color 0.15s ease;
+}
+.msg-action:hover { background: #f5f3ec; color: var(--ink); }
+
+/* ───── 添付ファイルチップ（非画像・会話内＆下書き・#3） ───── */
+.msg-files { display: flex; flex-wrap: wrap; gap: 8px; max-width: 80%; margin-bottom: 6px; }
+.row.user .msg-files { justify-content: flex-end; }
+.msg-file-chip {
+  display: inline-flex; align-items: center; gap: 7px; max-width: 240px;
+  background: #fff; border: 1px solid var(--line); border-radius: 12px;
+  padding: 8px 12px; box-shadow: var(--shadow);
+}
+.msg-file-icon { font-size: 17px; line-height: 1; flex: none; }
+.msg-file-name {
+  font-size: 13px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* 送信前の下書き：非画像はチップ（✕削除つき）。 */
+.attach-file {
+  display: inline-flex; align-items: center; gap: 7px; max-width: 220px;
+  background: #fff; border: 1px solid var(--line); border-radius: 12px;
+  padding: 8px 30px 8px 12px; position: relative;
+}
+.attach-file-icon { font-size: 17px; line-height: 1; flex: none; }
+.attach-file-name {
+  font-size: 13px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.attach-file-remove {
+  position: absolute; top: 50%; right: 6px; transform: translateY(-50%);
+  width: 20px; height: 20px; border-radius: 50%; border: none; background: #3a3a38; color: #fff;
+  font-size: 13px; line-height: 1; cursor: pointer; display: grid; place-items: center;
+}
+.attach-file-remove:hover { background: #1f1f1d; }
+
+/* ───── カメラ・編集ボタン（#4・#7） ───── */
+button.attach-btn.camera-btn,
+button.attach-btn.edit-btn { font-size: 20px; }
+.app.embed button.attach-btn.camera-btn,
+.app.embed button.attach-btn.edit-btn { font-size: 18px; }
+
+/* ───── テンプレ例文チップ（#9） ───── */
+.templates { display: flex; flex-wrap: wrap; gap: 8px; padding: 4px 0 8px; }
+.template-chip {
+  border: 1px solid var(--line); background: #fffdf8; color: var(--ink);
+  font-size: 13px; padding: 8px 14px; border-radius: 999px; cursor: pointer;
+  font-family: inherit; line-height: 1.4; box-shadow: var(--shadow);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.template-chip:hover { background: #fbeee8; border-color: var(--brand); color: var(--brand); }
