@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { isAuthEnabled, isEmailAllowed, isOriginAllowed } from "../authz";
+import {
+  isAuthEnabled,
+  isEmailAllowed,
+  isOriginAllowed,
+  shouldProtectPath,
+} from "../authz";
 
 describe("isAuthEnabled", () => {
   it("3鍵すべて非空なら true", () => {
@@ -166,5 +171,41 @@ describe("isOriginAllowed", () => {
     expect(
       isOriginAllowed("https://kaizen.takagi.bz:8443", "https://kaizen.takagi.bz")
     ).toBe(false);
+  });
+});
+
+describe("shouldProtectPath（optional auth・管理ページだけ強制保護）", () => {
+  it("窓口(/)・起票導線は保護しない（false＝embed壁を作らない）", () => {
+    expect(shouldProtectPath("/")).toBe(false);
+    expect(shouldProtectPath("/api/chat")).toBe(false);
+    expect(shouldProtectPath("/api/submit")).toBe(false);
+  });
+
+  it("管理ページ(/board・/dashboard)とその配下は保護する（true）", () => {
+    expect(shouldProtectPath("/board")).toBe(true);
+    expect(shouldProtectPath("/board/")).toBe(true);
+    expect(shouldProtectPath("/board/anything")).toBe(true);
+    expect(shouldProtectPath("/dashboard")).toBe(true);
+    expect(shouldProtectPath("/dashboard/")).toBe(true);
+    expect(shouldProtectPath("/dashboard/detail/123")).toBe(true);
+  });
+
+  it("大文字小文字を無視して保護する", () => {
+    expect(shouldProtectPath("/Board")).toBe(true);
+    expect(shouldProtectPath("/DASHBOARD")).toBe(true);
+  });
+
+  it("管理ページに前方一致するだけの別パスは保護しない（誤爆防止）", () => {
+    expect(shouldProtectPath("/boardroom")).toBe(false);
+    expect(shouldProtectPath("/dashboards")).toBe(false);
+    expect(shouldProtectPath("/api/board")).toBe(false);
+    expect(shouldProtectPath("/api/stats")).toBe(false);
+  });
+
+  it("空・null・undefined は保護しない（false）", () => {
+    expect(shouldProtectPath("")).toBe(false);
+    expect(shouldProtectPath("   ")).toBe(false);
+    expect(shouldProtectPath(null)).toBe(false);
+    expect(shouldProtectPath(undefined)).toBe(false);
   });
 });

@@ -4,8 +4,11 @@ import { Suspense, useEffect, useRef, useState } from "react";
 // 二重送信ガード：React state は非同期更新のため、連打で状態更新前に再発火し得る。
 // ref は同期更新なので「実行中」を確実にブロックでき、重複起票/重複送信を防ぐ。
 import { useSearchParams } from "next/navigation";
+// optional auth：このサイトで Google ログイン済みなら起票者名を自動で引き継ぐ（任意・強制しない）。
+import { useSession, signIn } from "next-auth/react";
 import { resolveSystem } from "@/lib/systems";
 import { isEmbed } from "@/lib/embed";
+import { resolveReporter } from "@/lib/reporter";
 import type { ChatMessage, Ticket } from "@/lib/types";
 
 function greeting(systemName: string | null): string {
@@ -26,12 +29,24 @@ function KaizenMado() {
   // ある場合は「お名前」入力欄を出さず、そのまま起票の reporter に使う。
   const reporterParam = (params.get("reporter") ?? "").trim();
 
+  // このサイト自体での Google ログイン状態（optional auth）。
+  // 鍵未投入・未ログインでも安全に動く（status は "unauthenticated"、session は null）。
+  const { data: session, status: authStatus } = useSession();
+  const sessionName = (session?.user?.name ?? "").trim();
+  const isAuthed = authStatus === "authenticated" && !!sessionName;
+  // 「Googleでログイン（任意）」ボタンを出すかどうか。
+  // OAuth鍵が本番に入った時だけ NEXT_PUBLIC_AUTH_ENABLED=1 を立てる運用。
+  // 未設定（＝現状・鍵未投入）ではボタンを出さず、従来どおり手入力だけで送れる（fail-safe）。
+  const authUiEnabled = process.env.NEXT_PUBLIC_AUTH_ENABLED === "1";
+
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [phase, setPhase] = useState<"clarify" | "confirm">("clarify");
   const [ticket, setTicket] = useState<Ticket | null>(null);
-  const [reporter, setReporter] = useState(reporterParam);
+  // reporter state は「お名前（任意）」手入力欄の値のみを持つ。
+  // 最終的な起票者名は resolveReporter(reporterParam > sessionName > 手入力) で決める。
+  const [reporter, setReporter] = useState("");
   const [status, setStatus] = useState<"chatting" | "submitting" | "done">("chatting");
   const [doneId, setDoneId] = useState<string>("");
   const [error, setError] = useState("");
@@ -108,10 +123,17 @@ function KaizenMado() {
     setStatus("submitting");
     setError("");
     try {
+      // 起票者名：reporterParam（widget）> session.user.name（このサイトでログイン）> 手入力。
+      // 認証ON時はサーバ側(/api/submit)もセッションから本人を確定するが、未ログイン手入力時のために送る。
+      const effectiveReporter = resolveReporter({
+        reporterParam,
+        sessionName,
+        manualInput: reporter,
+      });
       const res = await fetch("/api/submit", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ticket, reporter: reporter.trim() || null }),
+        body: JSON.stringify({ ticket, reporter: effectiveReporter || null }),
       });
       const data = await res.json();
       if (!res.ok || !data?.ok) throw new Error(data?.error || "起票に失敗しました");
@@ -209,7 +231,18 @@ function KaizenMado() {
 
       {showConfirm && (
         <>
-          {!reporterParam && (
+          {/* 起票者の出し分け（optional auth）：
+              ① widget（reporterParam）… 埋め込み元の本人。入力欄は出さない（従来どおり）。
+              ② このサイトでログイン済み … 名前を自動引き継ぎ。「○○さんとして送信」と表示。
+              ③ 未ログイン … 手入力欄＋「Googleでログインして名前を引き継ぐ（任意）」ボタン。 */}
+          {!reporterParam && isAuthed && (
+            <div className="reporter">
+              <span>
+                <strong>{sessionName}</strong> さんとして送信します
+              </span>
+            </div>
+          )}
+          {!reporterParam && !isAuthed && (
             <div className="reporter">
               <label htmlFor="reporter">お名前（任意）</label>
               <input
@@ -219,6 +252,16 @@ function KaizenMado() {
                 placeholder="例：高木"
                 maxLength={40}
               />
+              {authUiEnabled && (
+                <button
+                  type="button"
+                  className="ghost reporter-login"
+                  onClick={() => signIn("google")}
+                  title="Googleでログインすると、お名前を自動で引き継ぎます"
+                >
+                  Googleでログイン（任意）
+                </button>
+              )}
             </div>
           )}
           <div className="send-actions">
