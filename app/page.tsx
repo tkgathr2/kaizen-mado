@@ -730,7 +730,13 @@ function KaizenMado() {
                 placeholder="例：高木"
                 maxLength={40}
               />
-              {authUiEnabled && (
+              {/* 埋め込み(iframe)では Google ログインを出さない。
+                  理由：①widget は別サイトに iframe 埋め込みされ、kaizen の Cookie が
+                  サードパーティ扱いで遮断/分割される→ iframe 内 signIn は MissingCSRF で
+                  「Unable to sign in.」のNextAuth画面に落ちる。②Google は OAuth 画面の
+                  iframe 表示自体を拒否する。よって埋め込みでは原理的にログイン不可。
+                  埋め込みでは手入力（お名前・任意）だけで送れる設計に倒す。 */}
+              {authUiEnabled && !embed && (
                 <button
                   type="button"
                   className="ghost reporter-login"
