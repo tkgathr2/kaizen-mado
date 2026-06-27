@@ -11,6 +11,11 @@ import { isEmbed } from "@/lib/embed";
 import { resolveReporter } from "@/lib/reporter";
 import type { ChatMessage, Ticket } from "@/lib/types";
 
+// 優先度バッジの CSS クラス接尾辞（高=赤/中=橙/低=灰。色は globals.css）。
+function prioClass(priority: "高" | "中" | "低"): string {
+  return priority === "高" ? "high" : priority === "中" ? "mid" : "low";
+}
+
 function greeting(systemName: string | null): string {
   if (systemName) {
     return `${systemName}のカイゼン窓口です。${systemName}について「困っていること」「こうなったら嬉しいこと」「気づいたこと」を、気軽に教えてください。まずはどんなことか、一言で大丈夫です。`;
@@ -202,12 +207,34 @@ function KaizenMado() {
               <dd>{ticket.system}</dd>
               <dt>種別</dt>
               <dd>{ticket.type}</dd>
+              <dt>緊急度</dt>
+              <dd>{typeof ticket.urgency === "number" ? `${ticket.urgency}/10` : "—"}</dd>
               <dt>重要度</dt>
-              <dd>{ticket.importance}</dd>
+              <dd>
+                {typeof ticket.importanceScore === "number"
+                  ? `${ticket.importanceScore}/10`
+                  : "—"}
+              </dd>
+              <dt>優先度</dt>
+              <dd>
+                {ticket.priority ? (
+                  <span className={`prio-badge prio-${prioClass(ticket.priority)}`}>
+                    {ticket.priority}
+                  </span>
+                ) : (
+                  "—"
+                )}
+              </dd>
               <dt>件名</dt>
               <dd>{ticket.title}</dd>
               <dt>内容</dt>
               <dd>{ticket.detail}</dd>
+              {ticket.priorityReason && (
+                <>
+                  <dt>根拠</dt>
+                  <dd>{ticket.priorityReason}</dd>
+                </>
+              )}
             </dl>
           </div>
         )}

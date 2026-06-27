@@ -22,6 +22,11 @@ export interface TicketRow {
   lastEdited?: string;
   /** Notionの作成時刻（ISO文字列）。起票前 冪等チェックの時間窓判定用。任意。 */
   createdTime?: string;
+  // ── 優先度スコアリング（§4.5.1・後方互換で任意。旧チケットは undefined＝表示は「—」）──
+  urgency?: number; // 緊急度 1〜10
+  importanceScore?: number; // 重要度 1〜10
+  priority?: string; // 優先度（高/中/低）
+  priorityReason?: string; // 算出根拠1行
 }
 
 function getAuth(): { token: string; databaseId: string } {
@@ -54,6 +59,10 @@ function plainFromRichText(prop: any): string {
 function nameFromSelect(prop: any): string {
   return prop?.select?.name ?? "";
 }
+function numberFromProp(prop: any): number | undefined {
+  const n = prop?.number;
+  return typeof n === "number" && Number.isFinite(n) ? n : undefined;
+}
 function idFromUniqueId(prop: any): string {
   const u = prop?.unique_id;
   if (!u) return "";
@@ -81,6 +90,11 @@ function parseRow(page: any): TicketRow {
     fgsUrl: valueFromUrl(props["FGSリンク"]),
     lastEdited: typeof page?.last_edited_time === "string" ? page.last_edited_time : "",
     createdTime: typeof page?.created_time === "string" ? page.created_time : "",
+    // 優先度スコアリング（任意・プロパティが無ければ undefined＝旧チケット互換）。
+    urgency: numberFromProp(props["緊急度"]),
+    importanceScore: numberFromProp(props["重要度スコア"]),
+    priority: nameFromSelect(props["優先度"]) || undefined,
+    priorityReason: plainFromRichText(props["優先度根拠"]) || undefined,
   };
 }
 

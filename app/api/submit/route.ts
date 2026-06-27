@@ -9,7 +9,8 @@ import { isAuthEnabled, isOriginAllowed } from "@/lib/authz";
 import { kickEndpoint } from "@/lib/trigger";
 import { acceptSubmit } from "@/lib/dedup";
 import { findRecentDuplicate } from "@/lib/tickets";
-import type { Ticket, TicketType, Importance } from "@/lib/types";
+import { clampScore, computePriority, isPriority } from "@/lib/priority";
+import type { Ticket, TicketType, Importance, Priority } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,12 +24,30 @@ function coerceTicket(input: any): Ticket | null {
   const title = typeof input.title === "string" ? input.title.trim() : "";
   const detail = typeof input.detail === "string" ? input.detail.trim() : "";
   if (!detail && !title) return null;
+
+  // ── 優先度スコアリング（§4.5.1）。点数があればクランプ、優先度は欠落時に点数から導く。
+  // 後方互換：点数が無い古いクライアントからの送信は undefined のまま通す。
+  const urgency = clampScore(input.urgency);
+  const importanceScore = clampScore(input.importanceScore);
+  let priority: Priority | undefined = isPriority(input.priority) ? input.priority : undefined;
+  if (!priority && urgency != null && importanceScore != null) {
+    priority = computePriority(urgency, importanceScore);
+  }
+  const priorityReason =
+    typeof input.priorityReason === "string" && input.priorityReason.trim()
+      ? input.priorityReason.trim().slice(0, 200)
+      : undefined;
+
   return {
     system: normalizeSystemForTicket(input.system),
     type,
     title: title || "改善のご要望",
     detail: detail || title,
     importance,
+    ...(urgency != null ? { urgency } : {}),
+    ...(importanceScore != null ? { importanceScore } : {}),
+    ...(priority ? { priority } : {}),
+    ...(priorityReason ? { priorityReason } : {}),
   };
 }
 
