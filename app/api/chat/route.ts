@@ -7,22 +7,17 @@ import { fallbackTurn } from "@/lib/fallback";
 import { resolveSystem } from "@/lib/systems";
 import { isRecallEnabled, recallSimilar, buildRecallNote } from "@/lib/recall";
 import { checkRateLimit, clientKeyFromHeaders } from "@/lib/ratelimit";
-import type { ChatMessage, TurnResult } from "@/lib/types";
+import { sanitizeHistory } from "@/lib/history";
+import type { TurnResult } from "@/lib/types";
+
+// 画像をモデルへ渡すか（既定OFF＝従来テキスト挙動・回帰ゼロ）。
+// "true" のときだけ各 user ターンの attachments を検証して通す。
+function visionEnabled(): boolean {
+  return process.env.KAIZEN_VISION_ENABLED === "true";
+}
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-function sanitizeHistory(input: unknown): ChatMessage[] {
-  if (!Array.isArray(input)) return [];
-  const out: ChatMessage[] = [];
-  for (const m of input) {
-    const role = m?.role === "assistant" ? "assistant" : m?.role === "user" ? "user" : null;
-    const content = typeof m?.content === "string" ? m.content : "";
-    if (role && content) out.push({ role, content: content.slice(0, 4000) });
-  }
-  // 直近30ターンに制限（暴走・コスト対策）
-  return out.slice(-30);
-}
 
 export async function POST(req: NextRequest) {
   let body: any;
@@ -33,7 +28,7 @@ export async function POST(req: NextRequest) {
   }
 
   const system = resolveSystem(body?.system);
-  const history = sanitizeHistory(body?.messages);
+  const history = sanitizeHistory(body?.messages, visionEnabled());
 
   if (history.length === 0 || history[history.length - 1].role !== "user") {
     return NextResponse.json(

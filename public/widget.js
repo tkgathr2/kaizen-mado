@@ -264,7 +264,7 @@
       frame.className = "kz-frame";
       frame.src = madoUrl + reporterParam();
       frame.title = "カイゼン窓口チャット";
-      frame.setAttribute("allow", "clipboard-write");
+      frame.setAttribute("allow", "clipboard-write; clipboard-read");
       panel.appendChild(frame);
     }
 

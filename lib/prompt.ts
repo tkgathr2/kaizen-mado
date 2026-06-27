@@ -1,5 +1,6 @@
 // ── 会話システムプロンプト（仕様書 §8 の雛型を実装） ──
 import type { ChatMessage } from "./types";
+import { buildImageBlocks, type AnthropicImageBlock, type AnthropicTextBlock } from "./attachments";
 
 export function buildSystemPrompt(
   system: string | null,
@@ -59,7 +60,35 @@ export function buildSystemPrompt(
   return lines.join("\n");
 }
 
-/** Anthropic messages 配列へ変換（system は別フィールドで渡す） */
+/**
+ * Anthropic messages 配列へ変換（system は別フィールドで渡す）。
+ *
+ * 画像（マルチモーダル）：トークン肥大を避けるため、画像ブロックを積むのは
+ *   「最後の user ターンの attachments だけ」に限定する（過去ターンの画像は文字列のまま捨てる）。
+ *   その user ターンの content を [text, image, image…] のブロック配列にする。
+ * 画像が無い／無効なら従来どおり文字列のまま（後方互換・回帰ゼロ）。
+ */
 export function toAnthropicMessages(history: ChatMessage[]) {
-  return history.map((m) => ({ role: m.role, content: m.content }));
+  // 末尾の user ターンの index（そこにだけ画像を積む）。
+  let lastUserIdx = -1;
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].role === "user") {
+      lastUserIdx = i;
+      break;
+    }
+  }
+
+  return history.map((m, i) => {
+    const text = typeof m.content === "string" ? m.content : "";
+    if (i !== lastUserIdx || m.role !== "user") {
+      return { role: m.role, content: text };
+    }
+    const images: AnthropicImageBlock[] = buildImageBlocks(m.attachments);
+    if (images.length === 0) {
+      return { role: m.role, content: text };
+    }
+    // text ブロックを先頭に置き、続けて画像ブロック（空テキストでも text ブロックは必要）。
+    const textBlock: AnthropicTextBlock = { type: "text", text: text || "（画像を添付しました）" };
+    return { role: m.role, content: [textBlock, ...images] };
+  });
 }
