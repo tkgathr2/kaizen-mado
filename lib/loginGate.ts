@@ -9,15 +9,19 @@
 //
 // ゲートを出すのは「トップレベル表示（直接アクセス）かつ 認証ON かつ 未ログイン」のときだけ。
 
-// 埋め込み（iframe 内）かどうか。
+// 埋め込み（iframe 内）かどうか。以下のいずれかなら埋め込み文脈とみなし、ゲートは出さない。
 //   - iframe 内（window.self !== window.top）
-//   - もしくは reporterParam がある（widget.js が ?reporter= で本人名を渡している）
-// どちらかなら埋め込み文脈とみなし、ゲートは出さない。
+//   - embedFlag … ?embed=1 を isEmbed() で算出したフラグ（widget.js が必ず付ける）
+//   - reporterParam がある（widget.js が ?reporter= で本人名を渡している）
+// embedFlag は多重防御：①widget は ?embed=1 を必ず付けるので iframe 判定が効かなくても守れる
+//                       ②?embed=1 をトップレベルで直接開いた時もゲートが出ない（不整合解消）
 export function isEmbeddedContext(opts: {
   inIframe: boolean;
+  embedFlag?: boolean;
   reporterParam?: string | null;
 }): boolean {
   if (opts.inIframe) return true;
+  if (opts.embedFlag === true) return true;
   if ((opts.reporterParam ?? "").trim()) return true;
   return false;
 }

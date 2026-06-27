@@ -95,8 +95,8 @@ function KaizenMado() {
       setInIframe(true);
     }
   }, []);
-  // 埋め込み文脈（iframe 内 or widget が reporter を渡している）ではゲートを絶対に出さない。
-  const embeddedForGate = isEmbeddedContext({ inIframe, reporterParam });
+  // 埋め込み文脈（iframe 内 / ?embed=1 / widget が reporter を渡している）ではゲートを絶対に出さない。
+  const embeddedForGate = isEmbeddedContext({ inIframe, embedFlag: embed, reporterParam });
   // ゲートを描画すべきか：認証ON・非埋め込み・未ログインのときだけ。
   // mounted 前は iframe 判定が未確定なので出さない（チラつき・hydration mismatch 防止）。
   const showLoginGate =

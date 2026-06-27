@@ -7,6 +7,12 @@ describe("isEmbeddedContext", () => {
     expect(isEmbeddedContext({ inIframe: true, reporterParam: null })).toBe(true);
   });
 
+  it("embedFlag=true なら埋め込みと判定する（?embed=1 ＝ widget の多重防御）", () => {
+    expect(isEmbeddedContext({ inIframe: false, embedFlag: true })).toBe(true);
+    // iframe 判定が効かない状況でも ?embed=1 があれば守れる
+    expect(isEmbeddedContext({ inIframe: false, embedFlag: true, reporterParam: null })).toBe(true);
+  });
+
   it("reporterParam があれば（widget が本人名を渡している）埋め込みと判定する", () => {
     expect(isEmbeddedContext({ inIframe: false, reporterParam: "高木" })).toBe(true);
     expect(isEmbeddedContext({ inIframe: false, reporterParam: " 脇本 " })).toBe(true);
