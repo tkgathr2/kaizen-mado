@@ -68,24 +68,41 @@ export function verifyLineSignature(
   return timingSafeEqual(a, b);
 }
 
-// ── GO伺いの照合トークン（誤爆・なりすまし対策） ──
+// ── GO伺いの照合トークン（誤爆・なりすまし＋失効対策） ──
 // postbackのdataは利用者が改ざんできないが、署名済みwebhookでも「どのチケットへの操作か」を
 // 確実に結びつけるため、pageIdからchannel secretでHMACした短いトークンを付ける。
 // 我々が送ったボタン以外（偽postback）を弾く。
-export function proposalToken(pageId: string): string {
+//
+// ★失効（事実上のワンタイム化・M3）：旧実装は pageId だけでHMACしていたため、トークンが
+//   「恒久有効」だった（GO/却下で状態が変わっても古いボタンが永遠に効く）。そこでチケットの
+//   "状態(state)" をHMAC入力へ混ぜる。提案は必ず「GO待ち」状態で発行されるので既定値は "GO待ち"。
+//   検証側（webhook）は "いまのチケット状態" で照合するため、GO/却下/差し戻しで状態が変われば
+//   古いトークンは一致しなくなる＝事実上ワンタイム。進行中チケット（GO待ち）はそのまま有効。
+// ★長さ：64bit(16hex)→128bit(32hex)に延長して総当たり耐性を上げる。
+const PROPOSAL_DEFAULT_STATE = "GO待ち";
+
+export function proposalToken(pageId: string, state: string = PROPOSAL_DEFAULT_STATE): string {
   let secret: string;
   try {
     secret = channelSecret();
   } catch {
     return "";
   }
-  return createHmac("sha256", secret).update(`kz:${pageId}`, "utf8").digest("hex").slice(0, 16);
+  return createHmac("sha256", secret)
+    .update(`kz:${pageId}:${state}`, "utf8")
+    .digest("hex")
+    .slice(0, 32);
 }
 
-/** トークンを timing-safe に検証する。 */
-export function verifyProposalToken(pageId: string, token: string | undefined | null): boolean {
+/** トークンを timing-safe に検証する。state＝照合時点のチケット状態（既定 "GO待ち"）。
+ * 状態が変わると expected も変わるため、古い状態で発行されたトークンは失効する。 */
+export function verifyProposalToken(
+  pageId: string,
+  token: string | undefined | null,
+  state: string = PROPOSAL_DEFAULT_STATE
+): boolean {
   if (!token) return false;
-  const expected = proposalToken(pageId);
+  const expected = proposalToken(pageId, state);
   if (!expected) return false;
   const a = Buffer.from(expected);
   const b = Buffer.from(token);

@@ -104,13 +104,15 @@ async function handleEvent(ev: any): Promise<void> {
   if (ev?.type === "postback") {
     const p = parsePostback(ev?.postback?.data);
     if (!p) return;
-    if (!verifyProposalToken(p.pageId, p.token)) {
-      if (replyToken) await replyText(replyToken, "ボタンの照合に失敗しました（古い/不正なボタンの可能性）。");
-      return;
-    }
+    // 先にチケットを取得し、"いまの状態" でトークンを照合する。提案は「GO待ち」状態で発行されるため、
+    // GO/却下/差し戻しで状態が変わると古いトークンは失効する＝事実上ワンタイム（M3）。
     const ticket = await fetchTicketByPageId(p.pageId);
     if (!ticket) {
       if (replyToken) await replyText(replyToken, "対象チケットが見つかりませんでした。");
+      return;
+    }
+    if (!verifyProposalToken(p.pageId, p.token, ticket.state)) {
+      if (replyToken) await replyText(replyToken, "ボタンの照合に失敗しました（古い/不正なボタンの可能性）。");
       return;
     }
     const r = await applyGoAction(p.action, ticket);
