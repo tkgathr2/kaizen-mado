@@ -85,11 +85,13 @@ export function isOriginAllowed(
  *   起票導線（/・/api/chat・/api/submit）は optional auth（ログインは任意・強制しない）にし、
  *   保護は「中の人だけが見る管理ページ（/board・/dashboard）」に最小限で限定する。
  *
- * 保護対象（true）：/board /dashboard とその配下のみ。
- * 公開（false）：窓口(/)・/api/*（chat/submit 含む）・静的アセット・その他すべて。
+ * 保護対象（true）：管理ページ /board /dashboard ＋ それらが読む管理データAPI
+ *   /api/board /api/stats（とその配下）。←ページ殻だけ保護してデータAPIを公開すると、
+ *   起票者名・社内チケット内容が素通りで漏れるため必ず一緒に保護する。
+ * 公開（false）：窓口(/)・起票導線 /api/chat /api/submit・静的アセット・その他すべて。
  * 比較は前後空白除去・大文字小文字無視。末尾スラッシュは無視。
  */
-const PROTECTED_PREFIXES = ["/board", "/dashboard"] as const;
+const PROTECTED_PREFIXES = ["/board", "/dashboard", "/api/board", "/api/stats"] as const;
 
 export function shouldProtectPath(pathname: string | null | undefined): boolean {
   const p = (pathname ?? "").trim().toLowerCase().replace(/\/+$/, "");
