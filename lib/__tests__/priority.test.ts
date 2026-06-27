@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { clampScore, computePriority, isPriority } from "../priority";
+import { clampScore, computePriority, isPriority, lowerPriority } from "../priority";
 
 describe("clampScore", () => {
   it("1〜10の整数はそのまま返す", () => {
@@ -51,6 +51,16 @@ describe("computePriority（§4.5.1 マッピング）", () => {
   it("範囲外入力もクランプして判定する", () => {
     expect(computePriority(20, 20)).toBe("高");
     expect(computePriority(0, 0)).toBe("低"); // 1+1=2
+  });
+});
+
+describe("lowerPriority（§4.14 優先度を下げる）", () => {
+  it("高→中、中→低に1段下げる", () => {
+    expect(lowerPriority("高")).toBe("中");
+    expect(lowerPriority("中")).toBe("低");
+  });
+  it("低はそれ以上下がらない", () => {
+    expect(lowerPriority("低")).toBe("低");
   });
 });
 

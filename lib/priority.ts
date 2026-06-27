@@ -32,3 +32,13 @@ export function computePriority(urgency: number, importanceScore: number): Prior
 export function isPriority(v: unknown): v is Priority {
   return v === "高" || v === "中" || v === "低";
 }
+
+/**
+ * 優先度を1段下げる（高→中→低）。低はそれ以上下がらず低のまま。
+ * WEB申請の確認カードの「優先度を下げる」ボタン（§4.14）が使う純粋ロジック。
+ */
+export function lowerPriority(p: Priority): Priority {
+  if (p === "高") return "中";
+  if (p === "中") return "低";
+  return "低";
+}
