@@ -137,11 +137,14 @@
     ".kz-bar{flex:none;display:flex;align-items:center;gap:9px;padding:11px 12px;background:" + BRAND + ";color:#fff;font:700 14px/1.3 ui-sans-serif,-apple-system,'Segoe UI','Hiragino Kaku Gothic ProN',Meiryo,sans-serif}" +
     ".kz-bar .kz-title{flex:1;display:flex;align-items:center;gap:8px;min-width:0}" +
     ".kz-bar .kz-title img{width:24px;height:24px;border-radius:50%;background:#fff;flex:none;padding:1px;box-sizing:border-box}" +
-    ".kz-bar a,.kz-bar button.kz-x{flex:none;display:flex;align-items:center;justify-content:center;width:30px;height:30px;border:0;border-radius:8px;background:rgba(255,255,255,.16);color:#fff;cursor:pointer;text-decoration:none;transition:background .15s ease}" +
-    ".kz-bar a:hover,.kz-bar button.kz-x:hover{background:rgba(255,255,255,.32)}" +
-    ".kz-bar a:focus-visible,.kz-bar button.kz-x:focus-visible{outline:2px solid #fff;outline-offset:1px}" +
+    ".kz-bar a,.kz-bar button.kz-x,.kz-bar button.kz-max{flex:none;display:flex;align-items:center;justify-content:center;width:30px;height:30px;border:0;border-radius:8px;background:rgba(255,255,255,.16);color:#fff;cursor:pointer;text-decoration:none;transition:background .15s ease}" +
+    ".kz-bar a:hover,.kz-bar button.kz-x:hover,.kz-bar button.kz-max:hover{background:rgba(255,255,255,.32)}" +
+    ".kz-bar a:focus-visible,.kz-bar button.kz-x:focus-visible,.kz-bar button.kz-max:focus-visible{outline:2px solid #fff;outline-offset:1px}" +
     ".kz-bar svg{width:15px;height:15px}" +
     ".kz-frame{flex:1;width:100%;border:none;background:" + CREAM + "}" +
+    // 全画面：パネルをビューポート全面に広げる（位置・サイズ・角丸を上書き）。
+    // 高さは dvh を後勝ちで使い、モバイルのアドレスバー高変動にも追従する。
+    ".kz-panel.kz-fs{position:fixed;inset:0;right:0;left:0;top:0;bottom:0;width:100vw;width:100dvw;height:100vh;height:100dvh;max-width:none;border-radius:0;box-shadow:none}" +
     // 狭い画面：機能ラベルを短縮し、はみ出さない。pillは右下に寄せ、パネルは左右に広がる。
     "@media (max-width:480px){.kz-anchor{right:calc(16px + env(safe-area-inset-right,0px));bottom:calc(16px + env(safe-area-inset-bottom,0px))}.kz-btn{padding:7px 16px 7px 7px}.kz-label-full{display:none}.kz-label-short{display:inline}.kz-tip{display:none}.kz-callout{right:0;max-width:calc(100vw - 32px)}.kz-panel{position:fixed;right:8px;left:8px;bottom:calc(84px + env(safe-area-inset-bottom,0px));width:auto;height:min(560px,calc(100dvh - 110px))}}" +
     // 動きを嫌う環境：登場・呼吸・しっぽ等の動きを止め、表示の切替だけ残す（情報は失わない）。
@@ -154,6 +157,11 @@
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14L21 3"/></svg>';
   var CLOSE =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>';
+  // 全画面化（外向き4隅矢印）／全画面解除（内向き4隅矢印）。
+  var EXPAND =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>';
+  var COMPRESS =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></svg>';
 
   // 初回コールアウトを「もう出した」と記録する（localStorage一度きり）。
   // プライベートモード等で localStorage が使えない場合も例外で落とさない。
@@ -245,7 +253,8 @@
     panel.innerHTML =
       '<div class="kz-bar">' +
       '<span class="kz-title"><img src="' + ICON + '" alt="" onerror="this.style.display=\'none\'">カイゼンくん</span>' +
-      '<a href="' + tabUrl + '" target="_blank" rel="noopener noreferrer" title="新しいタブで開く" aria-label="新しいタブで開く">' + EXTERNAL + "</a>" +
+      '<button class="kz-max" type="button" title="全画面表示" aria-label="全画面表示" aria-pressed="false">' + EXPAND + "</button>" +
+      '<a href="' + tabUrl + '" target="_blank" rel="noopener noreferrer" title="別ページで開く" aria-label="別ページで開く">' + EXTERNAL + "</a>" +
       '<button class="kz-x" type="button" title="閉じる" aria-label="閉じる">' + CLOSE + "</button>" +
       "</div>";
     anchor.appendChild(panel);
@@ -279,11 +288,34 @@
       callout.className = "kz-callout";
     }
 
+    // 全画面トグル（パネルをビューポート全面へ）。別ページ表示は「新しいタブで開く」リンクが担う。
+    var maxBtn = panel.querySelector(".kz-max");
+    function isFullscreen() {
+      return panel.classList.contains("kz-fs");
+    }
+    function setFullscreen(on) {
+      if (on) panel.classList.add("kz-fs");
+      else panel.classList.remove("kz-fs");
+      if (maxBtn) {
+        maxBtn.innerHTML = on ? COMPRESS : EXPAND;
+        maxBtn.title = on ? "全画面解除" : "全画面表示";
+        maxBtn.setAttribute("aria-label", on ? "全画面解除" : "全画面表示");
+        maxBtn.setAttribute("aria-pressed", on ? "true" : "false");
+      }
+    }
+    if (maxBtn) {
+      maxBtn.addEventListener("click", function () {
+        setFullscreen(!isFullscreen());
+      });
+    }
+
     function setOpen(open) {
       if (open) {
         ensureFrame();
         hideCallout(); // パネルを開いたら案内は即消す（用が済んだ）
         markCalloutSeen(); // 一度開いた人には次回もコールアウトを出さない
+      } else {
+        setFullscreen(false); // 閉じたら全画面も解除（次回は通常サイズで開く）
       }
       panel.className = open ? "kz-panel open" : "kz-panel";
       btn.setAttribute("aria-expanded", open ? "true" : "false");
@@ -310,6 +342,10 @@
     });
     document.addEventListener("keydown", function (e) {
       if (e.key === "Escape" && isOpen()) {
+        if (isFullscreen()) {
+          setFullscreen(false); // まず全画面を解除（1回目のEsc）
+          return;
+        }
         setOpen(false);
         try {
           btn.focus();
