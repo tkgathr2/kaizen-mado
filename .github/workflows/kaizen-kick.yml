@@ -1,0 +1,33 @@
+name: kaizen-kick
+# 改善ループの手動キック：/api/process（受付→GO待ち＋LINE提案push）と
+# /api/execute（着手→自動改修）を CRON_SECRET 付きで叩く。
+# Vercel Hobby の cron 1日1回制約を補う運用レバー（真田用）。
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "process / execute / both"
+        required: false
+        default: "both"
+
+jobs:
+  kick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: kick process
+        if: ${{ inputs.target != 'execute' }}
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          curl -sS -X POST "https://kaizen.takagi.bz/api/process" \
+            -H "x-cron-secret: ${CRON_SECRET}" \
+            -H "content-type: application/json" \
+            -d '{"limit":5}'
+      - name: kick execute
+        if: ${{ inputs.target != 'process' }}
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          curl -sS -X POST "https://kaizen.takagi.bz/api/execute" \
+            -H "x-cron-secret: ${CRON_SECRET}" \
+            -H "content-type: application/json"

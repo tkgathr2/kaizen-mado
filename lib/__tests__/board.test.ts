@@ -6,6 +6,12 @@ import {
   countByState,
   BOARD_ORDER,
   PIPELINE_STATES,
+  SIDE_STATES,
+  STATE_META,
+  FUNNEL_ORDER,
+  metaOf,
+  funnelStageOf,
+  DEFAULT_STATE_META,
 } from "../board";
 import type { TicketRow } from "../tickets";
 
@@ -102,5 +108,44 @@ describe("board", () => {
       "レビュー",
       "完了",
     ]);
+  });
+});
+
+describe("状態メタの正本（STATE_META single source of truth）", () => {
+  it("process が実際に書く状態名「議論中」が登録され、ファネルは「検討・提案中」", () => {
+    // app/api/process/route.ts の updateTicketState(...,'議論中') と一致していること。
+    // 旧バグ：stats/dashboard が「議論」で拾い、議論中チケットが集計から漏れていた。
+    expect(STATE_META).toHaveProperty("議論中");
+    expect(STATE_META).not.toHaveProperty("議論"); // 表記ズレの再発防止
+    expect(funnelStageOf("議論中")).toBe("検討・提案中");
+  });
+
+  it("BOARD_ORDER の全状態が STATE_META に登録されている", () => {
+    for (const s of BOARD_ORDER) {
+      expect(STATE_META, `STATE_META に "${s}" が無い`).toHaveProperty(s);
+    }
+  });
+
+  it("各状態の funnel は FUNNEL_ORDER のいずれか", () => {
+    for (const meta of Object.values(STATE_META)) {
+      expect(FUNNEL_ORDER).toContain(meta.funnel);
+    }
+  });
+
+  it("PIPELINE_STATES と SIDE_STATES は重複なく BOARD_ORDER を構成する", () => {
+    expect(BOARD_ORDER).toEqual([...PIPELINE_STATES, ...SIDE_STATES]);
+    const set = new Set(BOARD_ORDER);
+    expect(set.size).toBe(BOARD_ORDER.length);
+  });
+
+  it("metaOf/funnelStageOf は未知状態でデフォルトに落ちる", () => {
+    expect(metaOf("謎ステート")).toEqual(DEFAULT_STATE_META);
+    expect(funnelStageOf("謎ステート")).toBe("検討・提案中");
+  });
+
+  it("代表状態の色・絵文字が引ける（board/dashboard 共通利用）", () => {
+    expect(metaOf("完了").emoji).toBe("✅");
+    expect(metaOf("完了").color).toBe("#3f7a3f");
+    expect(funnelStageOf("完了")).toBe("完了");
   });
 });

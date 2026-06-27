@@ -4,6 +4,7 @@
 // （対外・対人告知ではなく、社長への承認伺い1通。LINE鍵が未設定なら静かにスキップ）。
 // CRON_SECRET が設定されていれば認証を要求（x-cron-secret または Vercel Cron の Bearer）。
 import { NextRequest, NextResponse } from "next/server";
+import { waitUntil } from "@vercel/functions";
 import {
   fetchTicketsByState,
   updateTicketState,
@@ -13,6 +14,10 @@ import {
 import { discussTicket } from "@/lib/discuss";
 import { pushProposal } from "@/lib/line";
 import { checkCronSecret } from "@/lib/cronAuth";
+import { returnLearningFromCompleted } from "@/lib/learn";
+import { findTarget } from "@/lib/targets";
+import { preGate, autopilotEnabled } from "@/lib/gate";
+import { kickEndpoint } from "@/lib/trigger";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -55,20 +60,61 @@ export async function POST(req: NextRequest) {
           { heading: "GO伺いドラフト（未送信）", body: d.goDraft },
         ]);
         await setTicketAssignee(ticket.pageId, "CTO Agent Lab");
-        await updateTicketState(ticket.pageId, "GO待ち");
-        // GO伺いを高木さん本人のLINEへpush（GO/修正/却下のボタン付き）。
-        // LINE鍵未設定なら pushProposal は false を返すだけ（ループは止めない）。
-        const pushed = await pushProposal(
-          { ...ticket, state: "GO待ち" },
-          d
-        );
-        processed.push({
-          ticketId: ticket.ticketId,
-          recommendation: d.recommendation,
-          source: d.source,
-          notified: pushed,
-        });
+
+        // ── 真田自走（オートパイロット） ──
+        // 安全（preGate=auto＝自動許可システム＋機微/新機能を含まない）かつ推奨がGOなら、
+        // 社長にGO伺いせず自動で「着手」へ進める（＝真田の判断でやって事後報告）。
+        // 危険（escalate）や自走OFFなら従来どおり「GO待ち」にしてGO伺いをpush（社長に聞く）。
+        const target = findTarget(ticket.system);
+        const gate = preGate({ ...ticket, state: "GO待ち" }, target);
+        // 推奨は enum（GO推奨/要検討/非推奨）。自走は「GO推奨」だけ。
+        // 要検討・非推奨はラボが慎重判断＝従来どおり社長にGO伺い（聞く）。
+        const recommendGo = d.recommendation === "GO推奨";
+
+        if (autopilotEnabled() && gate.mode === "auto" && recommendGo) {
+          // 自動GO：GO待ちを飛ばして着手へ。次のexecuteが実装→PR→（自走なら）マージまで。
+          await updateTicketState(ticket.pageId, "着手");
+          await appendDiscussionBlocks(ticket.pageId, [
+            {
+              heading: "真田自走（自動GO）",
+              body: "安全な改善のため、社長へのGO伺いを省略し真田の判断で着手。危険・対人・課金・本番破壊に該当する場合のみ社長確認（preGate=auto）。",
+            },
+          ]);
+          // 「着手」にしたら即 /api/execute を起こして実改修へ進める（応答はブロックしない）。
+          // line/webhook・admin/go と同じ形。vercel.json の crons は空＝安全網がないため、
+          // ここで kick しないと自動GOチケットが「着手」のまま実装パイプラインに乗らず残置する。
+          waitUntil(kickEndpoint("/api/execute"));
+          // 新仕様：自分から送るLINEは「GO伺い」と「詰まり連絡」だけ。
+          // 着手予告（旧「🤖 真田が直します」FYI）は不要のため送らない（状態遷移・kickは維持）。
+          processed.push({
+            ticketId: ticket.ticketId,
+            recommendation: d.recommendation,
+            source: d.source,
+            notified: false,
+          });
+        } else {
+          // 従来：GO待ち＋GO伺い（社長に聞く）。自走未許可システム・危険案件はここ。
+          await updateTicketState(ticket.pageId, "GO待ち");
+          const pushed = await pushProposal({ ...ticket, state: "GO待ち" }, d);
+          processed.push({
+            ticketId: ticket.ticketId,
+            recommendation: d.recommendation,
+            source: d.source,
+            notified: pushed,
+          });
+        }
       } catch (err) {
+        // ── 宙づり対策：先に「議論中」へ進めた後で後続のNotion書込みがthrowすると、
+        // catchで状態が戻らず「議論中」のまま残置していた（fetchTicketsByStateは「受付」しか
+        // 再取得しないため二度と拾われない）。失敗したら「受付」へ戻し、次回cronで再処理させる。
+        // 戻し自体が失敗しても本来のエラーは errors に積んで他チケットの処理は続ける。
+        await updateTicketState(ticket.pageId, "受付").catch((e) => {
+          console.error(
+            "[process] 受付への巻き戻し失敗",
+            ticket.ticketId,
+            (e as Error).message
+          );
+        });
         // 1件失敗しても他を続行する
         errors.push({
           ticketId: ticket.ticketId,
@@ -77,10 +123,19 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // 学び還元（Phase2蒸留）を毎日ここで回す：完了済み・未学習チケットをknowhowへ。
+    // 従来は execute/callback（自動改修のマージ時）でしか走らず、手動完了・社長案件の
+    // 完了チケットが永遠に蒸留されなかった（learned=0 の真因）。失敗してもcron全体は止めない。
+    const learn = await returnLearningFromCompleted(10).catch((err) => {
+      console.error("[process] learn failed:", (err as Error).message);
+      return { memorized: 0 };
+    });
+
     return NextResponse.json({
       ok: true,
       count: processed.length,
       processed,
+      learned: learn.memorized,
       ...(errors.length ? { errors } : {}),
     });
   } catch (err) {

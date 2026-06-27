@@ -5,16 +5,11 @@
 // データは /api/stats（Notion改善チケットDBの集計・60秒キャッシュ）。
 import { useEffect, useState } from "react";
 import type { KaizenStats } from "@/lib/stats";
+// 状態の色は lib/board.ts の正本から取得（「議論」と「議論中」のズレを防ぐ）。
+import { metaOf } from "@/lib/board";
 
-const STATE_COLOR: Record<string, string> = {
-  受付: "#9a8c7a",
-  議論: "#b58a3c",
-  差し戻し: "#b58a3c",
-  GO待ち: "#b58a3c",
-  着手: "#3d7ab0",
-  完了: "#3f7a3f",
-  却下: "#a0a0a0",
-};
+// 進行中件数の純粋ロジックは app/dashboard/inProgress.ts に分離（テスト可能にするため）。
+import { inProgressFromFunnel } from "./inProgress";
 
 function fmtDate(iso: string): string {
   const d = new Date(iso);
@@ -57,14 +52,14 @@ export default function DashboardPage() {
 
   return (
     <div className="dash">
-      <DashHeader />
+      <DashHeader stats={stats} />
 
       <div className="dash-cards">
         <Card label="集まった声（累計）" value={stats.total} unit="件" />
         <Card label="今月の声" value={stats.thisMonth} unit="件" />
         <Card label="改修完了" value={stats.done} unit="件" />
         <Card label="完了率" value={stats.doneRate} unit="%" />
-        <Card label="学びDB還元" value={stats.learned} unit="件" />
+        <Card label="次に活かせた学び" value={stats.learned} unit="件" />
       </div>
 
       <section className="dash-section">
@@ -125,7 +120,7 @@ export default function DashboardPage() {
               <span className="dash-recent-date">{fmtDate(r.createdTime)}</span>
               <span
                 className="dash-recent-state"
-                style={{ color: STATE_COLOR[r.state] ?? "#83807a" }}
+                style={{ color: metaOf(r.state).color }}
               >
                 {r.state}
               </span>
@@ -151,7 +146,10 @@ export default function DashboardPage() {
   );
 }
 
-function DashHeader() {
+function DashHeader({ stats }: { stats?: KaizenStats }) {
+  // 進行中件数 ＝ 全件から「完了」「見送り」を引いた残り（段が増えても数え漏れない）。
+  const inProgressCount = stats ? inProgressFromFunnel(stats.funnel) : 0;
+
   return (
     <header className="header">
       {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -160,6 +158,11 @@ function DashHeader() {
         <h1>カイゼンくん 成長ダッシュボード</h1>
         <div className="sub">声が集まる → 直る → 学びになる、の現在地</div>
       </div>
+      {stats && inProgressCount > 0 && (
+        <div className="progress-badge">
+          進行中 {inProgressCount} 件
+        </div>
+      )}
     </header>
   );
 }

@@ -35,6 +35,9 @@ function KaizenMado() {
   const [status, setStatus] = useState<"chatting" | "submitting" | "done">("chatting");
   const [doneId, setDoneId] = useState<string>("");
   const [error, setError] = useState("");
+  // 簡易モード（AI未応答でフォールバック）で返したアシスタント発話の index 集合。
+  // そのターンだけ「※ いまは簡易モードで受付中です」と薄く注記する。
+  const [fallbackIdx, setFallbackIdx] = useState<Set<number>>(() => new Set());
   const scrollRef = useRef<HTMLDivElement>(null);
   const inFlightRef = useRef(false); // send/submit 実行中フラグ（同期・二重発火防止）
 
@@ -73,7 +76,14 @@ function KaizenMado() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "通信に失敗しました");
 
-      setMessages((m) => [...m, { role: "assistant", content: data.reply }]);
+      setMessages((m) => {
+        // このアシスタント発話が簡易モード（fallback）なら index を控える。
+        if (data?.fallback) {
+          const idx = m.length;
+          setFallbackIdx((s) => new Set(s).add(idx));
+        }
+        return [...m, { role: "assistant", content: data.reply }];
+      });
       setPhase(data.phase === "confirm" ? "confirm" : "clarify");
       setTicket(data.phase === "confirm" ? (data.ticket as Ticket) : null);
     } catch (e) {
@@ -105,11 +115,17 @@ function KaizenMado() {
       });
       const data = await res.json();
       if (!res.ok || !data?.ok) throw new Error(data?.error || "起票に失敗しました");
-      setDoneId(data.ticketId || "KZ-受付");
+      // 受付番号は取れたときだけ使う（取れなければ "KZ-受付" のようなダミーは出さない）。
+      const id = typeof data.ticketId === "string" ? data.ticketId.trim() : "";
+      setDoneId(id);
       setStatus("done");
+      // 完了の合図はチャット内の1行に集約（別カードでは番号を二重に出さない）。
       setMessages((m) => [
         ...m,
-        { role: "assistant", content: `送りました（${data.ticketId}）。ありがとうございました！` },
+        {
+          role: "assistant",
+          content: id ? `送りました（${id}）。ありがとうございました！` : "送りました。ありがとうございました！",
+        },
       ]);
     } catch (e) {
       setError((e as Error).message);
@@ -132,10 +148,14 @@ function KaizenMado() {
     <div className={embed ? "app embed" : "app"}>
       {!embed && (
         <header className="header">
-          <div className="logo">🛠️</div>
+          <div className="logo-wrap">
+            <img src="/kaizen-kun.png" alt="フクロウ博士" className="logo" />
+            <span className="logo-name">フクロウ博士</span>
+          </div>
           <div>
             <h1>カイゼン窓口</h1>
             <div className="sub">高木産業グループ カイゼンくん</div>
+            <div className="catchphrase">気づいたことを送ると、システムが良くなっていきます</div>
           </div>
           <div className="pill">{systemName ? `対象：${systemName}` : "対象：未指定"}</div>
         </header>
@@ -145,6 +165,9 @@ function KaizenMado() {
         {messages.map((m, i) => (
           <div key={i} className={`row ${m.role}`}>
             <div className="bubble">{m.content}</div>
+            {m.role === "assistant" && fallbackIdx.has(i) && (
+              <div className="fallback-note">※ いまは簡易モードで受付中です</div>
+            )}
           </div>
         ))}
 
@@ -170,8 +193,14 @@ function KaizenMado() {
         {status === "done" && (
           <div className="done">
             送信が完了しました 🎉
-            <br />
-            受付番号 <span className="kz">{doneId}</span>
+            {doneId && (
+              <>
+                <br />
+                受付番号 <span className="kz">{doneId}</span>
+                <br />
+                <small className="kz-keep">控えなくても大丈夫です</small>
+              </>
+            )}
             <br />
             <small>CTO室で内容を確認し、改善を検討します。ありがとうございました。</small>
           </div>
@@ -201,6 +230,15 @@ function KaizenMado() {
               onClick={() => {
                 setPhase("clarify");
                 setTicket(null);
+                // 無言の入力欄に取り残さない：どこを直すか尋ねる一言を足して会話を続ける。
+                setMessages((m) => [
+                  ...m,
+                  {
+                    role: "assistant",
+                    content:
+                      "どこを直しましょう？ 違う点や、足したいことを教えてください。",
+                  },
+                ]);
               }}
               disabled={status === "submitting"}
             >
@@ -235,7 +273,11 @@ function KaizenMado() {
       )}
 
       {!embed && (
-        <div className="footer">カイゼンくん 第1段・カイゼン窓口 ／ 入力内容はNotionの改善チケットに記録されます</div>
+        <div className="footer">
+          カイゼンくん 第1段・カイゼン窓口 ／ 入力内容はNotionの改善チケットに記録されます
+          <br />
+          <small>このシステムは現場の声で日々改善されています</small>
+        </div>
       )}
     </div>
   );

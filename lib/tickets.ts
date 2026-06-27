@@ -1,6 +1,10 @@
 // ── Notion 改善チケットDB の読取・更新（第2段=フィードバック改善ループの内部処理） ──
 // 起票(lib/notion.ts)の延長。状態遷移・議論ブロック追記・冪等マークを担う。
 // 誰にも送信しない（対人送信・課金・本番DB破壊は含めない）。
+import type { Ticket } from "./types";
+import { normalizeForDedup } from "./dedup";
+import { normalizeSystemForTicket } from "./systems";
+
 const NOTION_VERSION = "2022-06-28";
 
 export interface TicketRow {
@@ -16,6 +20,8 @@ export interface TicketRow {
   fgsUrl: string | null;
   /** Notionの最終更新時刻（ISO文字列）。/board の並び・表示用。古いコードは未使用なので任意。 */
   lastEdited?: string;
+  /** Notionの作成時刻（ISO文字列）。起票前 冪等チェックの時間窓判定用。任意。 */
+  createdTime?: string;
 }
 
 function getAuth(): { token: string; databaseId: string } {
@@ -74,6 +80,7 @@ function parseRow(page: any): TicketRow {
     state: nameFromSelect(props["状態"]),
     fgsUrl: valueFromUrl(props["FGSリンク"]),
     lastEdited: typeof page?.last_edited_time === "string" ? page.last_edited_time : "",
+    createdTime: typeof page?.created_time === "string" ? page.created_time : "",
   };
 }
 
@@ -85,23 +92,58 @@ function findUniqueId(props: any): any {
   return null;
 }
 
-async function queryDatabase(filter: any, limit: number): Promise<TicketRow[]> {
+// Notion query の1ページ最大件数。これを超える件数は has_more/next_cursor で繰り返し取得する。
+const NOTION_PAGE_SIZE = 100;
+
+/**
+ * Notion DBクエリをページネーション込みで全件取得する（limit に達するまで）。
+ * 旧実装は先頭ページ(page_size=limit)しか見ず、limit>100 や「全件」を意図しても
+ * has_more を辿らないため取りこぼしていた。has_more の間 start_cursor を付けて繰り返す。
+ * @param filter Notion filter（null可＝全件）
+ * @param limit  取得上限（全件取りたい場合は十分大きな数を渡す）
+ * @param sorts  Notion sorts（任意）
+ */
+async function queryDatabase(
+  filter: any,
+  limit: number,
+  sorts?: any
+): Promise<TicketRow[]> {
   const { token, databaseId } = getAuth();
-  const res = await fetch(
-    `https://api.notion.com/v1/databases/${databaseId}/query`,
-    {
-      method: "POST",
-      headers: headers(token),
-      body: JSON.stringify({ filter, page_size: limit }),
+  const cap = Math.max(1, Math.floor(limit));
+  const rows: TicketRow[] = [];
+  let cursor: string | undefined = undefined;
+
+  // has_more の間ループ。1ページ毎に残り必要件数だけ要求して limit でちょうど止める。
+  do {
+    const remaining = cap - rows.length;
+    const pageSize = Math.min(NOTION_PAGE_SIZE, remaining);
+    const payload: any = { page_size: pageSize };
+    if (filter) payload.filter = filter;
+    if (sorts) payload.sorts = sorts;
+    if (cursor) payload.start_cursor = cursor;
+
+    const res = await fetch(
+      `https://api.notion.com/v1/databases/${databaseId}/query`,
+      {
+        method: "POST",
+        headers: headers(token),
+        body: JSON.stringify(payload),
+      }
+    );
+    if (!res.ok) {
+      const t = await res.text().catch(() => "");
+      throw new Error(`Notion query error ${res.status}: ${t.slice(0, 300)}`);
     }
-  );
-  if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    throw new Error(`Notion query error ${res.status}: ${t.slice(0, 300)}`);
-  }
-  const data = await res.json();
-  const results = Array.isArray(data?.results) ? data.results : [];
-  return results.map(parseRow);
+    const data = await res.json();
+    const results = Array.isArray(data?.results) ? data.results : [];
+    for (const page of results) {
+      rows.push(parseRow(page));
+      if (rows.length >= cap) break;
+    }
+    cursor = data?.has_more && data?.next_cursor ? data.next_cursor : undefined;
+  } while (cursor && rows.length < cap);
+
+  return rows;
 }
 
 /** 指定状態のチケットを取得 */
@@ -115,27 +157,14 @@ export async function fetchTicketsByState(
   );
 }
 
-/** 全チケットを最終更新の新しい順で取得（/board の状況可視化用・読み取り専用）。 */
+/** 全チケットを最終更新の新しい順で取得（/board の状況可視化用・読み取り専用）。
+ * ページネーション対応：limit が100を超えても has_more を辿って全件取得する。 */
 export async function fetchAllTickets(limit = 100): Promise<TicketRow[]> {
-  const { token, databaseId } = getAuth();
-  const res = await fetch(
-    `https://api.notion.com/v1/databases/${databaseId}/query`,
-    {
-      method: "POST",
-      headers: headers(token),
-      body: JSON.stringify({
-        sorts: [{ timestamp: "last_edited_time", direction: "descending" }],
-        page_size: Math.min(Math.max(1, limit), 100),
-      }),
-    }
+  return queryDatabase(
+    null,
+    limit,
+    [{ timestamp: "last_edited_time", direction: "descending" }]
   );
-  if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    throw new Error(`Notion query error ${res.status}: ${t.slice(0, 300)}`);
-  }
-  const data = await res.json();
-  const results = Array.isArray(data?.results) ? data.results : [];
-  return results.map(parseRow);
 }
 
 /** pageIdで1件取得（webhookでGO時に現在状態を確認＝冪等化のため）。無ければnull。 */
@@ -154,11 +183,145 @@ export async function fetchTicketByPageId(pageId: string): Promise<TicketRow | n
   return parseRow(page);
 }
 
+// ── 起票前 冪等チェック（インスタンス跨ぎの真の二重起票防止） ──
+// lib/dedup.ts のメモリ段は「同一プロセス内」しか効かない。Vercelの
+// serverless は連打を別インスタンスで受けうるため、メモリ段をすり抜けた
+// 二重起票が Notion に2件できる。そこで createTicket の直前に Notion を
+// 1回問い合わせ、「直近N秒以内・完全同一内容（＋記名なら同一起票者）」の
+// 既存チケットがあれば、新規作成せずそれを返す。
+//
+// ★ fail-safe：このチェックが失敗/タイムアウトしたら null を返し、呼び出し側は
+//   通常どおり新規作成する（＝声を絶対に取りこぼさない。迷ったら作る側に倒す）。
+
+/** 起票前 冪等チェックの時間窓（秒）。env KAIZEN_SUBMIT_DEDUP_SECONDS（既定15秒）。
+ * 1〜600秒の範囲にクランプ（長すぎる窓は正当な再起票を握りつぶすため）。 */
+export function submitDedupSeconds(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env.KAIZEN_SUBMIT_DEDUP_SECONDS);
+  if (!Number.isFinite(raw) || raw <= 0) return 15;
+  return Math.min(600, Math.max(1, Math.floor(raw)));
+}
+
+/** 匿名（reporter空）の時間窓は記名より短くする（別人の正当な短文を消さない安全側）。
+ * 既定で記名の半分（最低1秒）。記名は submitDedupSeconds をそのまま使う。 */
+export function anonSubmitDedupSeconds(env: NodeJS.ProcessEnv = process.env): number {
+  return Math.max(1, Math.floor(submitDedupSeconds(env) / 2));
+}
+
+/** Notion 上で「直近window秒以内・完全同一内容」の既存チケットを照合する純粋ロジック。
+ * Notion側で created_time＋対象システム(＋記名なら起票者)まで絞った候補 rows を受け、
+ * title/detail/種別/重要度/起票者を正規化して厳密一致するものを1件返す（無ければnull）。
+ * 完全一致のみを重複とみなす＝別内容・別importance は通す（声を取りこぼさない）。 */
+export function matchDuplicate(
+  rows: TicketRow[],
+  ticket: Ticket,
+  reporter: string | null,
+  anonymous: boolean
+): TicketRow | null {
+  const norm = normalizeForDedup;
+  const wantSystem = norm(normalizeSystemForTicket(ticket.system));
+  const wantType = norm(ticket.type || "");
+  const wantTitle = norm(ticket.title || "");
+  const wantDetail = norm(ticket.detail || "");
+  const wantImportance = norm(ticket.importance || "");
+  const wantReporter = norm(reporter || "");
+
+  for (const r of rows) {
+    if (norm(r.system) !== wantSystem) continue;
+    if (norm(r.type) !== wantType) continue;
+    if (norm(r.title) !== wantTitle) continue;
+    if (norm(r.detail) !== wantDetail) continue;
+    if (norm(r.importance) !== wantImportance) continue;
+    // 記名のときは起票者も一致を要求（別人の同一内容を誤って弾かない）。
+    // 匿名のときは起票者キーが無いので内容完全一致のみで判定する。
+    if (!anonymous && norm(r.reporter) !== wantReporter) continue;
+    return r;
+  }
+  return null;
+}
+
+/**
+ * createTicket 直前に1回呼ぶ「Notion側の起票前 冪等チェック」。
+ * 直近window秒以内・同一 対象システム（＋記名なら同一起票者）の候補を Notion から取り、
+ * matchDuplicate で完全同一内容を厳密照合する。ヒットしたらその既存 TicketRow を返す。
+ * 失敗（クエリエラー/タイムアウト/認証未設定など）は握りつぶして null を返す（fail-safe）。
+ */
+export async function findRecentDuplicate(
+  ticket: Ticket,
+  reporter: string | null,
+  now: number = Date.now(),
+  env: NodeJS.ProcessEnv = process.env
+): Promise<TicketRow | null> {
+  try {
+    const anonymous = !reporter || reporter.trim().length === 0;
+    const windowSec = anonymous ? anonSubmitDedupSeconds(env) : submitDedupSeconds(env);
+    const since = new Date(now - windowSec * 1000).toISOString();
+    const system = normalizeSystemForTicket(ticket.system);
+
+    // Notion filter：作成時刻が窓内 AND 対象システム一致（＋記名なら起票者一致）。
+    // title/detail の厳密一致は取得後にアプリ側（matchDuplicate）で正規化照合する。
+    const and: any[] = [
+      { timestamp: "created_time", created_time: { on_or_after: since } },
+      { property: "対象システム", select: { equals: system } },
+    ];
+    if (!anonymous) {
+      and.push({ property: "起票者", rich_text: { equals: (reporter || "").trim() } });
+    }
+
+    // 窓内の候補だけ取れば十分（連打は数件）。新しい順で取得。
+    const rows = await queryDatabase({ and }, 25, [
+      { timestamp: "created_time", direction: "descending" },
+    ]);
+    return matchDuplicate(rows, ticket, reporter, anonymous);
+  } catch (err) {
+    // fail-safe：照合に失敗しても起票は止めない（声を取りこぼさない）。
+    console.error(
+      "[tickets] findRecentDuplicate failed (fallback to create):",
+      (err as Error).message
+    );
+    return null;
+  }
+}
+
 /** ticketId（例 KZ-12）でGO待ちチケットを探す（テキスト返信「GO KZ-12」用）。 */
 export async function findGoMachiByTicketId(ticketId: string): Promise<TicketRow | null> {
   const rows = await fetchTicketsByState("GO待ち", 25);
   const norm = ticketId.toUpperCase().replace(/\s/g, "");
   return rows.find((r) => r.ticketId.toUpperCase().replace(/\s/g, "") === norm) ?? null;
+}
+
+/** 「実装中」が一定時間以上滞留したチケット（=stuck）の判定しきい値（分）。
+ * implement ジョブ（GitHub Actions）が失敗/タイムアウト/中断で callback に到達しないと、
+ * チケットが「実装中」のまま永久滞留する。閾値は env KAIZEN_STUCK_MINUTES（既定30分）。 */
+export function staleImplementingMinutes(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env.KAIZEN_STUCK_MINUTES);
+  return Number.isFinite(raw) && raw > 0 ? raw : 30;
+}
+
+/** あるチケットが「実装中」かつ最終更新から minutes 分以上経過しているか（stuck判定）。
+ * lastEdited（Notion last_edited_time）で経過を測る。lastEdited が無い/不正なら
+ * 経過判定できないので「stuckではない（false）」とみなす（誤って巻き戻さない安全側）。 */
+export function isStaleImplementing(
+  row: Pick<TicketRow, "state" | "lastEdited">,
+  now: number,
+  minutes: number
+): boolean {
+  if (row.state !== "実装中") return false;
+  if (!row.lastEdited) return false;
+  const edited = Date.parse(row.lastEdited);
+  if (!Number.isFinite(edited)) return false;
+  return now - edited >= minutes * 60_000;
+}
+
+/** 「実装中」のまま stuck（一定時間以上滞留）しているチケットを取得する。
+ * implement ジョブが callback に到達せず取り残されたチケットを回収するための入口。
+ * Notion 側に時間フィルタは無いため「実装中」を取得してから lastEdited で経過判定する。 */
+export async function fetchStaleImplementing(
+  minutes: number = staleImplementingMinutes(),
+  limit = 10,
+  now: number = Date.now()
+): Promise<TicketRow[]> {
+  const rows = await fetchTicketsByState("実装中", limit);
+  return rows.filter((r) => isStaleImplementing(r, now, minutes));
 }
 
 /** 完了済みかつ未学習（FGSリンク空）のチケットを取得 */

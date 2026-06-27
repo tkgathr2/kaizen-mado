@@ -132,13 +132,17 @@ export function parsePostback(
 // テキスト返信からGO/修正/却下＋チケットIDを読む（ボタンを使わず「GO KZ-12」と打つ場合）。
 const TEXT_GO = /^(go|ok|ゴー|ごー|オーケー|承認|よし)/i;
 const TEXT_REJECT = /^(却下|ng|やめ|中止|なし)/i;
-const TEXT_FIX = /^(修正|なおして|直して|やり直し)/;
+// 「修正して」「修正してください」のように丁寧な命令補助語が付く形も同じコマンド扱い。
+// 補助語(して/してください/して下さい)は本文ではないので body 抽出時に一緒に削る。
+const TEXT_FIX = /^(修正|なおして|直して|やり直し)(して(ください|下さい)?)?/;
 const TICKET_ID_RE = /\b(KZ[-－]?\d+)\b/i;
 
-/** 自由文から {action, ticketId?} を読む。判定不能なら null（誤爆防止）。 */
+/** 自由文から {action, ticketId?, body?} を読む。判定不能なら null（誤爆防止）。
+ * body＝コマンド語・チケットID を除いた「本文」。社長が「修正 KZ-12 ◯◯を直して」と
+ * 返信したときの「◯◯を直して」部分。修正(fix)時にこれを議論へ反映する。 */
 export function parseTextCommand(
   text: string | undefined | null
-): { action: GoAction; ticketId: string | null } | null {
+): { action: GoAction; ticketId: string | null; body: string } | null {
   if (!text) return null;
   const t = text.trim();
   let action: GoAction | null = null;
@@ -148,11 +152,50 @@ export function parseTextCommand(
   if (!action) return null;
   const m = t.match(TICKET_ID_RE);
   const ticketId = m ? m[1].toUpperCase().replace("－", "-").replace(/KZ(\d)/, "KZ-$1") : null;
-  return { action, ticketId };
+  // 本文＝先頭のコマンド語とチケットID表記を取り除いた残り。
+  // 例: 「修正 KZ-12 ◯◯を直して」→「◯◯を直して」。区切りの記号・空白も削る。
+  let body = t
+    .replace(TEXT_REJECT, "")
+    .replace(TEXT_FIX, "")
+    .replace(TEXT_GO, "");
+  if (m) body = body.replace(m[0], "");
+  body = body.replace(/^[\s、,：:。.\-－―ー　]+/, "").trim();
+  return { action, ticketId, body };
+}
+
+// ── 引用返信のための「送信メッセージID → チケットID」対応（best-effort・揮発） ──
+// LINEの送信API応答は sentMessages[].id を返す。社長がその提案メッセージを
+// 「引用返信」すると webhook に message.quotedMessageId が乗る。これを使い
+// 「どのメッセージ＝どのチケットか」を特定するための軽量な対応表。
+//
+// ★限界（重要）：Vercel serverless は連続リクエストを別インスタンスで受けうるため、
+//   この in-memory マップは「同じインスタンスに当たれば効く」程度の best-effort。
+//   外れたら resolveTicket が自然文（システム名／直近）にフォールバックする設計（converse.ts）。
+//   恒久対応は外部KV（Redis等）への移設だが、本実装では依存を増やさず軽量同居に留める。
+const QUOTED_MAP_MAX = 200;
+const quotedMap = new Map<string, string>(); // messageId → ticketId
+
+/** 送信メッセージID→チケットID を記録（古いものから捨てる簡易LRU）。 */
+export function recordSentMessage(messageId: string, ticketId: string): void {
+  if (!messageId || !ticketId) return;
+  if (quotedMap.has(messageId)) quotedMap.delete(messageId);
+  quotedMap.set(messageId, ticketId);
+  while (quotedMap.size > QUOTED_MAP_MAX) {
+    const oldest = quotedMap.keys().next().value;
+    if (oldest === undefined) break;
+    quotedMap.delete(oldest);
+  }
+}
+
+/** 現在の「メッセージID→チケットID」対応の浅いコピーを返す（resolveTicket に渡す）。 */
+export function getQuotedMap(): Record<string, string> {
+  return Object.fromEntries(quotedMap);
 }
 
 // ── 送信系（失敗してもthrowしない：呼び出し元の改善ループを止めないため fail-safe） ──
-async function postLine(endpoint: string, payload: unknown): Promise<boolean> {
+// 返値：失敗時は null、成功時は LINE応答（sentMessages を含む）。旧来の boolean 判定は
+// `!!await postLine(...)` で互換。
+async function postLine(endpoint: string, payload: unknown): Promise<any | null> {
   try {
     const res = await fetch(endpoint, {
       method: "POST",
@@ -165,62 +208,175 @@ async function postLine(endpoint: string, payload: unknown): Promise<boolean> {
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
       console.error("[line] post失敗", { endpoint, status: res.status, detail: detail.slice(0, 200) });
-      return false;
+      return null;
     }
-    return true;
+    return await res.json().catch(() => ({}));
   } catch (e) {
     console.error("[line] post例外", { error: e instanceof Error ? e.message : String(e) });
-    return false;
+    return null;
   }
 }
 
 /** 任意テキストを高木さん宛にpushする（完了報告・警告等）。 */
 export async function pushText(text: string): Promise<boolean> {
   if (!lineEnabled()) return false;
-  return postLine(LINE_PUSH_ENDPOINT, {
-    to: targetUserId(),
-    messages: [{ type: "text", text }],
-  });
+  return Boolean(
+    await postLine(LINE_PUSH_ENDPOINT, {
+      to: targetUserId(),
+      messages: [{ type: "text", text }],
+    })
+  );
 }
 
 /** postback応答用の簡易reply（「着手します」等の受領返信）。 */
 export async function replyText(replyToken: string, text: string): Promise<boolean> {
   if (!process.env.LINE_CHANNEL_ACCESS_TOKEN) return false;
-  return postLine(LINE_REPLY_ENDPOINT, {
-    replyToken,
-    messages: [{ type: "text", text }],
-  });
-}
-
-/** GO伺い本文を組み立てる（チケット＋議論結果から）。
- * 複数提案が連続で届いてもLINEのquick replyボタンは"最新メッセージ"にしか付かないため、
- * 各提案を「ID付きテキスト返信（GO KZ-3 等）」で個別に答えられる形にする（前の提案にも返信可）。 */
-export function buildProposalText(ticket: TicketRow, d: DiscussResult): string {
-  const risks = d.risks.length ? d.risks.map((r) => `・${r}`).join("\n") : "・特になし";
-  const id = ticket.ticketId;
-  return (
-    `🔁 カイゼン提案 ${id}\n` +
-    `━━━━━━━━━━\n` +
-    `対象：${ticket.system || "未特定"}（${ticket.type || "改善"}・重要度${ticket.importance || "中"}）\n` +
-    `件名：${ticket.title || "改善のご要望"}\n` +
-    `\n` +
-    `方針：${d.houshin}\n` +
-    `工数：${d.kousuu}\n` +
-    `リスク：\n${risks}\n` +
-    `推奨：${d.recommendation}\n` +
-    `━━━━━━━━━━\n` +
-    `▼ 返信でお答えください（複数届いてもIDで区別できます）\n` +
-    `　✅ 着手 → 「GO ${id}」\n` +
-    `　✏️ 修正 → 「修正 ${id}」\n` +
-    `　🚫 却下 → 「却下 ${id}」\n` +
-    `※下の3ボタンは“最新の提案”だけに付きます。前の提案にはこの「GO ${id}」のようにIDで返信してください。`
+  return Boolean(
+    await postLine(LINE_REPLY_ENDPOINT, {
+      replyToken,
+      messages: [{ type: "text", text }],
+    })
   );
 }
 
-/** GO待ちチケットの提案を高木さん宛にpushする。GO/修正/却下のquick reply付き。 */
+// ── 文面ヘルパ（スマホのLINEは1行が短く折り返されるため、短文・要点先頭で組む） ──
+
+/** LINE向けに1行へ整形して切り詰める（改行・連続空白は1スペースに）。 */
+export function truncateForLine(s: string | null | undefined, max: number): string {
+  const t = (s || "").trim().replace(/\s+/g, " ");
+  if (t.length <= max) return t;
+  return t.slice(0, Math.max(0, max - 1)) + "…";
+}
+
+/** NotionページURL（詳細はLINEに書かずリンクへ逃がす）。 */
+export function notionPageUrl(pageId: string): string {
+  return `https://www.notion.so/${(pageId || "").replace(/-/g, "")}`;
+}
+
+// ── 文字化け（mojibake）検知ガード ──
+// 旧テスト投稿や取込時のエンコード崩れで「縺ｻ縺?縺薙■繧繧」のような呪文がそのまま
+// LINEへ流れ、社長に「意味不明な通知」として届く事故があった。送信前にこれを検知し、
+// 呪文ではなく「⚠️ 文字化けの可能性（リンクで原文確認）」という"意味の分かる警告"に置換する。
+
+// UTF-8テキストをCP932/Latin1として誤デコードしたときに高頻度で現れる「署名文字」。
+// これらは正常な日本語ではまず連続して出ない（出れば誤デコードの証拠）。
+const MOJIBAKE_SIGNATURE =
+  /[縀-繿�]|繧|繝|縺|蜉|蜈|蜊|郢|髟|髢|竏|繹|繞|繖|繚|ã|â|Ã|Â|�/g;
+// 半角カタカナ（U+FF61–FF9F）。単体では正常（ﾊﾟｿｺﾝ等）なので、署名文字と併発した時だけ加点。
+const HALFWIDTH_KANA = /[｡-ﾟ]/g;
+
+/** 文字列が文字化け（mojibake）している可能性が高いか。誤検知を避けるため保守的に判定。 */
+export function looksGarbled(s: string | null | undefined): boolean {
+  const t = (s || "").trim();
+  if (t.length < 4) return false; // 短文は誤判定を避けて素通し
+  const sig = (t.match(MOJIBAKE_SIGNATURE) || []).length;
+  const kana = (t.match(HALFWIDTH_KANA) || []).length;
+  // 置換文字(�/U+FFFD)が1つでもあれば確定的に文字化け。
+  if (/[�￾]/.test(t)) return true;
+  // 署名文字が3つ以上、または「署名文字が2つ以上 かつ 半角カナと混在」なら文字化け。
+  if (sig >= 3) return true;
+  if (sig >= 2 && kana >= 1) return true;
+  // 署名+半角カナの合計が全体の35%以上を占める（呪文化）。
+  if (t.length >= 6 && (sig + kana) / t.length >= 0.35 && sig >= 1) return true;
+  return false;
+}
+
+/** LINE向けに整形。文字化けしていれば呪文を出さず、意味の分かる警告に置換する。 */
+export function cleanForLine(s: string | null | undefined, max: number): string {
+  if (looksGarbled(s)) return "⚠️ 文字化けの可能性（くわしくはリンクで原文をご確認ください）";
+  return truncateForLine(s, max);
+}
+
+/** 全体像（カンバン）ボードのURL。 */
+export const BOARD_URL =
+  (process.env.KAIZEN_PUBLIC_BASE || "https://kaizen.takagi.bz") + "/board";
+
+// ── 工程ステッパー（社長が「今どこか／全体像」を一目で分かるように） ──
+// カイゼンの全工程：①声→②提案→③GO→④着手→⑤PR→⑥反映
+// 各LINE通知の先頭にこの1行を入れて、✅=済 / 🔵=いまここ / ・=これから を示す。
+export const STAGES = ["声", "提案", "GO", "着手", "PR", "反映"] as const;
+export type StageIndex = 1 | 2 | 3 | 4 | 5 | 6;
+
+/** 工程バーを組み立てる。current=いまの工程(1〜6)。done=完了として閉じる場合はcurrentに6を渡す。 */
+export function stageBar(current: StageIndex): string {
+  return (
+    "📍 " +
+    STAGES.map((label, i) => {
+      const n = i + 1;
+      if (n < current) return `✅${label}`;
+      if (n === current) return `🔵${label}`;
+      return `・${label}`;
+    }).join(" ")
+  );
+}
+
+// 各システムのやさしい説明（社長が「何のシステムか」を一目で分かるように）。
+const SYSTEM_LABELS: Record<string, string> = {
+  カイゼンくん本体: "カイゼンくん（みんなの改善の声を受ける窓口アプリ）",
+  プロレポ: "プロレポ（営業日報システム）",
+  ステレポ: "ステレポ（SNS運用・分析システム）",
+  ほうこちゃん: "ほうこちゃん（警備の報告書システム）",
+  "mfc-invoice-upload": "請求書アップロード（MFクラウド連携）",
+  Indeed応募通知: "Indeed応募通知（採用の応募通知Bot）",
+  キャスト名簿くん: "キャスト名簿くん（スタッフ名簿システム）",
+  らくらく契約くん: "らくらく契約くん（契約書づくり）",
+  巡回くん: "巡回くん（SNS巡回システム）",
+  その他: "その他のシステム",
+};
+
+/** システム名をやさしい説明つきにする（未知ならそのまま）。 */
+export function systemLabel(system: string | null | undefined): string {
+  if (!system) return "対象未特定のシステム";
+  return SYSTEM_LABELS[system] || system;
+}
+
+/** メッセージ先頭の「何の件か」ヘッダー（3行）。社長が最初に
+ * ①どのシステムか（やさしい説明・最上段） ②種別 ③ざっくり何をするか を一目で掴めるように。
+ * 例：🖥 カイゼンくん（…窓口アプリ）/ 💡【カイゼンの提案】/ ✏️ 窓口に説明を1行足す */
+export function msgHead(
+  emoji: string,
+  kind: string,
+  system: string | null | undefined,
+  title: string | null | undefined
+): string {
+  const sys = looksGarbled(system) ? "対象システム（文字化けの可能性）" : truncateForLine(systemLabel(system), 34);
+  return (
+    `🖥 ${sys}\n` +
+    `${emoji}【${kind}】\n` +
+    `✏️ ${cleanForLine(title || "改善のご要望", 32)}`
+  );
+}
+
+/** GO伺い本文を組み立てる（チケット＋議論結果から）。
+ * 読みやすさ最優先：結論（おすすめ）を先頭に、方針・リスクは要約だけ、詳細はNotionリンクへ。
+ * 複数提案が連続で届いてもquick replyボタンは"最新メッセージ"にしか付かないため、
+ * 「ID付きテキスト返信（GO KZ-3 等）」で前の提案にも答えられる形は維持する。 */
+export function buildProposalText(ticket: TicketRow, d: DiscussResult): string {
+  const id = ticket.ticketId;
+  // 方針＝どう直すかを、やさしい一言に（長い技術説明は詳細リンクへ逃がす）。
+  // 文字化けしていれば呪文を出さず警告に置換（cleanForLine）。
+  const how = cleanForLine(d.houshin, 50);
+  return [
+    msgHead("💡", "カイゼンの提案", ticket.system, ticket.title), // ①種別②システム③何を
+    `🔧 どう直す：${how}`, // ④どう直すか（やさしく一言）
+    `🧭 おすすめ：${truncateForLine(d.recommendation, 24)}（目安 ${looksGarbled(d.kousuu) ? "未記載" : truncateForLine(d.kousuu, 16)}）`,
+    ``,
+    `▼ 直していい？ 返信で（どれか1つ）`,
+    `GO ${id}／修正 ${id}／却下 ${id}`,
+    `※ボタンは最新の提案のみ。前の提案にはID付きで返信。`,
+    ``,
+    stageBar(2), // ②提案（GO待ち）
+    `くわしく ▶ ${notionPageUrl(ticket.pageId)}`,
+    `全体像 ▶ ${BOARD_URL}`,
+  ].join("\n");
+}
+
+/** GO待ちチケットの提案を高木さん宛にpushする。GO/修正/却下のquick reply付き。
+ * 送信成功時は応答の sentMessages[].id を「引用返信→チケット」対応として記録する
+ * （社長がこの提案を引用返信で操作できるように）。 */
 export async function pushProposal(ticket: TicketRow, d: DiscussResult): Promise<boolean> {
   if (!lineEnabled()) return false;
-  return postLine(LINE_PUSH_ENDPOINT, {
+  const res = await postLine(LINE_PUSH_ENDPOINT, {
     to: targetUserId(),
     messages: [
       {
@@ -230,4 +386,10 @@ export async function pushProposal(ticket: TicketRow, d: DiscussResult): Promise
       },
     ],
   });
+  if (!res) return false;
+  const sent = Array.isArray(res?.sentMessages) ? res.sentMessages : [];
+  for (const m of sent) {
+    if (m?.id) recordSentMessage(String(m.id), ticket.ticketId);
+  }
+  return true;
 }

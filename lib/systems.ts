@@ -7,9 +7,28 @@ export const SYSTEMS: { slug: string; name: string }[] = [
   { slug: "houko", name: "ほうこちゃん" },
   { slug: "mfc-invoice-upload", name: "mfc-invoice-upload" },
   { slug: "indeed", name: "Indeed応募通知" },
+  { slug: "recruit", name: "Indeed応募通知" },  // alias（応募通知ボット＝tkgathr2/recruit。Indeed/ジモティーの応募通知）
+  { slug: "ouboe-tsuchi", name: "Indeed応募通知" },  // alias（応募通知ボットの分かりやすいスラグ）
   { slug: "cast-meibo", name: "キャスト名簿くん" },
   { slug: "rakuraku", name: "らくらく契約くん" },
+  { slug: "mitsumori", name: "見積もりシステム" },
+  { slug: "seiko", name: "seiko" },
+  { slug: "junkai", name: "巡回くん" },
   { slug: "kaizen", name: "カイゼンくん本体" },
+  { slug: "aio-checker", name: "AIOダッシュボードくん" },
+  { slug: "saiyo-kanri", name: "採用管理システム" },
+  { slug: "mention-hisho", name: "メンション秘書くん" },
+  { slug: "leadforge-ky", name: "爆裂リード獲得くん（交通誘導）" },
+  { slug: "buppin", name: "かいたくん（物品購入）" },
+  { slug: "mamoru", name: "まもるくん" },
+  { slug: "knowhow", name: "ノウハウキング" },
+  { slug: "daikou", name: "採用管理システム" },  // alias（saiyo-kanri の追加スラグ）
+  { slug: "rakuraku-contract", name: "らくらく契約くん" },  // alias（rakuraku の追加スラグ）
+  { slug: "schedule-relay", name: "スケジュール調整くん" },
+  { slug: "mieruka", name: "ミエルカくん" },
+  { slug: "iride", name: "入退社管理くん" },
+  { slug: "daily-report", name: "簡単日報くん" },
+  { slug: "tsunagee", name: "Tsunagee" },
   { slug: "other", name: "その他" },
 ];
 

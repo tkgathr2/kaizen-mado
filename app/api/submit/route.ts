@@ -5,8 +5,10 @@ import { auth } from "@/auth";
 import { createTicket } from "@/lib/notion";
 import { memorizeToKnowhow } from "@/lib/knowhow";
 import { normalizeSystemForTicket } from "@/lib/systems";
-import { isAuthEnabled } from "@/lib/authz";
+import { isAuthEnabled, isOriginAllowed } from "@/lib/authz";
 import { kickEndpoint } from "@/lib/trigger";
+import { acceptSubmit } from "@/lib/dedup";
+import { findRecentDuplicate } from "@/lib/tickets";
 import type { Ticket, TicketType, Importance } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -31,6 +33,12 @@ function coerceTicket(input: any): Ticket | null {
 }
 
 export async function POST(req: NextRequest) {
+  // CSRF/オリジン安全化：KAIZEN_ALLOWED_ORIGINS（カンマ区切り）が設定されている時だけ、
+  // 許可オリジンからの送信のみ受理する。未設定なら従来どおり全許可（後方互換・窓口を止めない）。
+  if (!isOriginAllowed(req.headers.get("origin"), process.env.KAIZEN_ALLOWED_ORIGINS)) {
+    return NextResponse.json({ error: "forbidden origin" }, { status: 403 });
+  }
+
   let body: any;
   try {
     body = await req.json();
@@ -49,6 +57,27 @@ export async function POST(req: NextRequest) {
   if (isAuthEnabled()) {
     const session = await auth();
     reporter = session?.user?.name || session?.user?.email || reporter;
+  }
+
+  // ── 二重起票ガード（二段構え） ──
+  // 第1段：プロセス内メモリの高速フィルタ。連打の大半は同一インスタンスに連続到達するので
+  //        ここで即弾く（Notion APIコールを節約）。利用者には完了表示を返す。
+  if (!acceptSubmit(ticket, reporter)) {
+    return NextResponse.json({ ok: true, duplicate: true });
+  }
+
+  // 第2段：インスタンス跨ぎの真の冪等化。serverless で連打が別インスタンスに分かれると
+  //        第1段（メモリ）をすり抜ける。createTicket の直前に Notion を1回問い合わせ、
+  //        直近N秒以内・完全同一内容の既存チケットがあれば新規作成せずそれを返す。
+  //        ★fail-safe：照合失敗時は null が返り、通常どおり作成にフォールバック（声を止めない）。
+  const dup = await findRecentDuplicate(ticket, reporter);
+  if (dup) {
+    return NextResponse.json({
+      ok: true,
+      duplicate: true,
+      ticketId: dup.ticketId,
+      pageId: dup.pageId,
+    });
   }
 
   try {

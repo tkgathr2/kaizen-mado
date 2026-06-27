@@ -1,6 +1,9 @@
 // ── カイゼンくん成長ダッシュボードの集計 ──
 // Notion改善チケットDBを全件読み、「声が集まる→直る→学びになる」の現在地を数える。
 // 集計は純粋関数（aggregateTickets）に分離し、now注入でテスト可能にする。
+// 状態名・ファネル段は lib/board.ts の正本を import（「議論中」等の表記ズレを防ぐ）。
+import { funnelStageOf, FUNNEL_ORDER } from "./board";
+
 const NOTION_VERSION = "2022-06-28";
 
 export interface StatsRow {
@@ -35,17 +38,9 @@ export interface KaizenStats {
   generatedAt: string;
 }
 
-// 状態→ファネル段の対応（現在状態しか持たないため「今どの段にいるか」を数える）
-const STAGE_OF: Record<string, string> = {
-  受付: "受付",
-  議論: "検討・提案中",
-  差し戻し: "検討・提案中",
-  GO待ち: "検討・提案中",
-  着手: "改修中",
-  完了: "完了",
-  却下: "見送り",
-};
-const STAGE_ORDER = ["受付", "検討・提案中", "改修中", "完了", "見送り"];
+// 状態→ファネル段の対応（現在状態しか持たないため「今どの段にいるか」を数える）。
+// 対応表は lib/board.ts の STATE_META に集約済み。ここでは段の表示順だけ別名で持つ。
+const STAGE_ORDER = FUNNEL_ORDER;
 
 function startOfWeek(d: Date): Date {
   // 月曜はじまり（現場の週感覚に合わせる）
@@ -102,7 +97,7 @@ export function aggregateTickets(rows: StatsRow[], now: Date = new Date()): Kaiz
     s.total++;
     if (r.state === "完了") s.done++;
     systemCount.set(sys, s);
-    const stage = STAGE_OF[r.state] ?? "検討・提案中";
+    const stage = funnelStageOf(r.state);
     stageCount.set(stage, (stageCount.get(stage) ?? 0) + 1);
   }
 

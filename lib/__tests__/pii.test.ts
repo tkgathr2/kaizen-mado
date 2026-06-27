@@ -51,6 +51,61 @@ describe("maskPII", () => {
   it("空文字はそのまま返す", () => {
     expect(maskPII("")).toBe("");
   });
+
+  // ── 追加パターン（ハイフン無し携帯・カード番号・マイナンバー）──
+  it("ハイフン無し携帯番号(090…)を[電話]に置換する", () => {
+    const r = maskPII("緊急時は09012345678へ");
+    expect(r).toContain("[電話]");
+    expect(r).not.toContain("09012345678");
+  });
+
+  it("080/070のハイフン無し携帯も[電話]に置換する", () => {
+    expect(maskPII("08011112222")).toContain("[電話]");
+    expect(maskPII("07033334444")).toContain("[電話]");
+  });
+
+  it("スペース区切りのカード番号を伏字化し、桁の断片を残さない", () => {
+    const r = maskPII("カードは4242 4242 4242 4242です");
+    expect(r).toContain("[カード番号]");
+    expect(r).not.toContain("4242");
+  });
+
+  it("ハイフン区切りのカード番号を伏字化する", () => {
+    const r = maskPII("4242-4242-4242-4242");
+    expect(r).toContain("[カード番号]");
+    expect(r).not.toContain("4242");
+  });
+
+  it("マイナンバー12桁(スペース区切り)を[個人番号]に置換する", () => {
+    const r = maskPII("マイナンバー1234 5678 9012を確認");
+    expect(r).toContain("[個人番号]");
+    expect(r).not.toContain("1234 5678 9012");
+  });
+
+  it("マイナンバー12桁(連続)を[個人番号]に置換する", () => {
+    expect(maskPII("123456789012")).toBe("[個人番号]");
+  });
+
+  // ── 過剰マスクしないこと（正常な文章を壊さない）──
+  it("KZ-12 等のチケットIDは伏字化しない", () => {
+    expect(maskPII("KZ-12のボタンが効かない")).toBe("KZ-12のボタンが効かない");
+  });
+
+  it("日付(2026-06-26)は伏字化しない", () => {
+    expect(maskPII("2026-06-26に発生しました")).toBe("2026-06-26に発生しました");
+  });
+
+  it("短い数字・金額・順序は伏字化しない", () => {
+    expect(maskPII("金額は12345円")).toBe("金額は12345円");
+    expect(maskPII("優先度は3です")).toBe("優先度は3です");
+    expect(maskPII("手順1 2 3 4で再現")).toBe("手順1 2 3 4で再現");
+  });
+
+  it("既存の電話・郵便番号の挙動は維持される（追加パターン導入後も）", () => {
+    expect(maskPII("090-1234-5678")).toContain("[電話]");
+    expect(maskPII("〒123-4567")).toContain("[郵便番号]");
+    expect(maskPII("口座番号1234567890")).toContain("[番号]");
+  });
 });
 
 describe("looksLikePII", () => {

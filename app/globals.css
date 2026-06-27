@@ -46,11 +46,19 @@ html, body {
   align-items: center;
   gap: 12px;
 }
+.header .logo-wrap {
+  display: flex; flex-direction: column; align-items: center; gap: 3px; flex: none;
+}
 .header .logo {
-  width: 40px; height: 40px; border-radius: 11px;
-  background: var(--brand); color: var(--brand-ink);
-  display: grid; place-items: center; font-size: 20px; flex: none;
-  box-shadow: 0 2px 8px rgba(217, 119, 87, 0.28);
+  width: 72px; height: 72px; border-radius: 16px;
+  background: #fff; color: var(--brand-ink);
+  display: grid; place-items: center; font-size: 36px; flex: none;
+  object-fit: cover; overflow: hidden;
+  box-shadow: 0 4px 16px rgba(217, 119, 87, 0.38);
+}
+.header .logo-name {
+  font-size: 11px; font-weight: 600; color: var(--muted);
+  white-space: nowrap; letter-spacing: 0.02em; line-height: 1;
 }
 .header h1 {
   font-family: "Tiempos Text", "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", Georgia, serif;
@@ -61,6 +69,11 @@ html, body {
   margin-left: auto; font-size: 12px; color: var(--brand);
   background: #fbeee8; border: 1px solid #f1d9cd; padding: 5px 12px; border-radius: 999px;
   white-space: nowrap; font-weight: 500;
+}
+.progress-badge {
+  margin-left: auto; font-size: 12px; color: #3d7ab0;
+  background: #eef4f9; border: 1px solid #d1e4f3; padding: 5px 12px; border-radius: 999px;
+  white-space: nowrap; font-weight: 600;
 }
 
 /* ───── 会話エリア ───── */
@@ -79,7 +92,8 @@ html, body {
 
 .row { display: flex; }
 .row.user { justify-content: flex-end; }
-.row.assistant { justify-content: flex-start; }
+/* アシスタント行は縦積み：バブルの下に簡易モード注記などを置けるようにする。 */
+.row.assistant { flex-direction: column; align-items: flex-start; }
 
 .bubble {
   font-size: 16px;
@@ -107,6 +121,8 @@ html, body {
 }
 
 .typing { color: var(--muted); font-size: 14px; padding: 2px 2px; font-style: italic; }
+/* 簡易モード注記：会話を邪魔しないよう、薄いグレーで小さく1行。 */
+.fallback-note { color: #b3aea2; font-size: 11.5px; margin-top: 4px; }
 
 /* ───── 確認カード ───── */
 .confirm-card {
@@ -127,6 +143,7 @@ html, body {
   border-radius: 14px; padding: 18px; font-size: 15px; text-align: center;
 }
 .done .kz { font-weight: 700; font-size: 19px; color: var(--brand); }
+.done .kz-keep { display: inline-block; margin-top: 2px; color: var(--muted); font-size: 12.5px; }
 
 /* ───── 入力欄（Claude流の丸く広いコンポーザー） ───── */
 .composer {
@@ -175,7 +192,8 @@ button.ghost:hover:not(:disabled) { background: #f5f3ec; }
   display: flex; align-items: center; gap: 10px; padding: 6px 0 0; font-size: 13px; color: var(--muted);
 }
 .reporter input {
-  border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; font-size: 14px;
+  /* font-size は16px以上：iOSが入力時に自動ズームしてレイアウトが崩れるのを防ぐ。 */
+  border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; font-size: 16px;
   background: var(--field); color: var(--ink);
 }
 .reporter input:focus { outline: none; border-color: var(--brand); }
@@ -220,8 +238,9 @@ button.ghost:hover:not(:disabled) { background: #f5f3ec; }
 .board { max-width: 1200px; margin: 0 auto; min-height: 100dvh; padding: 0 18px 24px; }
 .board-head { display: flex; align-items: center; gap: 12px; padding: 22px 2px 12px; }
 .board-logo {
-  width: 40px; height: 40px; border-radius: 11px; background: var(--brand); color: #fff;
+  width: 40px; height: 40px; border-radius: 11px; background: #fff; color: #fff;
   display: grid; place-items: center; font-size: 20px; flex: none;
+  object-fit: cover; overflow: hidden;
   box-shadow: 0 2px 8px rgba(217, 119, 87, 0.28);
 }
 .board-titlewrap { min-width: 0; }
@@ -237,7 +256,16 @@ button.ghost:hover:not(:disabled) { background: #f5f3ec; }
 }
 .board-refresh:hover:not(:disabled) { background: #f5f3ec; }
 .board-refresh:disabled { opacity: 0.5; cursor: default; }
-.board-meta { font-size: 12px; color: var(--muted); padding: 2px 2px 12px; }
+.board-meta { font-size: 12px; color: var(--muted); padding: 2px 2px 8px; }
+.board-summary { 
+  display: flex; flex-wrap: wrap; gap: 12px 16px; padding: 2px 2px 12px;
+  font-size: 11.5px; color: var(--muted);
+}
+.board-summary-item { 
+  display: flex; align-items: center; gap: 4px;
+  background: #f8f6f0; border-radius: 999px; padding: 3px 8px;
+  border: 1px solid #ebe7dc;
+}
 .board-note {
   border: 1px solid var(--line); background: #fffdf8; border-radius: 12px;
   padding: 14px 16px; font-size: 13.5px; color: var(--muted);
@@ -263,6 +291,11 @@ button.ghost:hover:not(:disabled) { background: #f5f3ec; }
 }
 .board-col-body { padding: 10px; display: flex; flex-direction: column; gap: 9px; min-height: 44px; }
 .board-empty { color: #c8c3b7; font-size: 13px; text-align: center; padding: 6px 0; }
+.board-blank {
+  text-align: center; color: var(--muted); font-size: 15px; line-height: 1.7;
+  padding: 56px 20px; margin: 24px auto; max-width: 560px;
+  background: #fffdf8; border: 1px dashed var(--line); border-radius: 16px;
+}
 
 .board-card {
   display: block; text-decoration: none; color: inherit; background: #fff;
@@ -291,6 +324,8 @@ button.ghost:hover:not(:disabled) { background: #f5f3ec; }
 .app.embed .chat { padding-top: 14px; gap: 16px; min-height: 0; }
 .app.embed .bubble { font-size: 14.5px; line-height: 1.65; }
 .app.embed .composer { padding: 8px 0 10px; }
-.app.embed .composer textarea { font-size: 14.5px; padding: 11px 14px; }
-.app.embed button.send { width: 42px; height: 42px; font-size: 17px; }
+/* 埋め込み時もフォントは16px以上：iOSの自動ズーム（レイアウト崩れ）を防ぐ。 */
+.app.embed .composer textarea { font-size: 16px; padding: 11px 14px; }
+/* タップ領域は44×44px以上（Apple HIG 44pt / Google 48dp の指針）。狭いパネルでも押しやすく。 */
+.app.embed button.send { width: 44px; height: 44px; font-size: 18px; }
 .app.embed .footer { display: none; }

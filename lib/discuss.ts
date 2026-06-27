@@ -75,9 +75,11 @@ function fallbackDiscussion(ticket: TicketRow): DiscussResult {
   const type = ticket.type || "改善";
   const importance = ticket.importance || "中";
 
+  // 既定は「要検討」。重要度「高」のときだけ「GO推奨」に上げる。
+  // （「低」「中」は既定の「要検討」のまま＝以前の `else if (低) = 要検討` は
+  //  初期値と同じno-opのデッドコードだったため削除。挙動は不変。）
   let recommendation: Recommendation = "要検討";
   if (importance === "高") recommendation = "GO推奨";
-  else if (importance === "低") recommendation = "要検討";
 
   const kousuu =
     type === "新機能" ? "2〜5日（要見積）" : type === "bug" ? "半日〜1日" : "1〜2日";
