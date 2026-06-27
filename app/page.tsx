@@ -9,7 +9,23 @@ import { useSession, signIn } from "next-auth/react";
 import { resolveSystem } from "@/lib/systems";
 import { isEmbed } from "@/lib/embed";
 import { resolveReporter } from "@/lib/reporter";
-import type { ChatMessage, Ticket } from "@/lib/types";
+import {
+  ALLOWED_MIMES,
+  MAX_ATTACHMENTS,
+  MAX_BYTES_PER_IMAGE,
+  MAX_TOTAL_BYTES,
+} from "@/lib/attachments";
+import type { Attachment, ChatMessage, Ticket } from "@/lib/types";
+
+// File を data URL（base64）へ読み込む。
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result));
+    fr.onerror = () => reject(fr.error ?? new Error("read failed"));
+    fr.readAsDataURL(file);
+  });
+}
 
 // 優先度バッジの CSS クラス接尾辞（高=赤/中=橙/低=灰。色は globals.css）。
 function prioClass(priority: "高" | "中" | "低"): string {
@@ -58,8 +74,105 @@ function KaizenMado() {
   // 簡易モード（AI未応答でフォールバック）で返したアシスタント発話の index 集合。
   // そのターンだけ「※ いまは簡易モードで受付中です」と薄く注記する。
   const [fallbackIdx, setFallbackIdx] = useState<Set<number>>(() => new Set());
+  // 添付画像（送信前の下書き）。送信時に user メッセージへ移し、入力欄はクリアする。
+  const [pending, setPending] = useState<Attachment[]>([]);
+  const [attachError, setAttachError] = useState("");
+  // ドラッグ&ドロップ中の視覚フィードバック（全画面のみ）。
+  const [dragging, setDragging] = useState(false);
+  // 拡大表示（lightbox）中の画像 dataUrl（null で閉じる）。
+  const [lightbox, setLightbox] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const dragDepth = useRef(0); // dragenter/leave のネスト相殺カウンタ
   const inFlightRef = useRef(false); // send/submit 実行中フラグ（同期・二重発火防止）
+
+  // 添付候補を取り込む（型・サイズ・枚数を弾く）。複数ファイル可。
+  async function addFiles(files: FileList | File[]) {
+    setAttachError("");
+    const list = Array.from(files);
+    const accepted: Attachment[] = [];
+    let total = pending.reduce((s, a) => s + a.bytes, 0);
+    let slots = MAX_ATTACHMENTS - pending.length;
+    for (const f of list) {
+      if (slots <= 0) {
+        setAttachError(`画像は最大${MAX_ATTACHMENTS}枚までです`);
+        break;
+      }
+      if (!(ALLOWED_MIMES as readonly string[]).includes(f.type)) {
+        setAttachError("対応していない画像形式です（png / jpeg / gif / webp）");
+        continue;
+      }
+      if (f.size > MAX_BYTES_PER_IMAGE) {
+        setAttachError(`1枚あたり${Math.floor(MAX_BYTES_PER_IMAGE / (1024 * 1024))}MBまでです`);
+        continue;
+      }
+      if (total + f.size > MAX_TOTAL_BYTES) {
+        setAttachError(`合計${Math.floor(MAX_TOTAL_BYTES / (1024 * 1024))}MBまでです`);
+        continue;
+      }
+      try {
+        const dataUrl = await fileToDataUrl(f);
+        accepted.push({
+          dataUrl,
+          mime: f.type as Attachment["mime"],
+          bytes: f.size,
+          name: f.name,
+        });
+        total += f.size;
+        slots--;
+      } catch {
+        setAttachError("画像の読み込みに失敗しました");
+      }
+    }
+    if (accepted.length > 0) setPending((p) => [...p, ...accepted]);
+  }
+
+  function removePending(idx: number) {
+    setPending((p) => p.filter((_, i) => i !== idx));
+    setAttachError("");
+  }
+
+  function onPaste(e: React.ClipboardEvent) {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const files: File[] = [];
+    for (const it of Array.from(items)) {
+      if (it.kind === "file") {
+        const f = it.getAsFile();
+        if (f) files.push(f);
+      }
+    }
+    if (files.length > 0) {
+      e.preventDefault();
+      void addFiles(files);
+    }
+  }
+
+  // ドラッグ&ドロップ（embed 内では iframe 跨ぎ不可なので全画面時のみ受け付ける）。
+  function onDrop(e: React.DragEvent) {
+    if (embed) return;
+    e.preventDefault();
+    dragDepth.current = 0;
+    setDragging(false);
+    const files = e.dataTransfer?.files;
+    if (files && files.length > 0) void addFiles(files);
+  }
+  function onDragEnter(e: React.DragEvent) {
+    if (embed) return;
+    if (!Array.from(e.dataTransfer?.types ?? []).includes("Files")) return;
+    e.preventDefault();
+    dragDepth.current++;
+    setDragging(true);
+  }
+  function onDragOver(e: React.DragEvent) {
+    if (embed) return;
+    if (Array.from(e.dataTransfer?.types ?? []).includes("Files")) e.preventDefault();
+  }
+  function onDragLeave(e: React.DragEvent) {
+    if (embed) return;
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDragging(false);
+  }
 
   // 初期挨拶（ローカル生成。履歴の一部としてモデルにも渡る）
   useEffect(() => {
@@ -79,11 +192,18 @@ function KaizenMado() {
 
   async function send() {
     const text = input.trim();
-    if (!text || busy || status !== "chatting" || inFlightRef.current) return;
+    // 画像だけ（テキスト空）でも送れるようにする。
+    if ((!text && pending.length === 0) || busy || status !== "chatting" || inFlightRef.current)
+      return;
     inFlightRef.current = true;
     setError("");
     setInput("");
-    const next: ChatMessage[] = [...messages, { role: "user", content: text }];
+    const attachments = pending;
+    setPending([]);
+    setAttachError("");
+    const userMsg: ChatMessage = { role: "user", content: text };
+    if (attachments.length > 0) userMsg.attachments = attachments;
+    const next: ChatMessage[] = [...messages, userMsg];
     setMessages(next);
     setBusy(true);
 
@@ -172,7 +292,25 @@ function KaizenMado() {
   const showConfirm = phase === "confirm" && ticket && status !== "done";
 
   return (
-    <div className={embed ? "app embed" : "app"}>
+    <div
+      className={embed ? "app embed" : "app"}
+      onDrop={onDrop}
+      onDragEnter={onDragEnter}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+    >
+      {dragging && !embed && (
+        <div className="drop-overlay">画像をここにドロップして添付</div>
+      )}
+      {lightbox && (
+        <div className="lightbox" onClick={() => setLightbox(null)} role="dialog" aria-label="画像拡大表示">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={lightbox} alt="添付画像（拡大）" onClick={(e) => e.stopPropagation()} />
+          <button type="button" className="lightbox-close" onClick={() => setLightbox(null)} aria-label="閉じる">
+            ×
+          </button>
+        </div>
+      )}
       {!embed && (
         <header className="header">
           <div className="logo-wrap">
@@ -191,7 +329,23 @@ function KaizenMado() {
       <div className="chat" ref={scrollRef}>
         {messages.map((m, i) => (
           <div key={i} className={`row ${m.role}`}>
-            <div className="bubble">{m.content}</div>
+            {m.attachments && m.attachments.length > 0 && (
+              <div className="msg-images">
+                {m.attachments.map((a, j) => (
+                  <button
+                    key={j}
+                    type="button"
+                    className="msg-image"
+                    onClick={() => setLightbox(a.dataUrl)}
+                    title="クリックで拡大"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={a.dataUrl} alt={a.name || "添付画像"} />
+                  </button>
+                ))}
+              </div>
+            )}
+            {m.content && <div className="bubble">{m.content}</div>}
             {m.role === "assistant" && fallbackIdx.has(i) && (
               <div className="fallback-note">※ いまは簡易モードで受付中です</div>
             )}
@@ -321,24 +475,68 @@ function KaizenMado() {
       {error && <div className="error">{error}</div>}
 
       {status !== "done" && (
-        <div className="composer">
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={onKey}
-            placeholder={embed ? "メッセージを入力" : "メッセージを入力（Enterで送信 / Shift+Enterで改行）"}
-            rows={1}
-            disabled={busy || status === "submitting"}
-          />
-          <button
-            className="send"
-            onClick={send}
-            disabled={busy || !input.trim()}
-            aria-label="送信"
-            title="送信"
-          >
-            ↑
-          </button>
+        <div className="composer-wrap">
+          {pending.length > 0 && (
+            <div className="attach-previews">
+              {pending.map((a, i) => (
+                <div className="attach-thumb" key={i}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={a.dataUrl} alt={a.name || "添付画像"} />
+                  <button
+                    type="button"
+                    className="attach-remove"
+                    onClick={() => removePending(i)}
+                    aria-label="この画像を削除"
+                    title="削除"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          {attachError && <div className="attach-error">{attachError}</div>}
+          <div className="composer">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/gif,image/webp"
+              multiple
+              hidden
+              onChange={(e) => {
+                if (e.target.files) void addFiles(e.target.files);
+                e.target.value = ""; // 同じファイルの連続選択を許可
+              }}
+            />
+            <button
+              type="button"
+              className="attach-btn"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={busy || status === "submitting" || pending.length >= MAX_ATTACHMENTS}
+              aria-label="画像を添付"
+              title="画像を添付"
+            >
+              ＋
+            </button>
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={onKey}
+              onPaste={onPaste}
+              placeholder={embed ? "メッセージを入力" : "メッセージを入力（Enterで送信 / Shift+Enterで改行）"}
+              rows={1}
+              disabled={busy || status === "submitting"}
+            />
+            <button
+              className="send"
+              onClick={send}
+              disabled={busy || (!input.trim() && pending.length === 0)}
+              aria-label="送信"
+              title="送信"
+            >
+              ↑
+            </button>
+          </div>
         </div>
       )}
 

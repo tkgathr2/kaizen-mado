@@ -8,9 +8,11 @@ import { clampScore, computePriority, isPriority } from "./priority";
 const API_URL = "https://api.anthropic.com/v1/messages";
 const DEFAULT_MODEL = "claude-sonnet-4-6";
 
+// content は文字列、または text/image ブロックの配列（マルチモーダル時）。
+// Phase 2/3：user ターンが画像を持つときだけブロック配列になる（lib/prompt.ts が組む）。
 interface AnthropicMessage {
   role: "user" | "assistant";
-  content: string;
+  content: string | unknown[];
 }
 
 // read_slack を何回まで許すか（コスト・レイテンシの上限。少なめでよい）。

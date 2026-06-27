@@ -350,4 +350,61 @@ button.ghost:hover:not(:disabled) { background: #f5f3ec; }
 .app.embed .composer textarea { font-size: 16px; padding: 11px 14px; }
 /* タップ領域は44×44px以上（Apple HIG 44pt / Google 48dp の指針）。狭いパネルでも押しやすく。 */
 .app.embed button.send { width: 44px; height: 44px; font-size: 18px; }
+.app.embed button.attach-btn { width: 44px; height: 44px; font-size: 22px; }
+
+/* ───── 画像添付（Phase 2） ───── */
+/* 会話内の添付画像（自分の発言として映える）。 */
+.msg-images { display: flex; flex-wrap: wrap; gap: 8px; max-width: 80%; margin-bottom: 6px; }
+.row.user .msg-images { justify-content: flex-end; }
+.msg-image {
+  padding: 0; border: 1px solid var(--line); background: #fff; border-radius: 12px;
+  overflow: hidden; cursor: zoom-in; line-height: 0; box-shadow: var(--shadow);
+}
+.msg-image img { display: block; max-width: 220px; max-height: 220px; object-fit: cover; }
+
+/* 送信前プレビュー（サムネ＋✕削除）。 */
+.composer-wrap { display: flex; flex-direction: column; }
+.attach-previews { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 0 2px; }
+.attach-thumb { position: relative; width: 64px; height: 64px; }
+.attach-thumb img {
+  width: 64px; height: 64px; object-fit: cover; border-radius: 10px;
+  border: 1px solid var(--line);
+}
+.attach-remove {
+  position: absolute; top: -7px; right: -7px; width: 20px; height: 20px;
+  border-radius: 50%; border: none; background: #3a3a38; color: #fff;
+  font-size: 13px; line-height: 1; cursor: pointer; display: grid; place-items: center;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+}
+.attach-remove:hover { background: #1f1f1d; }
+.attach-error { color: #b4452b; font-size: 12.5px; padding: 4px 2px 0; }
+
+/* 添付ボタン（コンポーザー左端の「＋」）。 */
+button.attach-btn {
+  border: 1px solid var(--line); background: #fff; color: var(--muted); font-weight: 600;
+  width: 48px; height: 48px; border-radius: 50%; font-size: 24px; cursor: pointer; flex: none;
+  display: grid; place-items: center; line-height: 1;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+button.attach-btn:hover:not(:disabled) { background: #f5f3ec; border-color: var(--brand); color: var(--brand); }
+button.attach-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ドラッグ&ドロップ中の全画面オーバーレイ（全画面のみ）。 */
+.drop-overlay {
+  position: fixed; inset: 0; z-index: 50; display: grid; place-items: center;
+  background: rgba(217, 119, 87, 0.10); border: 3px dashed var(--brand);
+  color: var(--brand); font-size: 18px; font-weight: 700; pointer-events: none;
+}
+
+/* 拡大表示（lightbox）。 */
+.lightbox {
+  position: fixed; inset: 0; z-index: 60; display: grid; place-items: center;
+  background: rgba(0,0,0,0.72); cursor: zoom-out; padding: 24px;
+}
+.lightbox img { max-width: 92vw; max-height: 88vh; border-radius: 8px; cursor: default; }
+.lightbox-close {
+  position: fixed; top: 16px; right: 18px; width: 40px; height: 40px; border-radius: 50%;
+  border: none; background: rgba(255,255,255,0.92); color: #222; font-size: 22px;
+  cursor: pointer; display: grid; place-items: center; line-height: 1;
+}
 .app.embed .footer { display: none; }

@@ -264,6 +264,8 @@
       frame.className = "kz-frame";
       frame.src = madoUrl + reporterParam();
       frame.title = "カイゼン窓口チャット";
+      // clipboard-write: 将来のコピー操作に備えて残す。
+      // clipboard-read は不要（onPaste は e.clipboardData を読むだけで navigator.clipboard.readText() は使わない）。
       frame.setAttribute("allow", "clipboard-write");
       panel.appendChild(frame);
     }

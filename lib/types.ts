@@ -30,7 +30,23 @@ export interface TurnResult {
   ticket: Ticket | null;
 }
 
+// ── 画像添付（Phase 2・base64 最小実装） ──
+// 公開窓口なので外部ストレージ（Blob 等）を増やさず、base64 を会話履歴で持ち回る。
+// API へ渡すのは直近の user ターンの画像だけに絞り（lib/prompt.ts）、トークン肥大を防ぐ。
+// Notion/チケットには生画像を入れず「画像添付あり」程度に丸める（PII 観点・lib/notion.ts）。
+export type AttachmentMime = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+
+export interface Attachment {
+  // data URL（"data:image/png;base64,...."）。表示・Anthropic への受け渡しに使う。
+  dataUrl: string;
+  mime: AttachmentMime;
+  bytes: number; // デコード後のバイト数（上限チェック用）
+  name?: string; // 元ファイル名（サニタイズ済み・表示用・任意）
+}
+
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  // 画像添付（user ターンのみ・任意・後方互換）。assistant では使わない。
+  attachments?: Attachment[];
 }
