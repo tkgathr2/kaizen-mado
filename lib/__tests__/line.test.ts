@@ -66,14 +66,34 @@ describe("line（純関数）", () => {
     expect(verifyLineSignature(body, "garbage")).toBe(false);
   });
 
-  it("proposalToken / verifyProposalToken は往復一致、別pageId・改ざんは false", () => {
+  it("proposalToken / verifyProposalToken は往復一致、別pageId・改ざんは false、長さ32hex", () => {
     const pid = "page-abc-123";
     const tk = proposalToken(pid);
-    expect(tk).toHaveLength(16);
+    expect(tk).toHaveLength(32); // 64bit(16hex)→128bit(32hex)に延長
     expect(verifyProposalToken(pid, tk)).toBe(true);
     expect(verifyProposalToken("other-page", tk)).toBe(false);
-    expect(verifyProposalToken(pid, tk.slice(0, 15) + "0")).toBe(false);
+    expect(verifyProposalToken(pid, tk.slice(0, 31) + "0")).toBe(false);
     expect(verifyProposalToken(pid, "")).toBe(false);
+  });
+
+  it("proposalToken は state を混ぜる：状態が変わるとトークンが変わり、旧状態トークンは失効（事実上ワンタイム）", () => {
+    const pid = "page-xyz-999";
+    // 既定（"GO待ち"）で発行したトークン
+    const tkGoMachi = proposalToken(pid);
+    // state を明示しても既定と同じ（提案は GO待ち で発行される）
+    expect(proposalToken(pid, "GO待ち")).toBe(tkGoMachi);
+    // 状態が変われば別トークン
+    const tkChakushu = proposalToken(pid, "着手");
+    const tkReject = proposalToken(pid, "却下");
+    expect(tkChakushu).not.toBe(tkGoMachi);
+    expect(tkReject).not.toBe(tkGoMachi);
+    // 検証も状態と一致したときだけ true
+    expect(verifyProposalToken(pid, tkGoMachi, "GO待ち")).toBe(true);
+    expect(verifyProposalToken(pid, tkGoMachi)).toBe(true); // 既定=GO待ち
+    // GO/却下で状態が変わったあと、GO待ちで発行した旧トークンは失効する
+    expect(verifyProposalToken(pid, tkGoMachi, "着手")).toBe(false);
+    expect(verifyProposalToken(pid, tkGoMachi, "却下")).toBe(false);
+    expect(verifyProposalToken(pid, tkGoMachi, "差し戻し")).toBe(false);
   });
 
   it("parsePostback は kz/pid/tk を抽出、不正は null", () => {
