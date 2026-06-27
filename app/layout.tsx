@@ -1,4 +1,7 @@
 import type { Metadata, Viewport } from "next";
+// optional auth：窓口で useSession() を使えるよう全体を SessionProvider でラップする。
+// 認証OFF（鍵未投入）でも安全：Provider 下で useSession() は status:"unauthenticated" を返すだけ。
+import { SessionProvider } from "next-auth/react";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -18,7 +21,9 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="ja">
-      <body>{children}</body>
+      <body>
+        <SessionProvider>{children}</SessionProvider>
+      </body>
     </html>
   );
 }

@@ -197,6 +197,9 @@ button.ghost:hover:not(:disabled) { background: #f5f3ec; }
   background: var(--field); color: var(--ink);
 }
 .reporter input:focus { outline: none; border-color: var(--brand); }
+/* optional auth：「Googleでログイン（任意）」ボタンは控えめに（手入力の補助なので主張しすぎない）。 */
+.reporter .reporter-login { padding: 8px 14px; font-size: 13px; white-space: nowrap; }
+.reporter strong { color: var(--ink); }
 
 .error { color: #b4452b; font-size: 13px; padding: 6px 2px; }
 .footer { text-align: center; color: var(--muted); font-size: 11.5px; padding: 10px 0 18px; }

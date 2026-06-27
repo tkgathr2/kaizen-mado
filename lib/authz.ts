@@ -77,6 +77,30 @@ export function isOriginAllowed(
   return allowed.includes(normalizedOrigin);
 }
 
+/**
+ * 認証ON時に「強制ログイン保護」をかけるパスかどうか（純粋関数・テスト対象）。
+ *
+ * 設計：カイゼン窓口(/) は社内各システムから widget.js(iframe) で embed される“公開・無認証”の入口。
+ *   ここを保護するとログイン壁になり、全システムでウィジェットが壊れる。
+ *   起票導線（/・/api/chat・/api/submit）は optional auth（ログインは任意・強制しない）にし、
+ *   保護は「中の人だけが見る管理ページ（/board・/dashboard）」に最小限で限定する。
+ *
+ * 保護対象（true）：管理ページ /board /dashboard ＋ それらが読む管理データAPI
+ *   /api/board /api/stats（とその配下）。←ページ殻だけ保護してデータAPIを公開すると、
+ *   起票者名・社内チケット内容が素通りで漏れるため必ず一緒に保護する。
+ * 公開（false）：窓口(/)・起票導線 /api/chat /api/submit・静的アセット・その他すべて。
+ * 比較は前後空白除去・大文字小文字無視。末尾スラッシュは無視。
+ */
+const PROTECTED_PREFIXES = ["/board", "/dashboard", "/api/board", "/api/stats"] as const;
+
+export function shouldProtectPath(pathname: string | null | undefined): boolean {
+  const p = (pathname ?? "").trim().toLowerCase().replace(/\/+$/, "");
+  if (!p) return false;
+  return PROTECTED_PREFIXES.some(
+    (prefix) => p === prefix || p.startsWith(prefix + "/")
+  );
+}
+
 function normalizeOrigin(v: string | null | undefined): string {
   return (v ?? "").trim().toLowerCase().replace(/\/+$/, "");
 }
