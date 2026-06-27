@@ -8,6 +8,7 @@ import { useSearchParams } from "next/navigation";
 import { useSession, signIn } from "next-auth/react";
 import { resolveSystem } from "@/lib/systems";
 import { isEmbed } from "@/lib/embed";
+import { isEmbeddedContext, shouldShowLoginGate } from "@/lib/loginGate";
 import { resolveReporter } from "@/lib/reporter";
 import MarkdownMessage from "@/lib/MarkdownMessage";
 import { SUGGESTION_TEMPLATES } from "@/lib/templates";
@@ -78,6 +79,32 @@ function KaizenMado() {
   // OAuth鍵が本番に入った時だけ NEXT_PUBLIC_AUTH_ENABLED=1 を立てる運用。
   // 未設定（＝現状・鍵未投入）ではボタンを出さず、従来どおり手入力だけで送れる（fail-safe）。
   const authUiEnabled = process.env.NEXT_PUBLIC_AUTH_ENABLED === "1";
+
+  // ── ログインゲート（直接アクセス時のみ）の SSR/ハイドレーション安全判定 ──
+  // iframe 内かどうか（window.self !== window.top）はサーバ側では判定不能。
+  // マウント前にゲートを描画するとサーバ描画と食い違い hydration mismatch になるため、
+  // mounted（クライアントで useEffect 後に true）になるまではゲートを出さない。
+  const [mounted, setMounted] = useState(false);
+  const [inIframe, setInIframe] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+    try {
+      setInIframe(window.self !== window.top);
+    } catch {
+      // クロスオリジンで window.top にアクセスすると例外＝iframe 内とみなす。
+      setInIframe(true);
+    }
+  }, []);
+  // 埋め込み文脈（iframe 内 or widget が reporter を渡している）ではゲートを絶対に出さない。
+  const embeddedForGate = isEmbeddedContext({ inIframe, reporterParam });
+  // ゲートを描画すべきか：認証ON・非埋め込み・未ログインのときだけ。
+  // mounted 前は iframe 判定が未確定なので出さない（チラつき・hydration mismatch 防止）。
+  const showLoginGate =
+    mounted &&
+    shouldShowLoginGate({ authUiEnabled, embedded: embeddedForGate, authStatus });
+  // 認証ON・非埋め込みで status が読み込み中の間はチャットもゲートも出さずローディング。
+  const showAuthLoading =
+    mounted && authUiEnabled && !embeddedForGate && authStatus === "loading";
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -453,6 +480,37 @@ function KaizenMado() {
   }
 
   const showConfirm = phase === "confirm" && ticket && status !== "done";
+
+  // 認証ON・非埋め込みで status 確定待ちの間はチラつき防止のため空＋スピナーだけ。
+  if (showAuthLoading) {
+    return (
+      <div className={embed ? "app embed" : "app"}>
+        <div className="auth-loading" aria-live="polite">
+          <span className="auth-spinner" aria-hidden="true" />
+        </div>
+      </div>
+    );
+  }
+
+  // 直接アクセス（非埋め込み）かつ認証ON・未ログイン：チャットの前にログイン画面を出す。
+  // 埋め込み（iframe）では絶対にここへ来ない（embeddedForGate で弾く）。
+  if (showLoginGate) {
+    return (
+      <div className="app login-gate">
+        <div className="login-card">
+          <img src="/kaizen-kun.png" alt="フクロウ博士" className="login-logo" />
+          <h1 className="login-title">カイゼン窓口</h1>
+          <p className="login-lead">続けるにはGoogleでログインしてください</p>
+          <button type="button" className="primary login-btn" onClick={() => signIn("google")}>
+            Googleでログイン
+          </button>
+          <p className="login-note">
+            ログインすると、お名前が自動で入ります（毎回入力しなくて大丈夫です）
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
