@@ -291,11 +291,12 @@
     // 全画面トグル（パネルをビューポート全面へ）。別ページ表示は「新しいタブで開く」リンクが担う。
     var maxBtn = panel.querySelector(".kz-max");
     function isFullscreen() {
-      return panel.classList.contains("kz-fs");
+      return panel.className.indexOf("kz-fs") >= 0;
     }
     function setFullscreen(on) {
-      if (on) panel.classList.add("kz-fs");
-      else panel.classList.remove("kz-fs");
+      // className 文字列で管理（className ベースの setOpen / 軽量DOMと整合）。
+      var base = isOpen() ? "kz-panel open" : "kz-panel";
+      panel.className = on ? base + " kz-fs" : base;
       if (maxBtn) {
         maxBtn.innerHTML = on ? COMPRESS : EXPAND;
         maxBtn.title = on ? "全画面解除" : "全画面表示";
