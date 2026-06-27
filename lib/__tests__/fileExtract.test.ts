@@ -135,3 +135,59 @@ describe("抽出上限", () => {
     expect(text).toContain("（以下省略）");
   });
 });
+
+describe("zip 爆弾（zip bomb）対策", () => {
+  it("高圧縮率で巨大展開する docx は展開せず null（OOMを許さない）", () => {
+    // 高圧縮率：同一バイトの繰り返し（deflate が極端に縮む）。
+    // 展開後 ~60MB > 累積上限(30MB) なので filter で弾かれて null になる。
+    const huge = strToU8("A".repeat(60 * 1024 * 1024));
+    const buf = zipSync({ "word/document.xml": huge });
+    // zip 自体は小さい（圧縮後は数十KB程度）ことを確認しておく。
+    expect(buf.length).toBeLessThan(10 * 1024 * 1024);
+    expect(extractDocxText(buf)).toBeNull();
+  });
+
+  it("高圧縮率で巨大展開する xlsx シートも null", () => {
+    const hugeSheet = strToU8(
+      `<?xml version="1.0"?><worksheet xmlns="x"><sheetData>` +
+        "<row><c><v>0</v></c></row>".repeat(0) +
+        "B".repeat(60 * 1024 * 1024) +
+        `</sheetData></worksheet>`
+    );
+    const buf = zipSync({
+      "xl/worksheets/sheet1.xml": hugeSheet,
+      "xl/sharedStrings.xml": strToU8(`<?xml version="1.0"?><sst xmlns="x"/>`),
+      "xl/workbook.xml": strToU8(
+        `<?xml version="1.0"?><workbook xmlns="x"><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>`
+      ),
+    });
+    expect(buf.length).toBeLessThan(10 * 1024 * 1024);
+    expect(extractXlsxText(buf)).toBeNull();
+  });
+
+  it("OOXML 期待エントリの無い zip は docx として null", () => {
+    const buf = zipSync({
+      "evil/payload.bin": strToU8("x".repeat(1000)),
+      "readme.txt": strToU8("not an ooxml file"),
+    });
+    expect(extractDocxText(buf)).toBeNull();
+  });
+
+  it("OOXML 期待エントリの無い zip は xlsx として null", () => {
+    const buf = zipSync({
+      "evil/payload.bin": strToU8("x".repeat(1000)),
+      "xl/calcChain.xml": strToU8("<calcChain/>"), // sheet ではない
+    });
+    expect(extractXlsxText(buf)).toBeNull();
+  });
+
+  it("正常な docx/xlsx は従来どおり抽出できる（回帰なし）", () => {
+    const docx = makeDocx(["回帰テスト本文"]);
+    expect(extractDocxText(docx)).toContain("回帰テスト本文");
+
+    const xlsx = makeXlsx([["列A", "列B"]], "回帰");
+    const text = extractXlsxText(xlsx) ?? "";
+    expect(text).toContain("【回帰】");
+    expect(text).toContain("列A,列B");
+  });
+});
