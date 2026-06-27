@@ -72,6 +72,11 @@
       "[kaizen-widget] data-sys が取得できませんでした。対象システム未指定で窓口を開きます（会話内で確認します）。"
     );
   }
+  // 起票者の引き継ぎ（ログイン情報を小窓へ）：
+  //   小窓は別オリジン iframe で Google ログインが原理的に不可。そこでホスト側が
+  //   ログイン済みユーザーを渡す。優先順＝window.kaizenUser（動的・JSでセット）＞ data-reporter（静的・script属性）。
+  //   これで「サイトにログインした人」がそのまま起票者になり、小窓で再ログイン不要。
+  var dataReporter = (script && script.getAttribute("data-reporter")) || "";
   var madoUrl = origin + "/?embed=1" + (sys ? "&sys=" + encodeURIComponent(sys) : "");
   var tabUrl = origin + "/" + (sys ? "?sys=" + encodeURIComponent(sys) : "");
 
@@ -264,8 +269,10 @@
     // 埋め込み元がログイン済みユーザー名を window.kaizenUser に入れておくと、
     // 窓口へ reporter として引き継がれ「お名前」欄の入力が不要になる（パネル初回オープン時に評価）。
     function reporterParam() {
+      // window.kaizenUser（動的）優先、無ければ data-reporter（静的属性）。
       var u = window.kaizenUser;
-      return typeof u === "string" && u.trim() ? "&reporter=" + encodeURIComponent(u.trim()) : "";
+      var name = typeof u === "string" && u.trim() ? u.trim() : (dataReporter || "").trim();
+      return name ? "&reporter=" + encodeURIComponent(name) : "";
     }
     function ensureFrame() {
       if (frame) return;
