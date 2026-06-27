@@ -60,6 +60,19 @@ describe("discussTicket", () => {
     expect(["高", "中", "低"]).toContain(result.urgency);
   });
 
+  // LINE通知用の素人語フィールドが fallback にも入る
+  it("fallback に素人語フィールド(problemPlain/fixPlain/riskPlain)が入る", async () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    const result = await discussTicket({ ...baseTicket, type: "bug" });
+    expect(typeof result.problemPlain).toBe("string");
+    expect(result.problemPlain.length).toBeGreaterThan(0);
+    expect(Array.isArray(result.fixPlain)).toBe(true);
+    expect(result.fixPlain.length).toBeGreaterThan(0);
+    expect(result.fixPlain.length).toBeLessThanOrEqual(3);
+    expect(typeof result.riskPlain).toBe("string");
+    expect(result.riskPlain.length).toBeGreaterThan(0);
+  });
+
   it("fallback の緊急度は種別で変わる（新機能=低）", async () => {
     delete process.env.ANTHROPIC_API_KEY;
     const r = await discussTicket({ ...baseTicket, type: "新機能" });
@@ -99,6 +112,9 @@ describe("discussTicket", () => {
               urgency: "低",
               recommendation: "GO推奨",
               go_ukagai_draft: "GO伺いです",
+              problem_plain: "一覧が空っぽで見られない",
+              fix_plain: ["表示の不具合を直す", "戻らないか確かめる"],
+              risk_plain: "直したあと別の画面に影響が出ないか確認します",
             },
           },
         ],
@@ -113,6 +129,44 @@ describe("discussTicket", () => {
     expect(result.urgency).toBe("低");
     expect(result.recommendation).toBe("GO推奨");
     expect(result.goDraft).toBe("GO伺いです");
+    expect(result.problemPlain).toBe("一覧が空っぽで見られない");
+    expect(result.fixPlain).toEqual(["表示の不具合を直す", "戻らないか確かめる"]);
+    expect(result.riskPlain).toBe("直したあと別の画面に影響が出ないか確認します");
+  });
+
+  it("claude応答で plain が欠落なら houshin/steps/risks から補う（後方互換）", async () => {
+    process.env.ANTHROPIC_API_KEY = "test-key";
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        content: [
+          {
+            type: "tool_use",
+            name: "record_discussion",
+            input: {
+              houshin: "ここを直す方針です",
+              steps: ["①該当箇所を修正", "②テスト追加"],
+              kousuu: "1日",
+              risks: ["既存機能への影響"],
+              importance: "中",
+              urgency: "中",
+              recommendation: "要検討",
+              go_ukagai_draft: "x",
+              // problem_plain / fix_plain / risk_plain は欠落
+            },
+          },
+        ],
+      }),
+    });
+
+    const result = await discussTicket(baseTicket);
+    expect(result.source).toBe("claude");
+    // problemPlain は houshin から補う
+    expect(result.problemPlain).toContain("ここを直す方針です");
+    // fixPlain は steps から補う
+    expect(result.fixPlain).toEqual(["①該当箇所を修正", "②テスト追加"]);
+    // riskPlain は risks[0] から補う
+    expect(result.riskPlain).toBe("既存機能への影響");
   });
 
   it("claude応答で importance/urgency が欠落ならチケットの重要度→中で補う", async () => {
@@ -173,12 +227,38 @@ describe("coerceDiscussion", () => {
     expect(r.urgency).toBe("中");
     expect(r.recommendation).toBe("要検討");
     expect(r.goDraft).toBe("");
+    // plain は欠落・空でも破綻しない（riskPlain は「特になし」、fixPlainは[]）
+    expect(typeof r.problemPlain).toBe("string");
+    expect(Array.isArray(r.fixPlain)).toBe(true);
+    expect(r.riskPlain).toBe("特になし");
   });
 
   it("fallbackLevel を渡すと level 欠落時にそれを使う", () => {
     const r = coerceDiscussion({ houshin: "x" }, "高");
     expect(r.importance).toBe("高");
     expect(r.urgency).toBe("高");
+  });
+
+  it("plain 欠落時は houshin/steps/risks から補う（後方互換）", () => {
+    const r = coerceDiscussion({
+      houshin: "ここを直す方針です",
+      steps: ["①直す", "②テスト"],
+      risks: ["影響範囲確認"],
+    });
+    expect(r.problemPlain).toContain("ここを直す方針です");
+    expect(r.fixPlain).toEqual(["①直す", "②テスト"]);
+    expect(r.riskPlain).toBe("影響範囲確認");
+  });
+
+  it("plain を直接渡せばそれを使う（長すぎは末尾を整える）", () => {
+    const r = coerceDiscussion({
+      problem_plain: "一覧が見られない",
+      fix_plain: ["表示を直す", "確認する"],
+      risk_plain: "特になし",
+    });
+    expect(r.problemPlain).toBe("一覧が見られない");
+    expect(r.fixPlain).toEqual(["表示を直す", "確認する"]);
+    expect(r.riskPlain).toBe("特になし");
   });
 
   it("正常入力をそのまま整形する", () => {

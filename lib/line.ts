@@ -353,42 +353,57 @@ export function msgHead(
  * 「ID付きテキスト返信（GO KZ-3 等）」で前の提案にも答えられる形は維持する。 */
 export function buildProposalText(ticket: TicketRow, d: DiscussResult): string {
   const id = ticket.ticketId;
-  // 方針＝どう直すかを、やさしい一言に（長い技術説明は詳細リンクへ逃がす）。
-  // 文字化けしていれば呪文を出さず警告に置換（cleanForLine）。
-  const how = cleanForLine(d.houshin, 50);
 
-  // 具体的な改善手順（最大3ステップだけLINEに出す。残りはNotion詳細へ）。
-  const steps = (d.steps || []).filter((s) => s && s.trim()).map((s) => cleanForLine(s, 44));
-  const stepLines =
-    steps.length > 0
-      ? [
-          `🛠 どう直す（手順）：`,
-          ...steps.slice(0, 3).map((s) => `　${s}`),
-          ...(steps.length > 3 ? [`　…ほか${steps.length - 3}件（詳細はNotion）`] : []),
-        ]
-      : [`🛠 どう直す：${how}`];
+  // ── 素人語の短いフィールドを使う（モデルが短文を作る前提）。
+  // 文字化けガードはするが、語の途中で切らないよう切り幅は余裕を持たせる。
+  // plain が空のときだけ既存フィールド（houshin/steps/risks）へフォールバック。
+  const problemPlain = d.problemPlain && d.problemPlain.trim()
+    ? cleanForLine(d.problemPlain, 40)
+    : cleanForLine(ticket.title || d.houshin || "改善のご要望", 40);
 
-  // リスクは先頭2件だけ要約（無ければ「特になし」）。
-  const risks = (d.risks || []).filter((r) => r && r.trim()).map((r) => cleanForLine(r, 40));
-  const riskLine =
-    risks.length > 0
-      ? `⚠ リスク：${risks.slice(0, 2).join(" / ")}${risks.length > 2 ? ` ほか${risks.length - 2}件` : ""}`
-      : `⚠ リスク：特になし`;
+  const fixSource =
+    d.fixPlain && d.fixPlain.length > 0
+      ? d.fixPlain
+      : (d.steps || []);
+  const fixLines = fixSource
+    .filter((s) => s && s.trim())
+    .slice(0, 3)
+    .map((s) => `　・${cleanForLine(s, 32)}`);
+  const fixBlock = fixLines.length > 0 ? fixLines : [`　・${cleanForLine(d.houshin || "内容を確認して直します", 32)}`];
+
+  const riskPlain = d.riskPlain && d.riskPlain.trim()
+    ? cleanForLine(d.riskPlain, 44)
+    : (d.risks && d.risks.length > 0 ? cleanForLine(d.risks[0], 44) : "特になし");
+
+  const sysLabel = looksGarbled(ticket.system)
+    ? "対象システム（文字化けの可能性）"
+    : truncateForLine(systemLabel(ticket.system), 40);
+  const kousuu = looksGarbled(d.kousuu) ? "未記載" : truncateForLine(d.kousuu, 16);
 
   return [
-    msgHead("💡", "カイゼンの提案", ticket.system, ticket.title), // ①種別②システム③何を
-    ...stepLines, // ④どう直すか（具体手順）
-    riskLine, // ⚠ リスク
-    `📊 重要度：${truncateForLine(d.importance, 4)}　⏱ 緊急度：${truncateForLine(d.urgency, 4)}`,
-    `🧭 おすすめ：${truncateForLine(d.recommendation, 24)}（⏳目安 ${looksGarbled(d.kousuu) ? "未記載" : truncateForLine(d.kousuu, 16)}）`,
+    `🖥 ${sysLabel}`,
+    `💡 カイゼンの提案`,
     ``,
-    `▼ 直していい？ 返信で（どれか1つ）`,
-    `GO ${id}／修正 ${id}／却下 ${id}`,
-    `※ボタンは最新の提案のみ。前の提案にはID付きで返信。`,
+    `❓ こまりごと`,
+    `　${problemPlain}`,
+    ``,
+    `🔧 直し方`,
+    ...fixBlock,
+    ``,
+    `⚠ 気をつけること`,
+    `　${riskPlain}`,
+    ``,
+    `📊 重要度 ${truncateForLine(d.importance, 4)}／緊急度 ${truncateForLine(d.urgency, 4)}`,
+    `🧭 おすすめ：${truncateForLine(d.recommendation, 24)}（目安 ${kousuu}）`,
+    ``,
+    `──────────`,
+    `✅ 直していい？ 下のボタン、または返信で`,
+    `　GO ／ 修正 ／ 却下`,
+    `　（前の提案に答えるときは「GO ${id}」のようにID付きで）`,
     ``,
     stageBar(2), // ②提案（GO待ち）
-    `くわしく ▶ ${notionPageUrl(ticket.pageId)}`,
-    `全体像 ▶ ${BOARD_URL}`,
+    `🔎 くわしく ▶ ${notionPageUrl(ticket.pageId)}`,
+    `🗂 全体像 ▶ ${BOARD_URL}`,
   ].join("\n");
 }
 

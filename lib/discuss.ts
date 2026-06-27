@@ -22,11 +22,18 @@ export interface DiscussResult {
   urgency: Level;
   recommendation: Recommendation;
   goDraft: string;
+  /** LINE通知用：こまりごとを素人語で1行（〜34字）。専門用語・長文・英字の羅列を避ける。 */
+  problemPlain: string;
+  /** LINE通知用：直し方を素人語の短い箇条書き（1〜3個・各〜28字）。番号や専門用語を避ける。 */
+  fixPlain: string[];
+  /** LINE通知用：気をつけることを素人語で1行（〜40字）。無ければ「特になし」。 */
+  riskPlain: string;
   source: "claude" | "fallback";
 }
 
 const SYSTEM_PROMPT =
-  "あなたは高木産業グループ CTO Agent Lab。改善チケットについて、方針・具体的な改善手順・工数見積・リスク・重要度・緊急度・GO可否の推奨・社長へのGO伺いドラフトを簡潔かつ具体的に出す。手順は『何をどう直すか』が分かる実作業ステップにする。GO伺いドラフトは\"送信用の下書き\"であり実送信はしない。";
+  "あなたは高木産業グループ CTO Agent Lab。改善チケットについて、方針・具体的な改善手順・工数見積・リスク・重要度・緊急度・GO可否の推奨・社長へのGO伺いドラフトを簡潔かつ具体的に出す。手順は『何をどう直すか』が分かる実作業ステップにする。GO伺いドラフトは\"送信用の下書き\"であり実送信はしない。" +
+  "さらにLINE通知用に problemPlain / fixPlain / riskPlain を“素人が読んで分かる短い言葉”で必ず作る。problemPlain=こまりごとを素人語で1行（〜34字）。fixPlain=直し方を素人語の短い箇条書き1〜3個（各〜28字・番号や専門用語を避け『○○を再発行して設定し直す』のような言い方）。riskPlain=気をつけることを素人語で1行（〜40字・無ければ『特になし』）。技術用語や手順の羅列・英字の羅列はNotion用の steps に回し、plainには書かない。";
 
 const DISCUSS_TOOL = {
   name: "record_discussion",
@@ -67,6 +74,22 @@ const DISCUSS_TOOL = {
         type: "string",
         description: "社長へのGO伺いドラフト（送信用下書き・実送信はしない）",
       },
+      problem_plain: {
+        type: "string",
+        description:
+          "LINEで社長がひと目で分かる、こまりごとの素人語1行（〜34字）。専門用語・長文・英字の羅列を避ける。詳細な技術手順は steps（Notion用）に書く。",
+      },
+      fix_plain: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          "LINEで社長がひと目で分かる、直し方の素人語の短い箇条書き1〜3個（各〜28字）。番号や専門用語を避け『○○を再発行して設定し直す』のような言い方。詳細な技術手順は steps（Notion用）に書く。",
+      },
+      risk_plain: {
+        type: "string",
+        description:
+          "LINEで社長がひと目で分かる、気をつけることの素人語1行（〜40字・無ければ『特になし』）。専門用語・長文・英字の羅列を避ける。",
+      },
     },
     required: [
       "houshin",
@@ -77,6 +100,9 @@ const DISCUSS_TOOL = {
       "urgency",
       "recommendation",
       "go_ukagai_draft",
+      "problem_plain",
+      "fix_plain",
+      "risk_plain",
     ],
   },
 } as const;
@@ -89,8 +115,17 @@ function coerceLevel(v: unknown, fallback: Level): Level {
   return v === "高" || v === "中" || v === "低" ? v : fallback;
 }
 
+/** 長い1行を素人語の短い表示用に詰める（語の途中で切らずに末尾「…」）。 */
+function shortenPlain(s: string, max: number): string {
+  const t = (s || "").replace(/\s+/g, " ").trim();
+  if (t.length <= max) return t;
+  return t.slice(0, Math.max(0, max - 1)) + "…";
+}
+
 /** ツール入力（または任意のオブジェクト）を安全に整形する。
- * importance/urgency が欠落・不正なときの既定は fallbackLevel（既定『中』）。 */
+ * importance/urgency が欠落・不正なときの既定は fallbackLevel（既定『中』）。
+ * problemPlain/fixPlain/riskPlain が欠落していたら houshin/title/steps/risks から補う
+ * （旧チケット・plain無しのclaude応答でも破綻しない後方互換）。 */
 export function coerceDiscussion(
   obj: any,
   fallbackLevel: Level = "中"
@@ -112,7 +147,53 @@ export function coerceDiscussion(
       : typeof obj?.goDraft === "string"
         ? obj.goDraft.trim()
         : "";
-  return { houshin, steps, kousuu, risks, importance, urgency, recommendation, goDraft };
+
+  // ── LINE通知用の素人語フィールド（欠落時は既存フィールドから補う） ──
+  const rawProblem =
+    typeof obj?.problem_plain === "string"
+      ? obj.problem_plain.trim()
+      : typeof obj?.problemPlain === "string"
+        ? obj.problemPlain.trim()
+        : "";
+  const problemPlain = rawProblem
+    ? shortenPlain(rawProblem, 34)
+    : houshin
+      ? shortenPlain(houshin, 34)
+      : shortenPlain(typeof obj?.title === "string" ? obj.title : "", 34);
+
+  const rawFix =
+    toStrArray(obj?.fix_plain).length > 0
+      ? toStrArray(obj?.fix_plain)
+      : toStrArray(obj?.fixPlain);
+  const fixPlain = (rawFix.length > 0 ? rawFix : steps)
+    .slice(0, 3)
+    .map((s) => shortenPlain(s, 28));
+
+  const rawRisk =
+    typeof obj?.risk_plain === "string"
+      ? obj.risk_plain.trim()
+      : typeof obj?.riskPlain === "string"
+        ? obj.riskPlain.trim()
+        : "";
+  const riskPlain = rawRisk
+    ? shortenPlain(rawRisk, 40)
+    : risks.length > 0
+      ? shortenPlain(risks[0], 40)
+      : "特になし";
+
+  return {
+    houshin,
+    steps,
+    kousuu,
+    risks,
+    importance,
+    urgency,
+    recommendation,
+    goDraft,
+    problemPlain,
+    fixPlain,
+    riskPlain,
+  };
 }
 
 /** APIキー未設定・失敗時に使う定型の議論結果を生成する */
@@ -161,6 +242,21 @@ function fallbackDiscussion(ticket: TicketRow): DiscussResult {
 
   const goDraft = `【GO伺い（下書き・未送信）】\n対象: ${ticket.system || "未特定"}\n件名: ${ticket.title || "改善のご要望"}\n種別/重要度: ${type} / ${importance}\n推奨: ${recommendation}\n工数見積: ${kousuu}\n上記内容で着手してよろしいでしょうか。`;
 
+  // LINE通知用の素人語（鍵未設定でも読める定型・種別ごと）。
+  const problemPlain = shortenPlain(ticket.title || "改善してほしいことがあります", 34);
+  const fixPlain: string[] =
+    type === "bug"
+      ? ["どこで起きるか調べる", "原因を直して再発を防ぐ", "直ったか本番で確かめる"]
+      : type === "新機能"
+        ? ["やりたいことを整理する", "画面を作って試す", "本番で使えるようにする"]
+        : ["どこを変えるか決める", "その場所を直して試す", "良くなったか確かめる"];
+  const riskPlain =
+    type === "bug"
+      ? "直したあと、元の不具合が戻らないか確認します"
+      : type === "新機能"
+        ? "今ある機能に影響が出ないか確認します"
+        : "くわしい中身は追って確認が必要かもしれません";
+
   return {
     houshin,
     steps,
@@ -170,6 +266,9 @@ function fallbackDiscussion(ticket: TicketRow): DiscussResult {
     urgency,
     recommendation,
     goDraft,
+    problemPlain,
+    fixPlain,
+    riskPlain,
     source: "fallback",
   };
 }
