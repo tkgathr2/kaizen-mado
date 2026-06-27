@@ -8,6 +8,35 @@ import { clampScore, computePriority, isPriority } from "./priority";
 const API_URL = "https://api.anthropic.com/v1/messages";
 const DEFAULT_MODEL = "claude-sonnet-4-6";
 
+// Anthropic への1リクエストあたりのタイムアウト（ミリ秒）。
+// 公開・無認証窓口なので、無タイムアウトだとクライアント切断後もツールループが
+// 全反復走り続け、課金とコネクションが浪費される（DoS）。
+const FETCH_TIMEOUT_MS = 20_000;
+
+/**
+ * タイムアウトと「呼び出し側の AbortSignal（クライアント切断）」を1つに束ねた signal を作る。
+ * - タイムアウト発火：AbortSignal.timeout が abort。
+ * - クライアント切断：req.signal（あれば）が abort。
+ * どちらかが abort したら fetch を中断し、ツールループも止める。
+ * AbortSignal.any が無い古いランタイム向けに手動 fallback も用意（degrade-safe）。
+ */
+function buildFetchSignal(upstream?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+  if (!upstream) return timeout;
+  // 標準（Node18.17+/最近のブラウザ）：複数 signal を束ねる。
+  if (typeof (AbortSignal as any).any === "function") {
+    return (AbortSignal as any).any([upstream, timeout]) as AbortSignal;
+  }
+  // fallback：手動で両方を監視して中継する。
+  const controller = new AbortController();
+  const onAbort = (reason: unknown) => controller.abort(reason);
+  if (upstream.aborted) controller.abort((upstream as any).reason);
+  else upstream.addEventListener("abort", () => onAbort((upstream as any).reason), { once: true });
+  if (timeout.aborted) controller.abort((timeout as any).reason);
+  else timeout.addEventListener("abort", () => onAbort((timeout as any).reason), { once: true });
+  return controller.signal;
+}
+
 // content は文字列、または text/image ブロックの配列（マルチモーダル時）。
 // Phase 2/3：user ターンが画像を持つときだけブロック配列になる（lib/prompt.ts が組む）。
 interface AnthropicMessage {
@@ -105,7 +134,8 @@ const TURN_TOOL = {
  */
 export async function callClaude(
   system: string,
-  messages: AnthropicMessage[]
+  messages: AnthropicMessage[],
+  signal?: AbortSignal
 ): Promise<TurnResult> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set");
@@ -127,6 +157,8 @@ export async function callClaude(
       tool_choice: { type: "tool", name: TURN_TOOL.name },
       messages,
     }),
+    // タイムアウト＋クライアント切断で中断（無タイムアウトDoS対策）。
+    signal: buildFetchSignal(signal),
   });
 
   if (!res.ok) {
@@ -158,7 +190,8 @@ export async function callClaude(
 export async function callClaudeWithSlack(
   system: string,
   messages: AnthropicMessage[],
-  slackSystem: string | null
+  slackSystem: string | null,
+  signal?: AbortSignal
 ): Promise<TurnResult> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set");
@@ -170,6 +203,8 @@ export async function callClaudeWithSlack(
   );
 
   for (let iter = 0; iter <= MAX_SLACK_ITERS; iter++) {
+    // クライアント切断後はツールループを継続しない（無駄な課金・走査を止める）。
+    if (signal?.aborted) throw new Error("request aborted");
     const forceTurn = iter === MAX_SLACK_ITERS; // 最終反復は record_turn を強制
     const res = await fetch(API_URL, {
       method: "POST",
@@ -190,6 +225,8 @@ export async function callClaudeWithSlack(
           : { type: "any", disable_parallel_tool_use: true },
         messages: convo,
       }),
+      // 各反復にタイムアウト＋クライアント切断の中断を効かせる（無タイムアウトDoS対策）。
+      signal: buildFetchSignal(signal),
     });
 
     if (!res.ok) {

@@ -105,6 +105,33 @@ describe("validateAttachments（配列・枚数/合計）", () => {
     expect(validateAttachments(null)).toEqual([]);
     expect(validateAttachments("x")).toEqual([]);
   });
+
+  it("無効要素が大量でも上限は入力インデックス基準で効く（増幅DoS対策）", () => {
+    // 1万件の無効添付を渡しても、走査は先頭 MAX_ATTACHMENTS 件で打ち切られる。
+    // 成功件数基準だと無効要素で out.length が増えず全件走査されてしまう。
+    // dataUrl ゲッターのアクセス回数で「実際に検証された件数」を観測する。
+    let accessed = 0;
+    const evil = Object.defineProperty({}, "dataUrl", {
+      get() {
+        accessed++;
+        return "nope"; // 必ず無効（bad-format）。
+      },
+      enumerable: true,
+    });
+    const arr = new Array(10000).fill(evil);
+    const out = validateAttachments(arr);
+    expect(out.length).toBe(0);
+    // 先頭 MAX_ATTACHMENTS 件しか触らない（10000件ではない）。
+    expect(accessed).toBeLessThanOrEqual(MAX_ATTACHMENTS);
+  });
+
+  it("無効要素を挟んでも有効分はちゃんと残る（上限内）", () => {
+    const ok = { dataUrl: dataUrl("image/png", PNG) };
+    const bad = { dataUrl: "nope" };
+    // 先頭 MAX_ATTACHMENTS 件に有効と無効が混在 → 有効分だけ残る。
+    const out = validateAttachments([ok, bad, ok]);
+    expect(out.length).toBe(2);
+  });
 });
 
 describe("buildImageBlocks（Anthropic ブロック組み立て）", () => {

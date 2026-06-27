@@ -77,4 +77,15 @@ describe("sanitizeHistory（画像ゲート）", () => {
     // 末尾側のメッセージが残っていることを確認（先頭が切られている）。
     expect(out[out.length - 1].content).toBe("msg99999");
   });
+
+  it("1メッセージの添付配列が巨大でも上限件数で頭打ちする（DoS対策）", () => {
+    // 1ターンに1万件の有効画像を積んでも、検証後は上限件数（≤5）に収まる。
+    const huge = Array.from({ length: 10_000 }, () => ({ dataUrl: PNG_DATAURL }));
+    const out = sanitizeHistory(
+      [{ role: "user", content: "大量添付", attachments: huge }],
+      { withVision: true, withFiles: true }
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0].attachments!.length).toBeLessThanOrEqual(5);
+  });
 });
