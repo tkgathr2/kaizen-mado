@@ -1,6 +1,6 @@
 // ── LINE push エンドポイント（カイゼンくん自身から送る） ──
-// x-push-secret ヘッダーで CRON_SECRET 認証。
-// mention-hisho への「相乗り」を廃止し、カイゼンくん固有の LINE チャンネルで送る。
+// x-push-secret ヘッダーで CRON_SECRET 認証（相乗り禁止グランドルール 2026-06-28）。
+// mention-hisho への相乗りを廃止し、カイゼンくん固有の LINE チャンネルのみで送る。
 import { NextRequest, NextResponse } from "next/server";
 import { pushText } from "@/lib/line";
 
