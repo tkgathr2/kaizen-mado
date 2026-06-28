@@ -11,6 +11,7 @@ import { lowerPriority } from "@/lib/priority";
 import { isEmbed } from "@/lib/embed";
 import { isEmbeddedContext, shouldShowLoginGate } from "@/lib/loginGate";
 import { resolveReporter } from "@/lib/reporter";
+import { isWebView } from "@/lib/webview";
 import MarkdownMessage from "@/lib/MarkdownMessage";
 import { SUGGESTION_TEMPLATES } from "@/lib/templates";
 import {
@@ -87,6 +88,9 @@ function KaizenMado() {
   // mounted（クライアントで useEffect 後に true）になるまではゲートを出さない。
   const [mounted, setMounted] = useState(false);
   const [inIframe, setInIframe] = useState(false);
+  // WebView（Slack/LINE/Instagram等のin-app browser）検知。
+  // サーバ側では navigator が無いためクライアントマウント後に判定する。
+  const [inWebView, setInWebView] = useState(false);
   useEffect(() => {
     setMounted(true);
     try {
@@ -95,6 +99,7 @@ function KaizenMado() {
       // クロスオリジンで window.top にアクセスすると例外＝iframe 内とみなす。
       setInIframe(true);
     }
+    setInWebView(isWebView(navigator.userAgent));
   }, []);
   // 埋め込み文脈（iframe 内 / ?embed=1 / widget が reporter を渡している）ではゲートを絶対に出さない。
   const embeddedForGate = isEmbeddedContext({ inIframe, embedFlag: embed, reporterParam });
@@ -496,6 +501,33 @@ function KaizenMado() {
   // 直接アクセス（非埋め込み）かつ認証ON・未ログイン：チャットの前にログイン画面を出す。
   // 埋め込み（iframe）では絶対にここへ来ない（embeddedForGate で弾く）。
   if (showLoginGate) {
+    // WebView（Slack/LINE/Instagram等）内では Google が OAuth を disallowed_useragent で拒否する。
+    // ログインボタンの代わりに「Safariで開く」誘導を出す。
+    if (inWebView) {
+      return (
+        <div className="app login-gate">
+          <div className="login-card">
+            <img src="/kaizen-kun.png" alt="フクロウ博士" className="login-logo" />
+            <h1 className="login-title">カイゼン窓口</h1>
+            <p className="login-lead">
+              Googleログインはアプリ内ブラウザでは利用できません。
+              <br />
+              Safariで開いてログインしてください。
+            </p>
+            <button
+              type="button"
+              className="primary login-btn"
+              onClick={() => window.open(location.href, "_blank")}
+            >
+              Safariで開く
+            </button>
+            <p className="login-note">
+              上のボタンをタップするとSafariでこのページが開きます
+            </p>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="app login-gate">
         <div className="login-card">
@@ -737,14 +769,26 @@ function KaizenMado() {
                   iframe 表示自体を拒否する。よって埋め込みでは原理的にログイン不可。
                   埋め込みでは手入力（お名前・任意）だけで送れる設計に倒す。 */}
               {authUiEnabled && !embed && (
-                <button
-                  type="button"
-                  className="ghost reporter-login"
-                  onClick={() => signIn("google")}
-                  title="Googleでログインすると、お名前を自動で引き継ぎます"
-                >
-                  Googleでログイン（任意）
-                </button>
+                // WebView内ではGoogleログインができないため、Safari誘導ボタンに切り替える。
+                inWebView ? (
+                  <button
+                    type="button"
+                    className="ghost reporter-login"
+                    onClick={() => window.open(location.href, "_blank")}
+                    title="Safariで開くとGoogleでログインできます"
+                  >
+                    Safariで開いてログイン（任意）
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="ghost reporter-login"
+                    onClick={() => signIn("google")}
+                    title="Googleでログインすると、お名前を自動で引き継ぎます"
+                  >
+                    Googleでログイン（任意）
+                  </button>
+                )
               )}
             </div>
           )}
