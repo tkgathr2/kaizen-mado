@@ -29,10 +29,12 @@ function coerceTicket(input: any): Ticket | null {
   // 後方互換：点数が無い古いクライアントからの送信は undefined のまま通す。
   const urgency = clampScore(input.urgency);
   const importanceScore = clampScore(input.importanceScore);
-  let priority: Priority | undefined = isPriority(input.priority) ? input.priority : undefined;
-  if (!priority && urgency != null && importanceScore != null) {
-    priority = computePriority(urgency, importanceScore);
-  }
+  // server always derives priority from scores when both are present (§4.5.1)
+  // 後方互換：点数が無い古いチケットはクライアント供給値にフォールバック。
+  const priority: Priority | undefined =
+    (urgency != null && importanceScore != null)
+      ? computePriority(urgency, importanceScore)
+      : (isPriority(input.priority) ? input.priority : undefined);
   const priorityReason =
     typeof input.priorityReason === "string" && input.priorityReason.trim()
       ? input.priorityReason.trim().slice(0, 200)
