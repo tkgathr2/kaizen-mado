@@ -29,6 +29,7 @@ export const SYSTEMS: { slug: string; name: string }[] = [
   { slug: "iride", name: "入退社管理くん" },
   { slug: "daily-report", name: "簡単日報くん" },
   { slug: "tsunagee", name: "Tsunagee" },
+  { slug: "brainos", name: "BrainOS" },
   { slug: "other", name: "その他" },
 ];
 
