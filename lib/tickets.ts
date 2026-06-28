@@ -27,6 +27,9 @@ export interface TicketRow {
   importanceScore?: number; // 重要度 1〜10
   priority?: string; // 優先度（高/中/低）
   priorityReason?: string; // 算出根拠1行
+  /** 状態が変わった日時（ISO文字列）。Phase 1 タイムアウト計測用。Notionプロパティ「状態変更日時」（date型）。
+   * 旧チケット・プロパティ未設定は undefined（タイムアウト判定せず安全側）。 */
+  statusChangedAt?: string;
 }
 
 function getAuth(): { token: string; databaseId: string } {
@@ -74,6 +77,10 @@ function valueFromUrl(prop: any): string | null {
   const v = prop?.url;
   return typeof v === "string" && v ? v : null;
 }
+function dateFromProp(prop: any): string | null {
+  const d = prop?.date?.start;
+  return typeof d === "string" && d ? d : null;
+}
 
 function parseRow(page: any): TicketRow {
   const props = page?.properties ?? {};
@@ -95,6 +102,9 @@ function parseRow(page: any): TicketRow {
     importanceScore: numberFromProp(props["重要度スコア"]),
     priority: nameFromSelect(props["優先度"]) || undefined,
     priorityReason: plainFromRichText(props["優先度根拠"]) || undefined,
+    // Phase 1 タイムアウト計測用。Notionプロパティ「状態変更日時」（date型）。
+    // プロパティが無い旧チケットは undefined（タイムアウト判定せず安全側）。
+    statusChangedAt: dateFromProp(props["状態変更日時"]) || undefined,
   };
 }
 
@@ -433,4 +443,42 @@ export async function appendDiscussionBlocks(
     const t = await res.text().catch(() => "");
     throw new Error(`Notion append error ${res.status}: ${t.slice(0, 300)}`);
   }
+}
+
+// ── Phase 1 追加関数 ──
+
+/**
+ * 状態変更日時（date型）を現在時刻で更新する。
+ * `updateTicketState` と一緒に呼ぶことで、タイムアウト計測の起点を記録する。
+ * Notionプロパティ「状態変更日時」が DB に存在しない場合は PATCH が 400 になるが、
+ * fail-safe で握り潰す（タイムアウト計測できないだけで本筋の状態遷移は損なわない）。
+ */
+export async function setStatusChangedAt(
+  pageId: string,
+  now: Date = new Date()
+): Promise<void> {
+  try {
+    await patchPage(pageId, {
+      状態変更日時: { date: { start: now.toISOString() } },
+    });
+  } catch (err) {
+    // プロパティ未設定（旧DB）でも状態遷移は止めない。
+    console.warn("[tickets] setStatusChangedAt skipped:", (err as Error).message);
+  }
+}
+
+/**
+ * 終端でない全チケットを取得する（kz-sweep cron 用）。
+ * 対象状態: GO待ち・差し戻し・レビュー（タイムアウト監視対象）。
+ * 着手/実装中は既存 execute の reaper が担うためここでは除外する。
+ */
+export async function fetchNonTerminalTickets(limit = 50): Promise<TicketRow[]> {
+  const states = ["GO待ち", "差し戻し", "レビュー"];
+  const results: TicketRow[] = [];
+  for (const state of states) {
+    const rows = await fetchTicketsByState(state, Math.ceil(limit / states.length));
+    results.push(...rows);
+    if (results.length >= limit) break;
+  }
+  return results.slice(0, limit);
 }

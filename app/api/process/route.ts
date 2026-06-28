@@ -10,6 +10,7 @@ import {
   updateTicketState,
   appendDiscussionBlocks,
   setTicketAssignee,
+  setStatusChangedAt,
 } from "@/lib/tickets";
 import { discussTicket } from "@/lib/discuss";
 import { pushProposal } from "@/lib/line";
@@ -76,6 +77,7 @@ export async function POST(req: NextRequest) {
         if (autopilotEnabled() && gate.mode === "auto" && recommendGo) {
           // 自動GO：GO待ちを飛ばして着手へ。次のexecuteが実装→PR→（自走なら）マージまで。
           await updateTicketState(ticket.pageId, "着手");
+          await setStatusChangedAt(ticket.pageId); // Phase 1: 状態変更日時を記録
           await appendDiscussionBlocks(ticket.pageId, [
             {
               heading: "真田自走（自動GO）",
@@ -97,6 +99,7 @@ export async function POST(req: NextRequest) {
         } else {
           // 従来：GO待ち＋GO伺い（社長に聞く）。自走未許可システム・危険案件はここ。
           await updateTicketState(ticket.pageId, "GO待ち");
+          await setStatusChangedAt(ticket.pageId); // Phase 1: 状態変更日時を記録
           const pushed = await pushProposal({ ...ticket, state: "GO待ち" }, d);
           processed.push({
             ticketId: ticket.ticketId,

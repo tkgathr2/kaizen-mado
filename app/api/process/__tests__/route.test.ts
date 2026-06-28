@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const updateTicketState = vi.fn((..._a: unknown[]): Promise<void> => Promise.resolve());
 const appendDiscussionBlocks = vi.fn((..._a: unknown[]): Promise<void> => Promise.resolve());
 const setTicketAssignee = vi.fn((..._a: unknown[]): Promise<void> => Promise.resolve());
+const setStatusChangedAt = vi.fn((..._a: unknown[]): Promise<void> => Promise.resolve());
 const fetchTicketsByState = vi.fn((..._a: unknown[]): Promise<unknown[]> => Promise.resolve([]));
 const discussTicket = vi.fn((..._a: unknown[]): Promise<unknown> => Promise.resolve({}));
 const returnLearningFromCompleted = vi.fn(
@@ -24,6 +25,7 @@ vi.mock("@/lib/tickets", () => ({
   updateTicketState: (...a: unknown[]) => updateTicketState(...a),
   appendDiscussionBlocks: (...a: unknown[]) => appendDiscussionBlocks(...a),
   setTicketAssignee: (...a: unknown[]) => setTicketAssignee(...a),
+  setStatusChangedAt: (...a: unknown[]) => setStatusChangedAt(...a),
 }));
 vi.mock("@/lib/discuss", () => ({
   discussTicket: (...a: unknown[]) => discussTicket(...a),

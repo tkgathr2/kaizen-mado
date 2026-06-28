@@ -10,11 +10,13 @@ import {
   updateTicketState,
   appendDiscussionBlocks,
   fetchTicketByPageId,
+  setStatusChangedAt,
 } from "@/lib/tickets";
 import { returnLearningFromCompleted } from "@/lib/learn";
 import { notifyStuckOnce } from "@/lib/notify";
 import { checkCronSecret } from "@/lib/cronAuth";
 import { isInfraError, buildInfraNoticeText, pushText } from "@/lib/line";
+import { isValidFailureClass, FAILURE_CLASSES } from "@/lib/kz-state";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,6 +46,34 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "missing pageId/result" }, { status: 400 });
   }
 
+  // ── Phase 1: failureClass バリデーション（result=failed のときは必須）──
+  // failureClass が欠落・不正値のままログに残らないのを防ぐため、400で早期拒否する。
+  // UNKNOWN の場合は evidenceLog（最低100字）を必須として無根拠の UNKNOWN 乱用を防ぐ。
+  if (result === "failed") {
+    const failureClass = body?.failureClass;
+    if (!isValidFailureClass(failureClass)) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: `failureClass is required when result=failed. Must be one of: ${FAILURE_CLASSES.join(", ")}`,
+        },
+        { status: 400 }
+      );
+    }
+    if (failureClass === "UNKNOWN") {
+      const evidenceLog: string = typeof body?.evidenceLog === "string" ? body.evidenceLog : "";
+      if (evidenceLog.length < 100) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: "evidenceLog is required when failureClass=UNKNOWN (min 100 chars)",
+          },
+          { status: 400 }
+        );
+      }
+    }
+  }
+
   // 状態ガード：実行中(実装中)のチケットにだけ結果を反映する。
   // 偽callback・リプレイで任意pageIdを「完了」に書き換えるのを防ぐ（CRON_SECRETに加えた多層防御）。
   let current;
@@ -64,6 +94,7 @@ export async function POST(req: NextRequest) {
   try {
     if (result === "merged") {
       await updateTicketState(pageId, "完了");
+      await setStatusChangedAt(pageId); // Phase 1: 状態変更日時を記録
       await appendDiscussionBlocks(pageId, [
         { heading: "本番反映 完了", body: `自動改修→マージ→デプロイ完了。${prUrl}` },
       ]);
@@ -77,6 +108,7 @@ export async function POST(req: NextRequest) {
     if (result === "review") {
       // PRレビュー型では「review」が通常の成功（AIがPRを作って人の確認待ち）。
       await updateTicketState(pageId, "レビュー");
+      await setStatusChangedAt(pageId); // Phase 1: 状態変更日時を記録
       await appendDiscussionBlocks(pageId, [
         { heading: "PR作成（レビュー待ち）", body: `${detail}\nPR: ${prUrl}` },
       ]);
@@ -105,6 +137,7 @@ export async function POST(req: NextRequest) {
 
     // (B) AI改修の失敗 → 差し戻し。「人の助けが要る詰まり」として詰まり連絡を1回だけ送る（de-dup）。
     await updateTicketState(pageId, "差し戻し");
+    await setStatusChangedAt(pageId); // Phase 1: 状態変更日時を記録
     await appendDiscussionBlocks(pageId, [
       { heading: "実装失敗（差し戻し）", body: detail || "(理由不明)" },
     ]);
