@@ -27,6 +27,7 @@ export const SYSTEMS: { slug: string; name: string }[] = [
   { slug: "schedule-relay", name: "スケジュール調整くん" },
   { slug: "mieruka", name: "ミエルカくん" },
   { slug: "iride", name: "入退社管理くん" },
+  { slug: "zenmi", name: "ゼンミエ" },
   { slug: "daily-report", name: "簡単日報くん" },
   { slug: "tsunagee", name: "Tsunagee" },
   { slug: "other", name: "その他" },
