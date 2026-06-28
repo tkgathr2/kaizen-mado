@@ -1,16 +1,17 @@
 // ── LINE push エンドポイント（カイゼンくん自身から送る） ──
-// x-push-secret ヘッダーで CRON_SECRET 認証（相乗り禁止グランドルール 2026-06-28）。
+// checkCronSecret (x-cron-secret / Authorization: Bearer) で認証（相乗り禁止グランドルール 2026-06-28）。
 // mention-hisho への相乗りを廃止し、カイゼンくん固有の LINE チャンネルのみで送る。
 import { NextRequest, NextResponse } from "next/server";
+import { checkCronSecret } from "@/lib/cronAuth";
 import { pushText } from "@/lib/line";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const LINE_TEXT_MAX = 5000;
+
 export async function POST(req: NextRequest) {
-  const secret = req.headers.get("x-push-secret");
-  const expected = process.env.CRON_SECRET;
-  if (!expected || secret !== expected) {
+  if (!checkCronSecret(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -27,8 +28,17 @@ export async function POST(req: NextRequest) {
   }
 
   // title があれば先頭に付ける（task-complete.ps1 の [Claude Code] プレフィクス互換）
-  const title = body.title ?? body.sender ?? "";
+  const titleRaw = typeof body.title === "string" ? body.title
+                 : typeof body.sender === "string" ? body.sender : "";
+  const title = titleRaw.replace(/[\r\n\t]/g, " ").trim().slice(0, 40);
   const message = title ? `[${title}] ${raw}` : raw;
+
+  if (message.length > LINE_TEXT_MAX) {
+    return NextResponse.json(
+      { error: "text too long", max: LINE_TEXT_MAX, got: message.length },
+      { status: 400 }
+    );
+  }
 
   const ok = await pushText(message);
   if (!ok) {
