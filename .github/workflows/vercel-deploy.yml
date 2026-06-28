@@ -2,10 +2,15 @@ name: vercel-deploy
 
 on:
   workflow_dispatch:
+  workflow_run:
+    workflows: ["ci"]
+    types: [completed]
+    branches: [main]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
