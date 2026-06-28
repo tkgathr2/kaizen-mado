@@ -118,7 +118,7 @@ export const TARGETS: TargetMeta[] = [
   // Tsunagee（外国人材向け求人検索・Next.js）
   { system: "Tsunagee", repo: "tkgathr2/tsunagee", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
   // BrainOS＝全社学習ダッシュボード（Next.js+Railway+Prisma）。https://brainos.takagi.bz
-  { system: "BrainOS", repo: "tkgathr2/brainos", healthUrl: "https://brainos-web-nu.vercel.app", forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
+  { system: "BrainOS", repo: "tkgathr2/brainos", healthUrl: "https://brainos-web-nu.vercel.app", forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
   { system: "その他", repo: null, healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
 ];
 
