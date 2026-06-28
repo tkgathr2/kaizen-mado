@@ -5,18 +5,47 @@
 // Google OAuth が "disallowed_useragent" エラーになる。
 // middleware.ts がサーバーサイドでこのページへリダイレクトする。
 //
-// ユーザーへ「Safari / Chrome で開く方法」を分かりやすく案内する。
-// LINE 専用: openExternalBrowser=1 パラメータ付きリンクをタップすると Safari で開く。
+// 方法①（推奨）：パスフレーズを入力してそのままログイン（WebViewのまま使える）。
+// 方法②：Safari / Chrome で開く（Google OAuth が必要な場合）。
 
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
+import { signIn } from "next-auth/react";
 import { detectWebViewApp } from "@/lib/webview";
 
 function OpenInBrowserContent() {
   const params = useSearchParams();
   // middleware が ?from=<元のURL> で渡す（無い場合はトップへ）
   const fromParam = params.get("from") ?? "/";
+
+  // ── パスフレーズ認証 ──
+  const [passphrase, setPassphrase] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [authError, setAuthError] = useState("");
+
+  async function handlePassphraseLogin(e: React.FormEvent) {
+    e.preventDefault();
+    if (!passphrase || submitting) return;
+    setSubmitting(true);
+    setAuthError("");
+    try {
+      const result = await signIn("credentials", {
+        passphrase,
+        redirect: false,
+      });
+      if (result?.error) {
+        setAuthError("パスフレーズが正しくありません");
+      } else {
+        // 成功：元のページへ遷移（セッション取得後）
+        window.location.href = fromParam;
+      }
+    } catch {
+      setAuthError("ログインに失敗しました。もう一度お試しください。");
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   // 元のURLに openExternalBrowser=1 を追加した LINE 専用リンク
   const [lineUrl, setLineUrl] = useState<string>("");
@@ -67,26 +96,53 @@ function OpenInBrowserContent() {
     <div className="oib-wrap">
       <div className="oib-card">
         {/* アイコン */}
-        <div className="oib-icon" aria-hidden="true">🔒</div>
+        <div className="oib-icon" aria-hidden="true">🔑</div>
 
         <h1 className="oib-title">
-          アプリ内ブラウザでは<br />ログインできません
+          パスフレーズでログイン
         </h1>
 
         <p className="oib-lead">
-          Googleログインはセキュリティ上の理由から、
-          {appType === "line" && "LINEアプリ内ブラウザ"}
-          {appType === "slack" && "Slackアプリ内ブラウザ"}
-          {appType === "other" && "アプリ内ブラウザ"}
-          では利用できません。
+          このままログインできます。
           <br />
-          <strong>Safari</strong> または <strong>Chrome</strong> でこのページを開いてください。
+          パスフレーズを入力してください。
         </p>
+
+        {/* 方法①：パスフレーズ認証（WebViewのままログイン・推奨） */}
+        <div className="oib-section">
+          <p className="oib-section-title">方法①　パスフレーズでこのままログイン（推奨）</p>
+          <form onSubmit={handlePassphraseLogin} className="oib-pass-form">
+            <input
+              type="password"
+              className="oib-pass-input"
+              placeholder="パスフレーズを入力"
+              value={passphrase}
+              onChange={(e) => setPassphrase(e.target.value)}
+              autoComplete="current-password"
+              disabled={submitting}
+            />
+            <button
+              type="submit"
+              className="oib-pass-btn"
+              disabled={submitting || !passphrase}
+            >
+              {submitting ? "…" : "ログイン"}
+            </button>
+          </form>
+          {authError && (
+            <p className="oib-auth-error" role="alert">{authError}</p>
+          )}
+        </div>
+
+        {/* 区切り */}
+        <div className="oib-divider">
+          <span>ログインできない場合</span>
+        </div>
 
         {/* LINE 専用：openExternalBrowser=1 リンク */}
         {appType === "line" && lineUrl && (
           <div className="oib-section">
-            <p className="oib-section-title">方法①　下のボタンをタップ（推奨）</p>
+            <p className="oib-section-title">方法②　Safariで開く（LINE専用）</p>
             <a
               href={lineUrl}
               className="oib-primary-btn"
@@ -104,7 +160,7 @@ function OpenInBrowserContent() {
         {/* Slack 専用：右上メニューの案内 */}
         {appType === "slack" && (
           <div className="oib-section">
-            <p className="oib-section-title">方法①　Slackの右上メニューから開く</p>
+            <p className="oib-section-title">方法②　Slackの右上メニューから開く</p>
             <div className="oib-steps">
               <div className="oib-step">
                 <span className="oib-step-num">1</span>
@@ -118,27 +174,10 @@ function OpenInBrowserContent() {
           </div>
         )}
 
-        {/* 汎用：other アプリ */}
-        {appType === "other" && (
-          <div className="oib-section">
-            <p className="oib-section-title">開き方</p>
-            <div className="oib-steps">
-              <div className="oib-step">
-                <span className="oib-step-num">1</span>
-                <span>下の「URLをコピー」ボタンをタップ</span>
-              </div>
-              <div className="oib-step">
-                <span className="oib-step-num">2</span>
-                <span>Safari または Chrome を開いてURLを貼り付け</span>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* 共通：URLコピー（全アプリ種別で表示） */}
+        {/* 共通：URLコピー */}
         <div className="oib-section">
           <p className="oib-section-title">
-            {appType === "line" ? "方法②　URLをコピーしてSafariに貼る" : "方法②　URLをコピー"}
+            {appType === "line" ? "方法③　URLをコピーしてSafariに貼る" : "方法②　URLをコピーして外部ブラウザで開く"}
           </p>
           <div className="oib-url-row">
             <span className="oib-url-text">{copyUrl || "https://kaizen.takagi.bz/"}</span>
@@ -299,6 +338,67 @@ function OpenInBrowserContent() {
           color: var(--muted, #83807a);
           margin: 0;
           line-height: 1.6;
+        }
+        .oib-pass-form {
+          display: flex;
+          gap: 8px;
+          margin-bottom: 8px;
+        }
+        .oib-pass-input {
+          flex: 1;
+          padding: 10px 12px;
+          border: 1px solid var(--line, #e7e3d9);
+          border-radius: 8px;
+          font-size: 15px;
+          background: #fff;
+          color: var(--ink, #2b2924);
+          outline: none;
+        }
+        .oib-pass-input:focus {
+          border-color: var(--brand, #d97757);
+          box-shadow: 0 0 0 2px rgba(217,119,87,0.15);
+        }
+        .oib-pass-btn {
+          flex: none;
+          padding: 10px 18px;
+          background: var(--brand, #d97757);
+          color: #fff;
+          border: none;
+          border-radius: 8px;
+          font-size: 15px;
+          font-weight: 700;
+          cursor: pointer;
+          transition: background 0.15s;
+          white-space: nowrap;
+        }
+        .oib-pass-btn:hover:not(:disabled) {
+          background: var(--brand-hover, #c45f3f);
+        }
+        .oib-pass-btn:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+        .oib-auth-error {
+          font-size: 13px;
+          color: #c0392b;
+          margin: 0;
+          padding: 6px 0 0;
+        }
+        .oib-divider {
+          width: 100%;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          margin: 4px 0 8px;
+          color: var(--muted, #83807a);
+          font-size: 12px;
+        }
+        .oib-divider::before,
+        .oib-divider::after {
+          content: "";
+          flex: 1;
+          height: 1px;
+          background: var(--line, #e7e3d9);
         }
       `}</style>
     </div>

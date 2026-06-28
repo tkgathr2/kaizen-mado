@@ -23,6 +23,82 @@ import {
 } from "./attachUx";
 import type { Attachment, ChatMessage, Ticket } from "@/lib/types";
 
+// WebView（LINE/Slack等）からのアクセス時に表示するパスフレーズログインゲート。
+// Google OAuth は WebView で disallowed_useragent になるため、
+// パスフレーズ認証でそのままログインできるようにする。
+function WebViewLoginGate() {
+  const [passphrase, setPassphrase] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+
+  async function handleLogin(e: React.FormEvent) {
+    e.preventDefault();
+    if (!passphrase || submitting) return;
+    setSubmitting(true);
+    setError("");
+    try {
+      const result = await signIn("credentials", {
+        passphrase,
+        redirect: false,
+      });
+      if (result?.error) {
+        setError("パスフレーズが正しくありません");
+      } else {
+        // 成功：ページをリロードしてセッションを取得
+        window.location.reload();
+      }
+    } catch {
+      setError("ログインに失敗しました。もう一度お試しください。");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="app login-gate">
+      <div className="login-card">
+        <img src="/kaizen-kun.png" alt="フクロウ博士" className="login-logo" />
+        <h1 className="login-title">カイゼン窓口</h1>
+        <p className="login-lead">パスフレーズでログインしてください</p>
+        <form onSubmit={handleLogin} style={{ width: "100%", display: "flex", flexDirection: "column", gap: "8px" }}>
+          <input
+            type="password"
+            placeholder="パスフレーズを入力"
+            value={passphrase}
+            onChange={(e) => setPassphrase(e.target.value)}
+            autoComplete="current-password"
+            disabled={submitting}
+            style={{
+              padding: "12px 14px",
+              border: "1.5px solid #e7e3d9",
+              borderRadius: "10px",
+              fontSize: "16px",
+              width: "100%",
+              boxSizing: "border-box",
+              outline: "none",
+            }}
+          />
+          {error && (
+            <p role="alert" style={{ fontSize: "13px", color: "#c0392b", margin: "0" }}>
+              {error}
+            </p>
+          )}
+          <button
+            type="submit"
+            className="primary login-btn"
+            disabled={submitting || !passphrase}
+          >
+            {submitting ? "ログイン中…" : "ログイン"}
+          </button>
+        </form>
+        <p className="login-note">
+          パスフレーズはシステム管理者にお問い合わせください
+        </p>
+      </div>
+    </div>
+  );
+}
+
 // File を data URL（base64）へ読み込む。
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -502,31 +578,9 @@ function KaizenMado() {
   // 埋め込み（iframe）では絶対にここへ来ない（embeddedForGate で弾く）。
   if (showLoginGate) {
     // WebView（Slack/LINE/Instagram等）内では Google が OAuth を disallowed_useragent で拒否する。
-    // ログインボタンの代わりに「Safariで開く」誘導を出す。
+    // パスフレーズ認証フォームを表示してそのままログインできるようにする。
     if (inWebView) {
-      return (
-        <div className="app login-gate">
-          <div className="login-card">
-            <img src="/kaizen-kun.png" alt="フクロウ博士" className="login-logo" />
-            <h1 className="login-title">カイゼン窓口</h1>
-            <p className="login-lead">
-              Googleログインはアプリ内ブラウザでは利用できません。
-              <br />
-              Safariで開いてログインしてください。
-            </p>
-            <button
-              type="button"
-              className="primary login-btn"
-              onClick={() => window.open(location.href, "_blank")}
-            >
-              Safariで開く
-            </button>
-            <p className="login-note">
-              上のボタンをタップするとSafariでこのページが開きます
-            </p>
-          </div>
-        </div>
-      );
+      return <WebViewLoginGate />;
     }
     return (
       <div className="app login-gate">

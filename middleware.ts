@@ -39,8 +39,11 @@ function redirectWebViewIfNeeded(req: NextRequest): NextResponse | null {
   // /open-in-browser は絶対に除外（無限ループ防止）
   if (pathname.startsWith("/open-in-browser")) return null;
 
+  // 保護パス以外は WebView でも問題なし（窓口は公開・未ログインで使える）
+  // パスフレーズ認証が使えるため、/ はそのままアクセスさせる。
+  if (!shouldProtectPath(pathname)) return null;
+
   // LINE の openExternalBrowser=1 経由は外部ブラウザ→通常フロー
-  // （保護パスに限らず全ページでWebViewをブロック: / のGoogleログインボタンも防ぐ）
   if (hasOpenExternalBrowserParam(req.nextUrl.search)) return null;
 
   const ua = req.headers.get("user-agent") ?? "";
