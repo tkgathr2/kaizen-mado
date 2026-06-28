@@ -18,4 +18,8 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      - run: npx vercel deploy --prod --yes --token=${{ secrets.VERCEL_TOKEN }} --scope=atsuhiro-takagis-projects
+      - name: Setup Vercel project link
+        run: |
+          mkdir -p .vercel
+          echo '{"orgId":"team_HCFohEhWeRbk5gTvqF5idqyU","projectId":"prj_a1ETMXMCCY6HZ6OCZsiszHjU7qWn"}' > .vercel/project.json
+      - run: npx vercel deploy --prod --yes --token=${{ secrets.VERCEL_TOKEN }}
