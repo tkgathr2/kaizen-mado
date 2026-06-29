@@ -5,6 +5,7 @@
 // 認証: x-slack-signature（HMAC-SHA256 + タイムスタンプ検証・5分以内のみ受付）を必ず通過してから処理する。
 // Slack は3秒以内の応答を要求するため、起票は同期・process kickは非同期（fire-and-forget）にする。
 // 成長エンジン連動: 受信時に knowhow recall で過去事例を参照 → 起票後に context として付記する。
+//   ただし recall には 2秒のハードキャップを設ける（Slack 3秒制限を超えないよう保護）。
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { createTicket } from "@/lib/notion";
@@ -17,6 +18,13 @@ export const dynamic = "force-dynamic";
 
 /** タイムスタンプ許容差（リプレイ攻撃防止・秒単位）。 */
 const MAX_TIMESTAMP_DIFF_SEC = 5 * 60; // 5分
+
+/**
+ * knowhow recall のハードキャップ（ms）。
+ * Slack の3秒制限内に確実に 200 を返すため、recall を 2秒で打ち切る。
+ * recall が間に合わなかった場合は null として起票を続行する（fail-safe）。
+ */
+const RECALL_HARD_LIMIT_MS = 2000;
 
 /**
  * Slack Events API の署名検証（HMAC-SHA256）。
@@ -58,7 +66,7 @@ function stripMentions(text: string): string {
  * 全ての app_mention を受け付け、内容に応じて適切な種別に振り分ける。
  * - バグ系 → "bug"
  * - 機能追加・新しい仕組み系 → "新機能"
- * - 使い勝手・改善要望系 → "改善"
+ * - 使い勝手・改善要望・質問系 → "改善"
  */
 function inferTicketType(text: string): TicketType {
   // バグ系（エラー・壊れ・動かない等）
@@ -77,16 +85,9 @@ function inferTicketType(text: string): TicketType {
   )
     return "新機能";
 
-  // 改善系（使いにくい・もっと・変えて・見直し・改善してほしい等）
-  if (
-    /改善|使いにくい|もっと|変えて|見直|improve|直して|わかりにくい|見づらい|遅い|重い|操作しにくい|ほしい|欲しい|なぜ|どうして|質問|教えて|使い方|方法|わからない|help|how/i.test(
-      text
-    )
-  )
-    return "改善";
-
-  // デフォルト：判断が難しい場合はバグとして扱い、カイゼンフローで精緻化する
-  return "bug";
+  // 改善系・質問系（使いにくい・もっと・質問・教えて等）すべてのメンションを受け付けるため
+  // 「質問」「使い方」なども "改善" として起票し、カイゼンフローで対応する。
+  return "改善";
 }
 
 /** 内部APIのベースURL（Vercel本番 or ローカル開発）。 */
@@ -155,10 +156,13 @@ export async function POST(req: NextRequest) {
     // ① type自動判定（全メンションを受付・内容から bug/改善/新機能 に振り分け）
     const ticketType = inferTicketType(text);
 
-    // ② 成長エンジン連動: 過去の類似解決事例を knowhow recall で参照（fail-safe・並走）
-    // recall は fire-and-forget ではなく同期で参照し、あれば detail に付記する。
-    // タイムアウト(6s)内に終わらなければ null として起票を続行する。
-    const pastCases = await recallSimilarSlackCases(text).catch(() => null);
+    // ② 成長エンジン連動: 過去の類似解決事例を knowhow recall で参照（fail-safe）
+    // Slack の3秒制限を超えないよう RECALL_HARD_LIMIT_MS（2秒）のハードキャップを設ける。
+    // 2秒以内に recall が返らなかった場合は null として起票を続行する（フローを止めない）。
+    const pastCases = await Promise.race([
+      recallSimilarSlackCases(text).catch(() => null),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), RECALL_HARD_LIMIT_MS)),
+    ]);
 
     // ③ detail を組み立て（本文 + 過去事例のコンテキスト）
     const detail = pastCases
