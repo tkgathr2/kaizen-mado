@@ -21,6 +21,10 @@ export interface Ticket {
   importanceScore?: number; // 重要度 1〜10（9-10=売上採用法令安全直結／5-6=一部業務／1-2=nice-to-have）
   priority?: Priority; // 高=どちらか8以上かつ合計14以上／中=合計8-13／低=合計≤7
   priorityReason?: string; // 算出根拠を1行
+  // ── Slack起点チケット用（幹部Botへの app_mention から自動起票された場合のみ設定） ──
+  slackChannelId?: string; // メンションが届いたチャンネルID（完了時の返信先）
+  slackThreadTs?: string;  // メンションのスレッドts（完了時の返信先スレッド）
+  slackUserId?: string;    // メンションしたユーザーのSlack ID
 }
 
 // AIが毎ターン返すJSON（confirm時はticketを必ず埋める）
