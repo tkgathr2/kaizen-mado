@@ -30,6 +30,10 @@ export interface TicketRow {
   /** 状態が変わった日時（ISO文字列）。Phase 1 タイムアウト計測用。Notionプロパティ「状態変更日時」（date型）。
    * 旧チケット・プロパティ未設定は undefined（タイムアウト判定せず安全側）。 */
   statusChangedAt?: string;
+  // ── Slack起点チケット用（幹部Botへの app_mention から自動起票された場合のみ設定） ──
+  slackChannelId?: string; // メンションが届いたチャンネルID（完了時の返信先）
+  slackThreadTs?: string;  // メンションのスレッドts（完了時の返信先スレッド）
+  slackUserId?: string;    // メンションしたユーザーのSlack ID
 }
 
 function getAuth(): { token: string; databaseId: string } {
@@ -105,6 +109,10 @@ function parseRow(page: any): TicketRow {
     // Phase 1 タイムアウト計測用。Notionプロパティ「状態変更日時」（date型）。
     // プロパティが無い旧チケットは undefined（タイムアウト判定せず安全側）。
     statusChangedAt: dateFromProp(props["状態変更日時"]) || undefined,
+    // Slack起点チケット用（プロパティが無ければ undefined＝通常チケット互換）。
+    slackChannelId: plainFromRichText(props["Slack Channel ID"]) || undefined,
+    slackThreadTs: plainFromRichText(props["Slack Thread TS"]) || undefined,
+    slackUserId: plainFromRichText(props["Slack User ID"]) || undefined,
   };
 }
 
