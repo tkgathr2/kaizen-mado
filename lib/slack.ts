@@ -1,7 +1,7 @@
 // ── スコープ限定・読み取り専用の Slack リーダー（カイゼン窓口の原因調査用） ──
 //
 // カイゼン窓口の利用者が「○○ボットがエラー。Slackを見て」と言ったとき、AIが
-// 該当システムの“許可された”チャンネルだけを読んで原因を診断できるようにする。
+// 該当システムの"許可された"チャンネルだけを読んで原因を診断できるようにする。
 //
 // SECURITY（公開・無認証の窓口である前提で多層防御）：
 //  1) モデルにチャンネルを選ばせない。窓口の対象システムに紐づく許可リスト
@@ -14,6 +14,7 @@ import { maskPII } from "./pii";
 import { channelsForSystem } from "./slackChannels";
 
 const SLACK_HISTORY_URL = "https://slack.com/api/conversations.history";
+const SLACK_POST_URL = "https://slack.com/api/chat.postMessage";
 /** 1チャンネルあたりの最大取得件数（コスト・情報量の上限）。 */
 const MAX_MESSAGES = 15;
 /** 1メッセージあたりの最大文字数（マスク後にさらに切り詰める）。 */
@@ -22,11 +23,13 @@ const MAX_MESSAGE_CHARS = 600;
 const MAX_CHANNELS = 2;
 /** Slack API のタイムアウト（監視同様、短く）。 */
 const SLACK_TIMEOUT_MS = 5000;
+/** 投稿APIのタイムアウト。 */
+const SLACK_POST_TIMEOUT_MS = 8000;
 
 // ── 公開窓口へ晒す前の二重の絞り込み（PII漏えい対策・セキュリティレビュー HIGH 対応） ──
 //
 // この窓口は無認証・公開。?sys= は利用者が選べるため、許可チャンネルは「匿名に見られても
-// 安全な内容」に絞らねばならない。応募通知チャンネルは本来“応募者の氏名”を含むので、
+// 安全な内容」に絞らねばならない。応募通知チャンネルは本来"応募者の氏名"を含むので、
 //  (a) 正のフィルタ：診断（エラー調査）に関係する行だけを通す＝応募者通知を構造的に落とす。
 //  (b) 氏名マスク：それでも残った敬称付きの氏名を最後の砦として伏字化する。
 // 機能の目的は「ボットのエラー診断」であり応募内容の閲覧ではない、という用途にも一致する。
@@ -131,4 +134,45 @@ export async function readSlackForSystem(
     })
   );
   return { channels };
+}
+
+/**
+ * Slack のスレッドにメッセージを投稿する（完了通知・受け付け確認用）。
+ * chat:write スコープが SLACK_BOT_TOKEN に付与されている場合のみ動作する。
+ * 失敗しても例外を投げない（投稿失敗でカイゼンフローを止めない・fail-safe）。
+ */
+export async function postToSlack(
+  channelId: string,
+  threadTs: string,
+  text: string
+): Promise<boolean> {
+  const token = process.env.SLACK_BOT_TOKEN?.trim();
+  if (!token) return false;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SLACK_POST_TIMEOUT_MS);
+  try {
+    const res = await fetch(SLACK_POST_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        channel: channelId,
+        thread_ts: threadTs,
+        text,
+      }),
+      signal: controller.signal,
+    });
+    const data = await res.json().catch(() => null);
+    if (!data?.ok) {
+      console.warn("[slack] postToSlack failed:", data?.error ?? `http ${res.status}`);
+    }
+    return Boolean(data?.ok);
+  } catch (err) {
+    console.warn("[slack] postToSlack error:", (err as Error).message);
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
 }
