@@ -1,0 +1,152 @@
+// ── POST /api/slack/events ── Slack Events API webhook ──
+// 幹部Bot（真田・早乙女等）への app_mention を受け取り、カイゼンチケットを起票してフローを起動する。
+// 認証: x-slack-signature（HMAC-SHA256 + タイムスタンプ検証・5分以内のみ受付）を必ず通過してから処理する。
+// Slack は3秒以内の応答を要求するため、起票は同期・process kickは非同期（fire-and-forget）にする。
+import { NextRequest, NextResponse } from "next/server";
+import crypto from "crypto";
+import { createTicket } from "@/lib/notion";
+import { findRecentDuplicate } from "@/lib/tickets";
+import type { Ticket } from "@/lib/types";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+/** タイムスタンプ許容差（リプレイ攻撃防止・秒単位）。 */
+const MAX_TIMESTAMP_DIFF_SEC = 5 * 60; // 5分
+
+/**
+ * Slack Events API の署名検証（HMAC-SHA256）。
+ * SLACK_SIGNING_SECRET 未設定なら常に false（鍵なしでの受け入れを防ぐ・fail-closed）。
+ */
+function verifySlackSignature(
+  secret: string,
+  timestamp: string,
+  rawBody: string,
+  signature: string
+): boolean {
+  // タイムスタンプが5分以上古い → リプレイ攻撃防止
+  const now = Math.floor(Date.now() / 1000);
+  if (Math.abs(now - Number(timestamp)) > MAX_TIMESTAMP_DIFF_SEC) return false;
+
+  const baseString = `v0:${timestamp}:${rawBody}`;
+  const hmac = crypto.createHmac("sha256", secret).update(baseString).digest("hex");
+  const expected = `v0=${hmac}`;
+
+  // タイミング攻撃防止のため timingSafeEqual を使う
+  const expBuf = Buffer.from(expected, "utf8");
+  const sigBuf = Buffer.from(signature, "utf8");
+  if (expBuf.length !== sigBuf.length) return false;
+  return crypto.timingSafeEqual(expBuf, sigBuf);
+}
+
+/** メンション（<@UXXX>）を除去して本文だけ取り出す。 */
+function stripMentions(text: string): string {
+  return text.replace(/<@[A-Z0-9]+>/g, "").replace(/\s+/g, " ").trim();
+}
+
+/** 内部APIのベースURL（Vercel本番 or ローカル開発）。 */
+function getBaseUrl(): string {
+  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
+  if (process.env.NEXT_PUBLIC_BASE_URL) return process.env.NEXT_PUBLIC_BASE_URL;
+  return "http://localhost:3000";
+}
+
+export async function POST(req: NextRequest) {
+  // raw body を先に読む（署名検証に必要）
+  const rawBody = await req.text();
+
+  // Slack 署名検証
+  const secret = process.env.SLACK_SIGNING_SECRET?.trim();
+  if (!secret) {
+    console.error("[slack/events] SLACK_SIGNING_SECRET is not set");
+    return NextResponse.json({ error: "server misconfigured" }, { status: 500 });
+  }
+  const timestamp = req.headers.get("x-slack-request-timestamp") ?? "";
+  const signature = req.headers.get("x-slack-signature") ?? "";
+  if (!verifySlackSignature(secret, timestamp, rawBody, signature)) {
+    return NextResponse.json({ error: "invalid signature" }, { status: 401 });
+  }
+
+  let body: any;
+  try {
+    body = JSON.parse(rawBody);
+  } catch {
+    return NextResponse.json({ error: "bad json" }, { status: 400 });
+  }
+
+  // URL 検証（Slack Event API 登録時の challenge）
+  if (body?.type === "url_verification") {
+    return NextResponse.json({ challenge: body.challenge });
+  }
+
+  // event_callback 以外は無視（即200を返してSlackを安心させる）
+  if (body?.type !== "event_callback") {
+    return NextResponse.json({ ok: true });
+  }
+
+  const event = body?.event;
+
+  // app_mention 以外は無視。bot_id 付き = Bot自身のメッセージ → スキップ（無限ループ防止）
+  if (event?.type !== "app_mention" || event?.bot_id) {
+    return NextResponse.json({ ok: true });
+  }
+
+  const rawText = typeof event?.text === "string" ? event.text : "";
+  const text = stripMentions(rawText);
+  const channelId: string = event?.channel ?? "";
+  // スレッド内メンションは thread_ts、通常メンションは ts をスレッドの起点にする
+  const threadTs: string = event?.thread_ts ?? event?.ts ?? "";
+  const userId: string = event?.user ?? "";
+
+  // 最低限の情報が揃っていなければスキップ
+  if (!text || !channelId || !threadTs) {
+    return NextResponse.json({ ok: true });
+  }
+
+  // ── チケット起票（同期・≈300ms）──
+  // Slack の3秒制限内に完了するため起票は同期で行う。
+  try {
+    const ticket: Ticket = {
+      system: "その他",
+      type: "bug",
+      title: text.slice(0, 100) || "Slackからの問い合わせ",
+      detail: text,
+      importance: "中",
+      slackChannelId: channelId,
+      slackThreadTs: threadTs,
+      slackUserId: userId,
+    };
+    const reporter = `Slack:<@${userId}>`;
+
+    // 重複チェック（15秒窓・fail-safe）
+    const dup = await findRecentDuplicate(ticket, reporter).catch(() => null);
+    if (dup) {
+      // 重複は静かに無視（Slackには返答しない＝Botのスパム防止）
+      return NextResponse.json({ ok: true });
+    }
+
+    // 起票
+    const result = await createTicket(ticket, reporter);
+    console.log("[slack/events] ticket created:", result.ticketId, "channel:", channelId);
+
+    // ── /api/process を非同期起動（fire-and-forget）──
+    // 起票完了後に受付→議論中→GO伺いフローを回す。
+    // Slack への応答は先に返すため await しない。
+    const baseUrl = getBaseUrl();
+    fetch(`${baseUrl}/api/process`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-cron-secret": process.env.CRON_SECRET ?? "",
+      },
+      body: JSON.stringify({ pageId: result.pageId }),
+    }).catch((e) =>
+      console.warn("[slack/events] process kick failed (non-fatal):", e.message)
+    );
+  } catch (err) {
+    // 起票失敗もSlackには200を返す（Slackへのエラー表示を避ける・再送ループを防ぐ）
+    console.error("[slack/events] createTicket failed:", (err as Error).message);
+  }
+
+  return NextResponse.json({ ok: true });
+}
