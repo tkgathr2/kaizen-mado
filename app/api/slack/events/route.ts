@@ -4,13 +4,12 @@
 // type は本文のキーワードから自動判定（"bug" | "改善" | "新機能"）。
 // 認証: x-slack-signature（HMAC-SHA256 + タイムスタンプ検証・5分以内のみ受付）を必ず通過してから処理する。
 // Slack は3秒以内の応答を要求するため、起票は同期・process kickは非同期（fire-and-forget）にする。
-// 成長エンジン連動: 受信時に knowhow recall で過去事例を参照 → 起票後に context として付記する。
-//   ただし recall には 2秒のハードキャップを設ける（Slack 3秒制限を超えないよう保護）。
+// 成長エンジン連動: ここでは recall しない。過去の学びの参照は非同期の議論工程（lib/discuss.ts が
+//   統一メモリ層 lib/memory.ts から recall する）で行う＝3秒ホットパスを汚さず、detailにも残さない。
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { createTicket } from "@/lib/notion";
 import { findRecentDuplicate } from "@/lib/tickets";
-import { recallSimilarSlackCases } from "@/lib/slack";
 import type { Ticket, TicketType } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -18,13 +17,6 @@ export const dynamic = "force-dynamic";
 
 /** タイムスタンプ許容差（リプレイ攻撃防止・秒単位）。 */
 const MAX_TIMESTAMP_DIFF_SEC = 5 * 60; // 5分
-
-/**
- * knowhow recall のハードキャップ（ms）。
- * Slack の3秒制限内に確実に 200 を返すため、recall を 2秒で打ち切る。
- * recall が間に合わなかった場合は null として起票を続行する（fail-safe）。
- */
-const RECALL_HARD_LIMIT_MS = 2000;
 
 /**
  * Slack Events API の署名検証（HMAC-SHA256）。
@@ -66,7 +58,7 @@ function stripMentions(text: string): string {
  * 全ての app_mention を受け付け、内容に応じて適切な種別に振り分ける。
  * - バグ系 → "bug"
  * - 機能追加・新しい仕組み系 → "新機能"
- * - 使い勝手・改善要望・質問系 → "改善"
+ * - 使い勝手・改善要望・質問系 → "改善"（デフォルト＝全メンションを取りこぼさない）
  */
 function inferTicketType(text: string): TicketType {
   // バグ系（エラー・壊れ・動かない等）
@@ -152,28 +144,16 @@ export async function POST(req: NextRequest) {
 
   // ── チケット起票（同期・≈300ms）──
   // Slack の3秒制限内に完了するため起票は同期で行う。
+  // recall（過去の学びの参照）はここでは行わない＝非同期の議論工程(lib/discuss.ts)に委ねる。
   try {
-    // ① type自動判定（全メンションを受付・内容から bug/改善/新機能 に振り分け）
+    // type自動判定（全メンションを受付・内容から bug/改善/新機能 に振り分け）
     const ticketType = inferTicketType(text);
-
-    // ② 成長エンジン連動: 過去の類似解決事例を knowhow recall で参照（fail-safe）
-    // Slack の3秒制限を超えないよう RECALL_HARD_LIMIT_MS（2秒）のハードキャップを設ける。
-    // 2秒以内に recall が返らなかった場合は null として起票を続行する（フローを止めない）。
-    const pastCases = await Promise.race([
-      recallSimilarSlackCases(text).catch(() => null),
-      new Promise<null>((resolve) => setTimeout(() => resolve(null), RECALL_HARD_LIMIT_MS)),
-    ]);
-
-    // ③ detail を組み立て（本文 + 過去事例のコンテキスト）
-    const detail = pastCases
-      ? `${text}\n\n【過去の類似事例（knowhow参照）】\n${pastCases}`
-      : text;
 
     const ticket: Ticket = {
       system: "その他",
       type: ticketType,
       title: text.slice(0, 100) || "Slackからの問い合わせ",
-      detail,
+      detail: text,
       importance: "中",
       slackChannelId: channelId,
       slackThreadTs: threadTs,
@@ -196,9 +176,7 @@ export async function POST(req: NextRequest) {
       "type:",
       ticketType,
       "channel:",
-      channelId,
-      "pastCasesFound:",
-      Boolean(pastCases)
+      channelId
     );
 
     // ── /api/process を非同期起動（fire-and-forget）──
