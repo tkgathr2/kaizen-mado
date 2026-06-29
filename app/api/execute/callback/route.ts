@@ -1,6 +1,6 @@
 // ── POST /api/execute/callback ── 実行ワークフローからの結果通知を受ける ──
 // .github/workflows/kaizen-execute.yml が PR→ゲート→マージ→デプロイ→ヘルスの結果を返す。
-//  - merged    → 「完了」へ。学び還元(returnLearningFromCompleted)を回す。（FYI通知は新仕様で無し）
+//  - merged    → 「完了」へ。学び還元(returnLearningFromCompleted)を回す。Slack起点なら完了返信も送る。
 //  - review    → 「レビュー」へ。3条件ゲート不通過＝人の確認待ち。（FYI通知は新仕様で無し・/boardで確認）
 //  - failed    → 「差し戻し」へ。実装失敗＝人の助けが要る詰まりとして「詰まり連絡」を1回だけLINE送信。
 // ★ 新仕様：自分から送るLINEは「GO伺い」と「詰まり連絡」だけ。進捗FYI（着手/完了/PR完成）は送らない。
@@ -17,6 +17,7 @@ import { notifyStuckOnce } from "@/lib/notify";
 import { checkCronSecret } from "@/lib/cronAuth";
 import { isInfraError, buildInfraNoticeText, pushText } from "@/lib/line";
 import { isValidFailureClass, FAILURE_CLASSES } from "@/lib/kz-state";
+import { postToSlack } from "@/lib/slack";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -98,6 +99,17 @@ export async function POST(req: NextRequest) {
       await appendDiscussionBlocks(pageId, [
         { heading: "本番反映 完了", body: `自動改修→マージ→デプロイ完了。${prUrl}` },
       ]);
+
+      // Slack起点チケットなら元のスレッドに完了通知を返信する（fail-safe）。
+      // slackChannelId / slackThreadTs が揃っている場合のみ送信。
+      if (current.slackChannelId && current.slackThreadTs) {
+        await postToSlack(
+          current.slackChannelId,
+          current.slackThreadTs,
+          `✅ ご指摘いただいた件（${ticketId}）、修正が完了しました。ご確認ください。`
+        ).catch(() => false); // 投稿失敗はログのみ・フロー全体は止めない
+      }
+
       // 新仕様：完了報告FYI（旧「🎉 直して反映しました」）は送らない（自分から送るLINEは
       // 「GO伺い」と「詰まり連絡」だけ）。状態遷移・学び還元は維持する。
       // 学び還元（KNOWHOW_ENABLED時のみ実働。OFFなら no-op）。
