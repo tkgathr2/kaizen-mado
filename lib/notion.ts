@@ -18,8 +18,8 @@ function richText(content: string) {
 
 /**
  * 改善チケットDBに「状態=受付」で1件起票する。
- * @param ticket 会話から確定したチケット
- * @param reporter 起票者（任意。フォーム入力 or "現場フォーム"）
+ * @param ticket 会話から確定したチケット（slackChannelId等のSlackメタも含む）
+ * @param reporter 起票者（任意。フォーム入力 or "現場フォーム" or "Slack:<@UXXX>"）
  */
 export async function createTicket(
   ticket: Ticket,
@@ -46,12 +46,14 @@ export async function createTicket(
     起票者: { rich_text: richText(reporter?.trim() || "現場フォーム") },
   };
 
-  // ── 優先度スコアリング（§4.5.1）。best-effort で書く。
+  // ── 優先度スコアリング（§4.5.1）＋ Slack起点メタ。best-effort で書く。
   // Notion DB に該当プロパティが無くても起票が落ちないよう、別オブジェクトに分け、
   // 付きで失敗したら base のみで再試行する（fail-safe・声を取りこぼさない）。
   const scoringProps = buildScoringProps(ticket);
+  const slackProps = buildSlackProps(ticket);
+  const extraProps = { ...scoringProps, ...slackProps };
 
-  const data = await createPage(token, databaseId, baseProps, scoringProps);
+  const data = await createPage(token, databaseId, baseProps, extraProps);
   return {
     ticketId: formatTicketId(data),
     pageUrl: data?.url ?? "",
@@ -71,23 +73,37 @@ function buildScoringProps(ticket: Ticket): Record<string, any> {
   return props;
 }
 
-/** Notion ページ作成。スコアリングの追加プロパティ付きで失敗し、かつ追加分があった場合は
+/** Slack起点チケットのメタ情報（rich_text）。値が無ければ空オブジェクト。
+ * Notion DB に「Slack Channel ID」「Slack Thread TS」「Slack User ID」プロパティが
+ * 存在する場合のみ保存される。プロパティ未設定でも fail-safe で起票は続行する。 */
+function buildSlackProps(ticket: Ticket): Record<string, any> {
+  const props: Record<string, any> = {};
+  if (ticket.slackChannelId)
+    props["Slack Channel ID"] = { rich_text: richText(ticket.slackChannelId) };
+  if (ticket.slackThreadTs)
+    props["Slack Thread TS"] = { rich_text: richText(ticket.slackThreadTs) };
+  if (ticket.slackUserId)
+    props["Slack User ID"] = { rich_text: richText(ticket.slackUserId) };
+  return props;
+}
+
+/** Notion ページ作成。追加プロパティ付きで失敗し、かつ追加分があった場合は
  * base のみ（追加分を落として）1回だけ再試行する（プロパティ未定義DBでも起票を通す・fail-safe）。 */
 async function createPage(
   token: string,
   databaseId: string,
   baseProps: Record<string, any>,
-  scoringProps: Record<string, any>
+  extraProps: Record<string, any>
 ): Promise<any> {
-  const hasScoring = Object.keys(scoringProps).length > 0;
-  const res = await postPage(token, databaseId, { ...baseProps, ...scoringProps });
+  const hasExtra = Object.keys(extraProps).length > 0;
+  const res = await postPage(token, databaseId, { ...baseProps, ...extraProps });
   if (res.ok) return res.json();
 
   const errText = await res.text().catch(() => "");
   // 追加プロパティを送って失敗したときだけ、base のみで1回再試行（DBに新プロパティが無い等）。
-  if (hasScoring) {
+  if (hasExtra) {
     console.error(
-      "[notion] create with scoring props failed, retrying without them:",
+      "[notion] create with extra props failed, retrying without them:",
       `${res.status} ${errText.slice(0, 200)}`
     );
     const retry = await postPage(token, databaseId, baseProps);
