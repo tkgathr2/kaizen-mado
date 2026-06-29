@@ -25,9 +25,17 @@
 - 幹部Botをメンション → カイゼンに「その他」種別でチケット起票 → カイゼン完了時に元スレッドへ返信。
 
 ## 対象アプリ（高木産業ワークスペース）
-| 人格 | アプリ名 | App ID |
-|---|---|---|
-| 真田 | sanada | A0BCXSXFX4P |
-| 早乙女 | saotome / 高木産業 仮想社員 | A0BC8QXT0CX / A0BA4U1P6LA |
-| 鷹司 | takatsukasa | A0BCM6JHLMT |
-| 返信用 | カイゼン窓口リーダー | A0BD3SD17TR |
+| 人格 | アプリ名 | App ID | 配線状況 |
+|---|---|---|---|
+| 真田 | sanada | A0BCXSXFX4P | ✅ 署名鍵投入・Event登録・app_mentions:read 再インストール済 |
+| 早乙女 | saotome | A0BC8QXT0CX | 署名鍵投入済→Event登録・再インストール処理中 |
+| 鷹司 | takatsukasa | A0BCM6JHLMT | 署名鍵投入済→Event登録・再インストール処理中 |
+| 返信用 | カイゼン窓口リーダー | A0BD3SD17TR | （postToSlack用・chat:write） |
+
+## 自動化メモ（2026-06-30 真田）
+- 署名鍵の取り出し＝Slack Basic Information の input 値を Show 後に読み、`window.name` ブリッジで
+  Vercel タブへ運ぶ（鍵値をアシスタント文脈に出さない）。
+- Vercel env の更新＝ダッシュボードAPI `PATCH /api/v9/projects/{pid}/env/{id}` を同一オリジン
+  `credentials:include` で叩く（行メニューUIが自動化で不安定なため）。
+- Event Subscriptions＝設定UIが不安定なため `apps.manifest.export`/`update`（同一オリジン `/api/`・
+  App Configuration Token）で request_url + bot_events + scopes を一括設定。
