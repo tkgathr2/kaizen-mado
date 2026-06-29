@@ -10,6 +10,11 @@
 //  3) 直近 N 件（上限あり）だけ。全文ダンプしない。
 //  4) PII マスク（lib/pii.ts）を必ず通してからモデルに渡す＝氏名/電話/住所等を出さない。
 //  5) SLACK_BOT_TOKEN 未設定なら完全無効＝今までどおりの挙動（安全側の既定）。
+//
+// 成長エンジン連動について：
+//  Slack起点チケットの「記憶（memorize）」と「想起（recall）」は、このファイルに
+//  独自実装を持たない。統一メモリ層（lib/memory.ts）＋完了還元（lib/learn.ts）に一本化する
+//  （別 project_key の孤立サイロを作らない・PIIマスクとKNOWHOW_ENABLEDゲートを継承する）。
 import { maskPII } from "./pii";
 import { channelsForSystem } from "./slackChannels";
 
@@ -25,10 +30,6 @@ const MAX_CHANNELS = 2;
 const SLACK_TIMEOUT_MS = 5000;
 /** 投稿APIのタイムアウト。 */
 const SLACK_POST_TIMEOUT_MS = 8000;
-/** knowhow API のベース URL（成長エンジン）。 */
-const KNOWHOW_BASE = "https://knowhow.up.railway.app";
-/** knowhow API のタイムアウト。 */
-const KNOWHOW_TIMEOUT_MS = 6000;
 
 // ── 公開窓口へ晒す前の二重の絞り込み（PII漏えい対策・セキュリティレビュー HIGH 対応） ──
 //
@@ -176,93 +177,6 @@ export async function postToSlack(
   } catch (err) {
     console.warn("[slack] postToSlack error:", (err as Error).message);
     return false;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-// ── 成長エンジン連動（knowhow API）────────────────────────────────────────
-//
-// Slack起点のやり取りを knowhow に記録し、次回の類似問い合わせへ活用する。
-// - memorizeSlackInteraction: カイゼン完了時に呼ぶ（燃料の投入）
-// - recallSimilarSlackCases:  新規メンション受信時に呼ぶ（過去事例の参照）
-// 両関数とも fail-safe（失敗しても例外を外に投げない・本体フローを止めない）。
-
-/**
- * Slack起点チケットのやり取りを knowhow 成長エンジンに記録する。
- * カイゼン完了（merged）後に呼び出し、次回の類似問い合わせへの参照源にする。
- */
-export async function memorizeSlackInteraction(
-  system: string,
-  type: string,
-  detail: string,
-  ticketId: string
-): Promise<void> {
-  const apiKey = process.env.KB_API_KEY?.trim();
-  if (!apiKey) return; // 未設定なら静かにスキップ（環境変数任意）
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), KNOWHOW_TIMEOUT_MS);
-  try {
-    await fetch(`${KNOWHOW_BASE}/api/devin/memorize`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-API-Key": apiKey,
-      },
-      body: JSON.stringify({
-        project_key: "kaizen-slack",
-        tool: "kaizen-mado",
-        status: "success",
-        environment: "slack-loop",
-        tags: ["slack-loop", system, type, "kaizen-resolved"],
-        raw_log: `【Slack→カイゼン解決実績】${ticketId} | システム:${system} | 種別:${type} | 内容:${detail.slice(0, 300)}`,
-      }),
-      signal: controller.signal,
-    });
-    console.log("[slack] memorized interaction for ticket:", ticketId);
-  } catch (e) {
-    // 記録失敗は警告のみ。カイゼンフローには影響させない。
-    console.warn("[slack] memorizeSlackInteraction failed:", (e as Error).message);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/**
- * Slack起点のメンションに対し、knowhow 成長エンジンから過去の類似解決事例を参照する。
- * 新規メンション受信時に呼び出し、返値をチケットの context として添える。
- * 返値：過去事例の要約テキスト（あれば）、なければ null。
- */
-export async function recallSimilarSlackCases(text: string): Promise<string | null> {
-  const apiKey = process.env.KB_API_KEY?.trim();
-  if (!apiKey) return null;
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), KNOWHOW_TIMEOUT_MS);
-  try {
-    const res = await fetch(`${KNOWHOW_BASE}/api/devin/recall`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-API-Key": apiKey,
-      },
-      body: JSON.stringify({
-        project_key: "kaizen-slack",
-        query: text.slice(0, 200),
-        top_k: 3,
-      }),
-      signal: controller.signal,
-    });
-    if (!res.ok) return null;
-    const data = await res.json().catch(() => null);
-    if (!Array.isArray(data?.results) || data.results.length === 0) return null;
-    return data.results
-      .map((r: any) => (typeof r.raw_log === "string" ? r.raw_log.slice(0, 150) : ""))
-      .filter(Boolean)
-      .join(" / ");
-  } catch {
-    return null; // recall失敗は無視（フローを止めない）
   } finally {
     clearTimeout(timer);
   }

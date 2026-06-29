@@ -2,7 +2,12 @@
 // 改善チケットを「議論」して方針・工数・リスク・GO可否の推奨・GO伺いドラフトを出す。
 // このルートは誰にも送信しない。GO伺いドラフトは"送信用の下書き"であり実送信しない。
 // キー未設定・通信失敗時は fallback（throwしない）。
+//
+// 成長エンジン連動：議論の直前に統一メモリ層（lib/memory.ts）から関連する過去の学びを
+// recall し、LLMの入力文脈に添える。Slack起点に限らず全チケットが過去の解決/失敗実績を
+// 踏まえて判断できる（＝使うほど賢くなる）。KNOWHOW_ENABLED OFF 時は [] で従来と同一挙動。
 import type { TicketRow } from "./tickets";
+import { recallLearning } from "./memory";
 
 const API_URL = "https://api.anthropic.com/v1/messages";
 const DEFAULT_MODEL = "claude-sonnet-4-6";
@@ -33,6 +38,7 @@ export interface DiscussResult {
 
 const SYSTEM_PROMPT =
   "あなたは高木産業グループ CTO Agent Lab。改善チケットについて、方針・具体的な改善手順・工数見積・リスク・重要度・緊急度・GO可否の推奨・社長へのGO伺いドラフトを簡潔かつ具体的に出す。手順は『何をどう直すか』が分かる実作業ステップにする。GO伺いドラフトは\"送信用の下書き\"であり実送信はしない。" +
+  "関連する過去の学び（成長エンジン）が与えられた場合は、同種の成功/失敗を踏まえて方針と推奨を調整する。" +
   "さらにLINE通知用に problemPlain / fixPlain / riskPlain を“素人が読んで分かる短い言葉”で必ず作る。problemPlain=こまりごとを素人語で1行（〜34字）。fixPlain=直し方を素人語の短い箇条書き1〜3個（各〜28字・番号や専門用語を避け『○○を再発行して設定し直す』のような言い方）。riskPlain=気をつけることを素人語で1行（〜40字・無ければ『特になし』）。技術用語や手順の羅列・英字の羅列はNotion用の steps に回し、plainには書かない。";
 
 const DISCUSS_TOOL = {
@@ -274,6 +280,19 @@ function fallbackDiscussion(ticket: TicketRow): DiscussResult {
 }
 
 /**
+ * 統一メモリ層から関連する過去の学びを引き、LLM入力に添える文脈テキストを作る。
+ * KNOWHOW_ENABLED OFF・0件・失敗時は空文字（＝従来と同一挙動・fail-safe）。
+ */
+async function buildLearningContext(ticket: TicketRow): Promise<string> {
+  const query = `${ticket.system ?? ""} ${ticket.title ?? ""} ${ticket.type ?? ""}`.trim();
+  if (!query) return "";
+  const hits = await recallLearning(query, { topK: 3 }).catch(() => []);
+  if (!hits.length) return "";
+  const lines = hits.map((h) => `・${h.content.replace(/\s+/g, " ").slice(0, 160)}`);
+  return `\n\n関連する過去の学び（成長エンジン・参考）:\n${lines.join("\n")}`;
+}
+
+/**
  * チケットを議論して DiscussResult を返す。
  * キー未設定・通信失敗・想定外応答時は fallback に落とす（throwしない）。
  */
@@ -283,13 +302,17 @@ export async function discussTicket(ticket: TicketRow): Promise<DiscussResult> {
 
   const model = process.env.ANTHROPIC_MODEL || DEFAULT_MODEL;
 
-  const userContent = [
-    `対象システム: ${ticket.system || "未特定"}`,
-    `種別: ${ticket.type || "改善"}`,
-    `重要度: ${ticket.importance || "中"}`,
-    `件名: ${ticket.title || "改善のご要望"}`,
-    `内容: ${ticket.detail || "(内容なし)"}`,
-  ].join("\n");
+  // 成長エンジン連動：過去の学びを文脈に添える（fail-safe・OFF時は空文字）。
+  const learningContext = await buildLearningContext(ticket);
+
+  const userContent =
+    [
+      `対象システム: ${ticket.system || "未特定"}`,
+      `種別: ${ticket.type || "改善"}`,
+      `重要度: ${ticket.importance || "中"}`,
+      `件名: ${ticket.title || "改善のご要望"}`,
+      `内容: ${ticket.detail || "(内容なし)"}`,
+    ].join("\n") + learningContext;
 
   try {
     const res = await fetch(API_URL, {

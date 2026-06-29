@@ -1,7 +1,7 @@
 // ── POST /api/execute/callback ── 実行ワークフローからの結果通知を受ける ──
 // .github/workflows/kaizen-execute.yml が PR→ゲート→マージ→デプロイ→ヘルスの結果を返す。
 //  - merged    → 「完了」へ。学び還元(returnLearningFromCompleted)を回す。Slack起点なら完了返信も送る。
-//              → Slack起点チケットの場合、やり取りを knowhow 成長エンジンに記録する（自動成長）。
+//              → 学びの記録は returnLearningFromCompleted（統一メモリ層）に一本化（Slack専用の別記録は持たない）。
 //  - review    → 「レビュー」へ。3条件ゲート不通過＝人の確認待ち。（FYI通知は新仕様で無し・/boardで確認）
 //  - failed    → 「差し戻し」へ。実装失敗＝人の助けが要る詰まりとして「詰まり連絡」を1回だけLINE送信。
 // ★ 新仕様：自分から送るLINEは「GO伺い」と「詰まり連絡」だけ。進捗FYI（着手/完了/PR完成）は送らない。
@@ -18,7 +18,7 @@ import { notifyStuckOnce } from "@/lib/notify";
 import { checkCronSecret } from "@/lib/cronAuth";
 import { isInfraError, buildInfraNoticeText, pushText } from "@/lib/line";
 import { isValidFailureClass, FAILURE_CLASSES } from "@/lib/kz-state";
-import { postToSlack, memorizeSlackInteraction } from "@/lib/slack";
+import { postToSlack } from "@/lib/slack";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -111,22 +111,10 @@ export async function POST(req: NextRequest) {
         ).catch(() => false); // 投稿失敗はログのみ・フロー全体は止めない
       }
 
-      // ── 成長エンジン連動: Slack起点チケットのやり取りを knowhow に記録 ──
-      // カイゼン完了後に呼び出し、次回の類似問い合わせへの参照源にする（自動成長ループ）。
-      // slackUserId があれば「Slack起点チケット」と判断して記録する。
-      // fail-safe: 記録失敗は警告のみ、完了フロー全体は止めない。
-      if (current.slackUserId) {
-        memorizeSlackInteraction(
-          current.system || "その他",
-          current.type || "bug",
-          current.detail || "",
-          ticketId
-        ).catch(() => {}); // fire-and-forget（完了レスポンスを遅らせない）
-      }
-
       // 新仕様：完了報告FYI（旧「🎉 直して反映しました」）は送らない（自分から送るLINEは
       // 「GO伺い」と「詰まり連絡」だけ）。状態遷移・学び還元は維持する。
-      // 学び還元（KNOWHOW_ENABLED時のみ実働。OFFなら no-op）。
+      // 学び還元（KNOWHOW_ENABLED時のみ実働。OFFなら no-op）。Slack起点チケットも
+      // 通常の完了チケットとして統一メモリ層へ記録される（Slack専用の別記録は持たない）。
       const learn = await returnLearningFromCompleted(5).catch(() => ({ memorized: 0 }));
       return NextResponse.json({ ok: true, state: "完了", learned: learn.memorized });
     }
