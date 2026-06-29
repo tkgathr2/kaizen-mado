@@ -24,6 +24,11 @@ function verifySlackSignature(
   rawBody: string,
   signature: string
 ): boolean {
+  // タイムスタンプが数字以外（空文字・非数値）はリプレイ攻撃の変形として拒否する。
+  // Number("") = 0, Number("abc") = NaN → Math.abs(now - NaN) = NaN で検証をすり抜けるため、
+  // 事前に純粋な10進数字列であることを確認する（Slackの仕様は UNIX秒の整数文字列）。
+  if (!/^\d+$/.test(timestamp)) return false;
+
   // タイムスタンプが5分以上古い → リプレイ攻撃防止
   const now = Math.floor(Date.now() / 1000);
   if (Math.abs(now - Number(timestamp)) > MAX_TIMESTAMP_DIFF_SEC) return false;
@@ -131,18 +136,24 @@ export async function POST(req: NextRequest) {
 
     // ── /api/process を非同期起動（fire-and-forget）──
     // 起票完了後に受付→議論中→GO伺いフローを回す。
-    // Slack への応答は先に返すため await しない。
-    const baseUrl = getBaseUrl();
-    fetch(`${baseUrl}/api/process`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-cron-secret": process.env.CRON_SECRET ?? "",
-      },
-      body: JSON.stringify({ pageId: result.pageId }),
-    }).catch((e) =>
-      console.warn("[slack/events] process kick failed (non-fatal):", e.message)
-    );
+    // CRON_SECRET が未設定のときは内部 kick をスキップ（認証バイパスを防ぐ）。
+    // この場合でもチケットは起票済みなので次回の /api/process cron で処理される。
+    const cronSecret = process.env.CRON_SECRET?.trim();
+    if (!cronSecret) {
+      console.warn("[slack/events] CRON_SECRET is not set; skipping process kick for ticket", result.ticketId);
+    } else {
+      const baseUrl = getBaseUrl();
+      fetch(`${baseUrl}/api/process`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-cron-secret": cronSecret,
+        },
+        body: JSON.stringify({ pageId: result.pageId }),
+      }).catch((e) =>
+        console.warn("[slack/events] process kick failed (non-fatal):", e.message)
+      );
+    }
   } catch (err) {
     // 起票失敗もSlackには200を返す（Slackへのエラー表示を避ける・再送ループを防ぐ）
     console.error("[slack/events] createTicket failed:", (err as Error).message);
