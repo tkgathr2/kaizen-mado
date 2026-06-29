@@ -3,6 +3,8 @@
 // 対象：全ての app_mention（バグ・質問・要望・改善・雑談 問わず全メンションを受付）。
 // type は本文のキーワードから自動判定（"bug" | "改善" | "新機能"）。
 // 認証: x-slack-signature（HMAC-SHA256 + タイムスタンプ検証・5分以内のみ受付）を必ず通過してから処理する。
+//   ★ 複数アプリ対応：幹部Botは人格ごとに別Slackアプリ＝別署名鍵のため、SLACK_SIGNING_SECRET は
+//     カンマ区切りで複数の鍵を持てる。受信イベントはいずれか1つの鍵で署名一致すれば通す。
 // Slack は3秒以内の応答を要求するため、起票は同期・process kickは非同期（fire-and-forget）にする。
 // 成長エンジン連動: ここでは recall しない。過去の学びの参照は非同期の議論工程（lib/discuss.ts が
 //   統一メモリ層 lib/memory.ts から recall する）で行う＝3秒ホットパスを汚さず、detailにも残さない。
@@ -19,15 +21,31 @@ export const dynamic = "force-dynamic";
 const MAX_TIMESTAMP_DIFF_SEC = 5 * 60; // 5分
 
 /**
- * Slack Events API の署名検証（HMAC-SHA256）。
- * SLACK_SIGNING_SECRET 未設定なら常に false（鍵なしでの受け入れを防ぐ・fail-closed）。
+ * SLACK_SIGNING_SECRET をカンマ区切りで複数鍵に分解する（前後空白・空要素は除去）。
+ * 幹部Botが複数アプリにまたがるため、各アプリの Signing Secret を1つの env に並べて持つ。
+ * 例: SLACK_SIGNING_SECRET="abc123...,def456..."（真田アプリ,早乙女アプリ）
+ */
+function parseSigningSecrets(): string[] {
+  const raw = process.env.SLACK_SIGNING_SECRET?.trim();
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Slack Events API の署名検証（HMAC-SHA256・複数鍵対応）。
+ * secrets のいずれか1つで一致すれば true。鍵が空、または全て不一致なら false（fail-closed）。
  */
 function verifySlackSignature(
-  secret: string,
+  secrets: string[],
   timestamp: string,
   rawBody: string,
   signature: string
 ): boolean {
+  if (secrets.length === 0) return false;
+
   // タイムスタンプが数字以外（空文字・非数値）はリプレイ攻撃の変形として拒否する。
   // Number("") = 0, Number("abc") = NaN → Math.abs(now - NaN) = NaN で検証をすり抜けるため、
   // 事前に純粋な10進数字列であることを確認する（Slackの仕様は UNIX秒の整数文字列）。
@@ -38,14 +56,18 @@ function verifySlackSignature(
   if (Math.abs(now - Number(timestamp)) > MAX_TIMESTAMP_DIFF_SEC) return false;
 
   const baseString = `v0:${timestamp}:${rawBody}`;
-  const hmac = crypto.createHmac("sha256", secret).update(baseString).digest("hex");
-  const expected = `v0=${hmac}`;
-
-  // タイミング攻撃防止のため timingSafeEqual を使う
-  const expBuf = Buffer.from(expected, "utf8");
   const sigBuf = Buffer.from(signature, "utf8");
-  if (expBuf.length !== sigBuf.length) return false;
-  return crypto.timingSafeEqual(expBuf, sigBuf);
+
+  // 登録された各アプリの署名鍵を順に試し、1つでも一致すれば通す。
+  for (const secret of secrets) {
+    const hmac = crypto.createHmac("sha256", secret).update(baseString).digest("hex");
+    const expBuf = Buffer.from(`v0=${hmac}`, "utf8");
+    // タイミング攻撃防止のため timingSafeEqual を使う（長さ不一致は先に弾く）。
+    if (expBuf.length === sigBuf.length && crypto.timingSafeEqual(expBuf, sigBuf)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** メンション（<@UXXX>）を除去して本文だけ取り出す。 */
@@ -93,15 +115,15 @@ export async function POST(req: NextRequest) {
   // raw body を先に読む（署名検証に必要）
   const rawBody = await req.text();
 
-  // Slack 署名検証
-  const secret = process.env.SLACK_SIGNING_SECRET?.trim();
-  if (!secret) {
+  // Slack 署名検証（複数アプリ＝複数署名鍵に対応）
+  const secrets = parseSigningSecrets();
+  if (secrets.length === 0) {
     console.error("[slack/events] SLACK_SIGNING_SECRET is not set");
     return NextResponse.json({ error: "server misconfigured" }, { status: 500 });
   }
   const timestamp = req.headers.get("x-slack-request-timestamp") ?? "";
   const signature = req.headers.get("x-slack-signature") ?? "";
-  if (!verifySlackSignature(secret, timestamp, rawBody, signature)) {
+  if (!verifySlackSignature(secrets, timestamp, rawBody, signature)) {
     return NextResponse.json({ error: "invalid signature" }, { status: 401 });
   }
 
