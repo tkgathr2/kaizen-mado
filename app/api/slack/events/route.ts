@@ -1,12 +1,16 @@
 // ── POST /api/slack/events ── Slack Events API webhook ──
 // 幹部Bot（真田・早乙女等）への app_mention を受け取り、カイゼンチケットを起票してフローを起動する。
+// 対象：全ての app_mention（バグ・質問・要望・改善・雑談 問わず全メンションを受付）。
+// type は本文のキーワードから自動判定（"bug" | "改善" | "新機能"）。
 // 認証: x-slack-signature（HMAC-SHA256 + タイムスタンプ検証・5分以内のみ受付）を必ず通過してから処理する。
 // Slack は3秒以内の応答を要求するため、起票は同期・process kickは非同期（fire-and-forget）にする。
+// 成長エンジン連動: 受信時に knowhow recall で過去事例を参照 → 起票後に context として付記する。
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { createTicket } from "@/lib/notion";
 import { findRecentDuplicate } from "@/lib/tickets";
-import type { Ticket } from "@/lib/types";
+import { recallSimilarSlackCases } from "@/lib/slack";
+import type { Ticket, TicketType } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -47,6 +51,42 @@ function verifySlackSignature(
 /** メンション（<@UXXX>）を除去して本文だけ取り出す。 */
 function stripMentions(text: string): string {
   return text.replace(/<@[A-Z0-9]+>/g, "").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * メンション本文のキーワードから TicketType を自動推定する。
+ * 全ての app_mention を受け付け、内容に応じて適切な種別に振り分ける。
+ * - バグ系 → "bug"
+ * - 機能追加・新しい仕組み系 → "新機能"
+ * - 使い勝手・改善要望系 → "改善"
+ */
+function inferTicketType(text: string): TicketType {
+  // バグ系（エラー・壊れ・動かない等）
+  if (
+    /バグ|エラー|壊れ|動かな|おかし|できない|失敗|ERROR|bug|crash|broken|not work|落ちた|止まった|表示されない|送れない|登録できない/i.test(
+      text
+    )
+  )
+    return "bug";
+
+  // 新機能系（追加・新しく・作って・対応してほしい等）
+  if (
+    /追加|新しい|新機能|作って|実装|対応して|できたら|あったらいい|機能がほしい|feature|request|搭載|設けて/i.test(
+      text
+    )
+  )
+    return "新機能";
+
+  // 改善系（使いにくい・もっと・変えて・見直し・改善してほしい等）
+  if (
+    /改善|使いにくい|もっと|変えて|見直|improve|直して|わかりにくい|見づらい|遅い|重い|操作しにくい|ほしい|欲しい|なぜ|どうして|質問|教えて|使い方|方法|わからない|help|how/i.test(
+      text
+    )
+  )
+    return "改善";
+
+  // デフォルト：判断が難しい場合はバグとして扱い、カイゼンフローで精緻化する
+  return "bug";
 }
 
 /** 内部APIのベースURL（Vercel本番 or ローカル開発）。 */
@@ -92,6 +132,7 @@ export async function POST(req: NextRequest) {
   const event = body?.event;
 
   // app_mention 以外は無視。bot_id 付き = Bot自身のメッセージ → スキップ（無限ループ防止）
+  // ※ 全ての app_mention（バグ/質問/要望/改善/雑談 問わず）を受け付ける。
   if (event?.type !== "app_mention" || event?.bot_id) {
     return NextResponse.json({ ok: true });
   }
@@ -111,11 +152,24 @@ export async function POST(req: NextRequest) {
   // ── チケット起票（同期・≈300ms）──
   // Slack の3秒制限内に完了するため起票は同期で行う。
   try {
+    // ① type自動判定（全メンションを受付・内容から bug/改善/新機能 に振り分け）
+    const ticketType = inferTicketType(text);
+
+    // ② 成長エンジン連動: 過去の類似解決事例を knowhow recall で参照（fail-safe・並走）
+    // recall は fire-and-forget ではなく同期で参照し、あれば detail に付記する。
+    // タイムアウト(6s)内に終わらなければ null として起票を続行する。
+    const pastCases = await recallSimilarSlackCases(text).catch(() => null);
+
+    // ③ detail を組み立て（本文 + 過去事例のコンテキスト）
+    const detail = pastCases
+      ? `${text}\n\n【過去の類似事例（knowhow参照）】\n${pastCases}`
+      : text;
+
     const ticket: Ticket = {
       system: "その他",
-      type: "bug",
+      type: ticketType,
       title: text.slice(0, 100) || "Slackからの問い合わせ",
-      detail: text,
+      detail,
       importance: "中",
       slackChannelId: channelId,
       slackThreadTs: threadTs,
@@ -132,7 +186,16 @@ export async function POST(req: NextRequest) {
 
     // 起票
     const result = await createTicket(ticket, reporter);
-    console.log("[slack/events] ticket created:", result.ticketId, "channel:", channelId);
+    console.log(
+      "[slack/events] ticket created:",
+      result.ticketId,
+      "type:",
+      ticketType,
+      "channel:",
+      channelId,
+      "pastCasesFound:",
+      Boolean(pastCases)
+    );
 
     // ── /api/process を非同期起動（fire-and-forget）──
     // 起票完了後に受付→議論中→GO伺いフローを回す。
@@ -140,7 +203,10 @@ export async function POST(req: NextRequest) {
     // この場合でもチケットは起票済みなので次回の /api/process cron で処理される。
     const cronSecret = process.env.CRON_SECRET?.trim();
     if (!cronSecret) {
-      console.warn("[slack/events] CRON_SECRET is not set; skipping process kick for ticket", result.ticketId);
+      console.warn(
+        "[slack/events] CRON_SECRET is not set; skipping process kick for ticket",
+        result.ticketId
+      );
     } else {
       const baseUrl = getBaseUrl();
       fetch(`${baseUrl}/api/process`, {
