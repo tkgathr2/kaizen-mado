@@ -59,6 +59,25 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+      - name: 回復したら open 中の kaizen-health issue を自動 close
+        if: ${{ steps.probe.outputs.ok == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ISSUES=$(gh issue list --repo "${{ github.repository }}" \
+            --state open --label kaizen-health \
+            --json number --jq '.[].number' 2>/dev/null || echo "")
+          if [ -z "$ISSUES" ]; then
+            echo "close 対象の open issue なし（正常）"
+            exit 0
+          fi
+          for NUM in $ISSUES; do
+            gh issue close "$NUM" --repo "${{ github.repository }}" \
+              --comment "死活監視が回復を確認しました（自動 close）。" 2>/dev/null || true
+            echo "closed: #$NUM"
+          done
+
       - name: 異常なら issue 起票（同種issueは抑制）
         if: ${{ steps.probe.outputs.ok != 'true' }}
         env:
