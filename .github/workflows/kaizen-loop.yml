@@ -34,7 +34,101 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  init:
+    runs-on: ubuntu-latest
+    outputs:
+      synced: ${{ steps.check.outputs.synced }}
+    steps:
+      - name: CRON_SECRET Vercel同期（初回のみ）
+        id: check
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          TEAM=team_HCFohEhWeRbk5gTvqF5idqyU
+          PROJ=prj_a1ETMXMCCY6HZ6OCZsiszHjU7qWn
+
+          # CRON_SYNCED(plain)を確認
+          RES=$(curl -s "https://api.vercel.com/v9/projects/${PROJ}/env?teamId=${TEAM}"             -H "Authorization: Bearer ${VERCEL_TOKEN}")
+          SYNCED=$(echo "$RES" | python3 -c "
+          import sys,json
+          d=json.load(sys.stdin)
+          e=next((x for x in d.get('envs',[]) if x.get('key')=='CRON_SYNCED'),{})
+          print(e.get('value',''))
+          " 2>/dev/null || echo "")
+          if [ "$SYNCED" = "true" ]; then
+            echo "CRON_SECRET既に同期済み。スキップ"
+            echo "synced=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "CRON_SECRET同期開始..."
+          # CRON_SECRET更新
+          ENV_ID=$(echo "$RES" | python3 -c "
+          import sys,json
+          d=json.load(sys.stdin)
+          e=next((x for x in d.get('envs',[]) if x.get('key')=='CRON_SECRET'),{})
+          print(e.get('id',''))
+          " 2>/dev/null)
+          if [ -z "$ENV_ID" ]; then
+            curl -s -X POST "https://api.vercel.com/v9/projects/${PROJ}/env?teamId=${TEAM}"               -H "Authorization: Bearer ${VERCEL_TOKEN}"               -H "Content-Type: application/json"               -d "[{\"key\":\"CRON_SECRET\",\"value\":\"${CRON_SECRET}\",\"type\":\"encrypted\",\"target\":[\"production\"]}]"
+          else
+            curl -s -X PATCH "https://api.vercel.com/v9/projects/${PROJ}/env/${ENV_ID}?teamId=${TEAM}"               -H "Authorization: Bearer ${VERCEL_TOKEN}"               -H "Content-Type: application/json"               -d "{\"value\":\"${CRON_SECRET}\"}"
+          fi
+
+          # KAIZEN_AUTOPILOT=on も設定
+          AP_ID=$(echo "$RES" | python3 -c "
+          import sys,json
+          d=json.load(sys.stdin)
+          e=next((x for x in d.get('envs',[]) if x.get('key')=='KAIZEN_AUTOPILOT'),{})
+          print(e.get('id',''))
+          " 2>/dev/null)
+          if [ -z "$AP_ID" ]; then
+            curl -s -X POST "https://api.vercel.com/v9/projects/${PROJ}/env?teamId=${TEAM}"               -H "Authorization: Bearer ${VERCEL_TOKEN}"               -H "Content-Type: application/json"               -d "[{\"key\":\"KAIZEN_AUTOPILOT\",\"value\":\"on\",\"type\":\"plain\",\"target\":[\"production\"]}]"
+          else
+            curl -s -X PATCH "https://api.vercel.com/v9/projects/${PROJ}/env/${AP_ID}?teamId=${TEAM}"               -H "Authorization: Bearer ${VERCEL_TOKEN}"               -H "Content-Type: application/json"               -d "{\"value\":\"on\"}"
+          fi
+
+          # 再デプロイ
+          LATEST=$(curl -s "https://api.vercel.com/v6/deployments?projectId=${PROJ}&teamId=${TEAM}&target=production&limit=1"             -H "Authorization: Bearer ${VERCEL_TOKEN}" | python3 -c "
+          import sys,json
+          d=json.load(sys.stdin)
+          print(d.get('deployments',[{}])[0].get('uid',''))
+          ")
+          DEPLOY_ID=$(curl -s -X POST "https://api.vercel.com/v13/deployments?teamId=${TEAM}&forceNew=1"             -H "Authorization: Bearer ${VERCEL_TOKEN}"             -H "Content-Type: application/json"             -d "{\"name\":\"kaizen-mado\",\"deploymentId\":\"${LATEST}\",\"target\":\"production\"}" | python3 -c "
+          import sys,json
+          d=json.load(sys.stdin)
+          print(d.get('id',''))
+          ")
+          echo "Deploy: $DEPLOY_ID"
+
+          # READY待ち（最大5分）
+          for i in $(seq 1 30); do
+            sleep 10
+            STATE=$(curl -s "https://api.vercel.com/v13/deployments/${DEPLOY_ID}?teamId=${TEAM}"               -H "Authorization: Bearer ${VERCEL_TOKEN}" | python3 -c "
+          import sys,json; print(json.load(sys.stdin).get('readyState',''))
+          " 2>/dev/null)
+            echo "  [$i] $STATE"
+            [ "$STATE" = "READY" ] && break
+            [ "$STATE" = "ERROR" ] && { echo "Deploy error"; exit 1; }
+          done
+
+          # CRON_SYNCED=true をVercelに登録（以降スキップ）
+          SYNC_ID=$(echo "$RES" | python3 -c "
+          import sys,json
+          d=json.load(sys.stdin)
+          e=next((x for x in d.get('envs',[]) if x.get('key')=='CRON_SYNCED'),{})
+          print(e.get('id',''))
+          " 2>/dev/null)
+          if [ -z "$SYNC_ID" ]; then
+            curl -s -X POST "https://api.vercel.com/v9/projects/${PROJ}/env?teamId=${TEAM}"               -H "Authorization: Bearer ${VERCEL_TOKEN}"               -H "Content-Type: application/json"               -d "[{\"key\":\"CRON_SYNCED\",\"value\":\"true\",\"type\":\"plain\",\"target\":[\"production\"]}]"
+          fi
+          echo "✅ CRON_SECRET同期・KAIZEN_AUTOPILOT=on・再デプロイ完了"
+          echo "synced=true" >> "$GITHUB_OUTPUT"
+
   plan:
+    needs: init
+
     runs-on: ubuntu-latest
     outputs:
       items: ${{ steps.plan.outputs.items }}
