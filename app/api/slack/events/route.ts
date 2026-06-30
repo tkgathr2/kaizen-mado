@@ -106,8 +106,10 @@ function inferTicketType(text: string): TicketType {
 
 /** 内部APIのベースURL（Vercel本番 or ローカル開発）。 */
 function getBaseUrl(): string {
-  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
+  // 安定エイリアス（カスタムドメイン）を優先する。VERCEL_URL はデプロイ固有ドメインで、
+  // デプロイ保護（preview等）下だと内部 kick が401になり得るためフォールバックに回す。
   if (process.env.NEXT_PUBLIC_BASE_URL) return process.env.NEXT_PUBLIC_BASE_URL;
+  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
   return "http://localhost:3000";
 }
 
@@ -146,9 +148,15 @@ export async function POST(req: NextRequest) {
 
   const event = body?.event;
 
-  // app_mention 以外は無視。bot_id 付き = Bot自身のメッセージ → スキップ（無限ループ防止）
-  // ※ 全ての app_mention（バグ/質問/要望/改善/雑談 問わず）を受け付ける。
-  if (event?.type !== "app_mention" || event?.bot_id) {
+  // app_mention 以外は無視。Bot由来のメッセージ（bot_id / bot_profile / subtype=bot_message）は
+  // スキップ＝Bot同士のメンション応酬による起票ループを防ぐ（多層ガード）。
+  // ※ 人間からの全ての app_mention（バグ/質問/要望/改善/雑談 問わず）は受け付ける。
+  if (
+    event?.type !== "app_mention" ||
+    event?.bot_id ||
+    event?.bot_profile ||
+    event?.subtype === "bot_message"
+  ) {
     return NextResponse.json({ ok: true });
   }
 
