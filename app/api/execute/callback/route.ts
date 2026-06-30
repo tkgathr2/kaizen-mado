@@ -111,10 +111,12 @@ export async function POST(req: NextRequest) {
         ).catch(() => false); // 投稿失敗はログのみ・フロー全体は止めない
       }
 
-      // 新仕様：完了報告FYI（旧「🎉 直して反映しました」）は送らない（自分から送るLINEは
-      // 「GO伺い」と「詰まり連絡」だけ）。状態遷移・学び還元は維持する。
-      // 学び還元（KNOWHOW_ENABLED時のみ実働。OFFなら no-op）。Slack起点チケットも
-      // 通常の完了チケットとして統一メモリ層へ記録される（Slack専用の別記録は持たない）。
+      // 完了通知をLINEに送る（GOを送った社長が結果を知れるようにする）
+      await pushText(
+        `✅ ${ticketId}（${system}）の改修が完了しました！本番に反映済みです。
+${prUrl}`
+      ).catch(() => false);
+      // 学び還元（KNOWHOW_ENABLED時のみ実働。OFFなら no-op）
       const learn = await returnLearningFromCompleted(5).catch(() => ({ memorized: 0 }));
       return NextResponse.json({ ok: true, state: "完了", learned: learn.memorized });
     }
@@ -126,8 +128,11 @@ export async function POST(req: NextRequest) {
       await appendDiscussionBlocks(pageId, [
         { heading: "PR作成（レビュー待ち）", body: `${detail}\nPR: ${prUrl}` },
       ]);
-      // 新仕様：PR完成FYI（旧「✅ 直せました（Merge押して）」）は送らない（自分から送るLINEは
-      // 「GO伺い」と「詰まり連絡」だけ）。状態遷移は維持する（PRは /board で確認できる）。
+      // PR作成通知をLINEに送る（人のマージが必要なケースで迷子にならないようにする）
+      await pushText(
+        `🔍 ${ticketId}（${system}）のPRができました。確認・マージをお願いします。
+${prUrl}`
+      ).catch(() => false);
       return NextResponse.json({ ok: true, state: "レビュー" });
     }
 
