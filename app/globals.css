@@ -365,6 +365,7 @@ button.ghost:hover:not(:disabled) { background: #f5f3ec; }
   padding: 1px 8px; border-radius: 999px; line-height: 1.5;
 }
 .board-card-time { font-size: 11px; color: #aaa69e; margin-left: auto; }
+.board-card-done-date { font-size: 11px; color: #3f7a3f; margin-left: 4px; font-weight: 600; }
 .board-footer { text-align: center; color: var(--muted); font-size: 11.5px; padding: 14px 0 8px; }
 .board-footer a { color: var(--brand); text-decoration: none; }
 
