@@ -348,19 +348,27 @@ export function formatLearningContext(hits: MemoryHit[] | null | undefined): str
   return lines.length ? lines.join("\n") : "";
 }
 
+/** generateReply に渡す過去の会話ターン（最大件数は呼び出し側で制限）。 */
+export interface ConverseTurn {
+  userText: string;
+  assistantText: string;
+}
+
 /**
  * 会話の返事を Claude（claude-sonnet-4-6）で生成する。
  * @param userText 社長のメッセージ
  * @param contextNote 「今の状況」テキスト（summarizeStatus 等）
  * @param hint この返事の趣旨（status/request/command の補足。プロンプトに添える）
  * @param learningNote 過去の学び（recall）を整形した文脈。あれば社長の好み・前例を踏まえて答える。
+ * @param history 直近の会話ターン（古い順）。渡すと文脈を覚えた返事になる。
  * 失敗・キー未設定時は null を返す（呼び出し側がフォールバック文を使う）。
  */
 export async function generateReply(
   userText: string,
   contextNote: string,
   hint?: string,
-  learningNote?: string
+  learningNote?: string,
+  history?: ConverseTurn[]
 ): Promise<string | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
@@ -374,6 +382,18 @@ export async function generateReply(
       : "") +
     (hint ? `\n\n【この返事の趣旨】${hint}` : "");
 
+  const historyMessages: { role: "user" | "assistant"; content: string }[] = [];
+  if (history && history.length > 0) {
+    for (const turn of history.slice(-6)) {
+      if (turn.userText.trim()) {
+        historyMessages.push({ role: "user", content: turn.userText.slice(0, 2000) });
+      }
+      if (turn.assistantText.trim()) {
+        historyMessages.push({ role: "assistant", content: turn.assistantText.slice(0, 2000) });
+      }
+    }
+  }
+
   try {
     const res = await fetch(API_URL, {
       method: "POST",
@@ -386,7 +406,10 @@ export async function generateReply(
         model,
         max_tokens: 512,
         system: sys,
-        messages: [{ role: "user", content: userText.slice(0, 4000) }],
+        messages: [
+          ...historyMessages,
+          { role: "user", content: userText.slice(0, 4000) },
+        ],
       }),
     });
     if (!res.ok) return null;

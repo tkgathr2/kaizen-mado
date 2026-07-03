@@ -35,6 +35,7 @@ import {
   recordConversationTurn,
   recordDecisionTurn,
   type ResolveContext,
+  type ConverseTurn,
 } from "@/lib/converse";
 import { createTicket } from "@/lib/notion";
 import { findRecentDuplicate } from "@/lib/tickets";
@@ -54,6 +55,21 @@ function recordInBackground(p: Promise<unknown>): void {
   } catch {
     // waitUntil が使えない環境（テスト等）でも記録自体は走る。例外は握る。
     void safe;
+  }
+}
+
+// ── 短期会話履歴（インメモリ・best-effort）──
+// 同インスタンスへのリクエストが続く間だけ有効。Vercel serverless では別インスタンスに当たると
+// 履歴はリセットされるが、その場合でも会話は成立する（履歴無しで返す）。
+// QUOTED_MAP_MAX 同様、古いものから捨てる単純なリングバッファ構造。
+const CONV_HISTORY_MAX_TURNS = 10;
+const convHistory: ConverseTurn[] = [];
+
+/** 会話ターンを短期履歴に追記する（古いものから捨てる）。 */
+function appendConvHistory(userText: string, assistantText: string): void {
+  convHistory.push({ userText, assistantText });
+  while (convHistory.length > CONV_HISTORY_MAX_TURNS) {
+    convHistory.shift();
   }
 }
 
@@ -243,7 +259,7 @@ async function handleConversation(
       // 返答を作る前に、過去の学び（社長の好み・前例）を引いて文脈に渡す（鍵無/0件なら素通し）。
       const hits = await recallForReply(text, 3);
       const learningNote = formatLearningContext(hits);
-      reply = await generateReply(text, statusNote, hint, learningNote);
+      reply = await generateReply(text, statusNote, hint, learningNote, [...convHistory]);
     }
     // Claude が使えない/失敗時：状況質問は状況サマリをそのまま返す。雑談は定型のやさしい一言。
     if (!reply) {
@@ -253,6 +269,8 @@ async function handleConversation(
           : "はい、カイゼンくんです。直してほしいこと・困っていることがあれば、いつでも書いてください。";
     }
     await safeReply(replyToken, reply);
+    // 短期履歴に追記（同インスタンス内での文脈維持・fail-safe）。
+    appendConvHistory(text, reply);
     // この会話1ターン（社長の発言＋AIの返答）を全体学習に記録（非ブロッキング・fail-safe）。
     recordInBackground(recordConversationTurn(text, reply, guessSystem(text)));
   } catch (e) {
