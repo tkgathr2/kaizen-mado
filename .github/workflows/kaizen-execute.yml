@@ -1,15 +1,16 @@
-# ── カイゼン実行ワークフロー（対象システムを実際に直す） ──
+# ── カイゼン実行ワークフロー（GO即時dispatch経路・対象システムを実際に直す） ──
 # kaizen-mado の /api/execute から repository_dispatch(event_type: kaizen_execute) で起動。
-# client_payload を受けて、対象リポを Claude で改修 → PR作成 → callback。
-# 【PRレビュー型】AIはPRを作るところまで。本番マージは人（社長）が差分を見て1クリック。
+# LINE GO 直後に Vercel が dispatch する即時経路（cron待ちの kaizen-loop と同一の実装基準）。
+# client_payload を受けて、対象リポを Claude で改修 → PR → gate → verify → 自動マージ → callback。
 #
 # 必要なシークレット:
 #   ANTHROPIC_API_KEY   … Claude 実装用
 #   TARGET_REPO_PAT     … 対象リポ(tkgathr2/*)へ push / PR できる PAT（repo, workflow スコープ）
 #   CRON_SECRET         … kaizen-mado /api/execute/callback の認証（kaizen-mado と同値）
 #
-# 安全：AIは本番に自動マージしない。差分が小さく安全でも必ずPRで止め、人がレビューしてマージ。
-# Post-gate は参考情報（差分行数・禁止パス接触）をPR本文に残すために使う。
+# 安全：自動マージは「autoMerge=true（社長GO済み）＋禁止パス非接触＋差分300行未満＋
+# 対象リポ自身の検証（typecheck/test/build）緑」のときだけ。満たさなければPRで止まり、
+# callback が Merge待ちLINE を送る（kaizen-loop.yml implement と同一基準）。
 name: kaizen-execute
 
 on:
@@ -45,6 +46,11 @@ jobs:
           repository: ${{ env.TARGET_REPO }}
           token: ${{ secrets.TARGET_REPO_PAT || github.token }}
           fetch-depth: 0
+
+      # kaizen-loop.yml implement と同じ Node に固定（バージョンドリフト防止・非Node系でも失敗しない）。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
 
       - name: Create work branch
         id: branch
@@ -111,13 +117,15 @@ jobs:
             if [ "$stem" != "$p" ] && [ -n "$stem" ] && contains "$stem"; then HIT="$HIT $p"; continue; fi
             contains "${p}s" && HIT="$HIT $p"
           done
+          # 行数ゲート：GO済み案件（社長承認サイン済み）なので 300行 まで自動可
+          # （kaizen-loop.yml と同一基準。禁止パスゲートは常時維持）。
           if [ -n "$HIT" ]; then
             HIT="$(printf '%s\n' $HIT | sort -u | tr '\n' ' ' | sed 's/ *$//')"
             echo "verdict=review" >> "$GITHUB_OUTPUT"
             echo "detail=禁止パス接触:$HIT" >> "$GITHUB_OUTPUT"
-          elif [ "${LINES:-0}" -ge 50 ]; then
+          elif [ "${LINES:-0}" -ge 300 ]; then
             echo "verdict=review" >> "$GITHUB_OUTPUT"
-            echo "detail=差分が大きい（${LINES}行 >= 50）" >> "$GITHUB_OUTPUT"
+            echo "detail=差分が大きい（${LINES}行 >= 300）" >> "$GITHUB_OUTPUT"
           else
             echo "verdict=auto" >> "$GITHUB_OUTPUT"
             echo "detail=diff ${LINES}行・禁止パス非接触" >> "$GITHUB_OUTPUT"
@@ -142,23 +150,61 @@ jobs:
             --body "カイゼンくん自動改修（${TICKET_ID}）。判定: ${DETAIL}")
           echo "url=$PR_URL" >> "$GITHUB_OUTPUT"
 
-      # ── PRレビュー型：本番への自動マージ・自動デプロイはしない ──
-      # AIが直してPRを作るところまで。マージ＝本番反映は人（社長）が差分を見て1クリック。
-      # （将来フル自動へ昇格する場合のみ、ここに gh pr merge ＋ヘルス確認のステップを足す）
+      # ── 自動マージ（kaizen-loop.yml implement と同一基準・GO即時dispatch経路の完全パリティ） ──
+      # autoMerge=true（社長GO済み）かつ gate=auto のとき、対象リポ自身の検証
+      # （typecheck/test/build のうち存在するものを全部実行して緑）が通れば squash マージ＝本番反映。
+      # 検証できない・落ちた場合はマージせず review で止まる（Merge待ちLINEはcallback側が送る）。
+      # Claude実装ステップ(Docker)が Node を戻すため、Verify直前に Node20 を再セット。
+      - name: Re-pin Node 20 before verify
+        if: ${{ steps.pr.outputs.url != '' && steps.gate.outputs.verdict == 'auto' && github.event.client_payload.autoMerge }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
 
-      - name: Callback to kaizen-mado（PRレビュー型）
+      - name: Verify before auto-merge（自走・実チェック）
+        id: verify
+        if: ${{ steps.pr.outputs.url != '' && steps.gate.outputs.verdict == 'auto' && github.event.client_payload.autoMerge }}
+        continue-on-error: true
+        run: |
+          node -v
+          # package.json の無いリポ（GAS等）は検証不能＝マージしない（review止まり＋Merge待ちLINE）。
+          [ -f package.json ] || { echo "package.json なし → 自動マージしない"; exit 1; }
+          # typecheck / test / build のうち「存在する検証を全部実行して緑」なら自動マージ可。
+          # 1つも検証手段が無いリポはマージしない（安全側）。kaizen-loop.yml と同一ロジック。
+          node -e "const s=(require('./package.json').scripts)||{}; if(!['typecheck','test','build'].some(k=>s[k])){console.error('検証スクリプトが1つも無い → 自動マージしない'); process.exit(1)}"
+          npm ci || npm install
+          npm run typecheck --if-present
+          npm run test --if-present
+          npm run build --if-present
+
+      - name: Auto-merge（真田自走・検証グリーン時のみ）
+        id: merge
+        if: ${{ steps.verify.outcome == 'success' && github.event.client_payload.autoMerge }}
+        env:
+          GH_TOKEN: ${{ secrets.TARGET_REPO_PAT || github.token }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+        run: |
+          if gh pr merge "$PR_URL" --squash --delete-branch; then
+            echo "merged=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Callback to kaizen-mado
         if: always()
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           GATE_VERDICT: ${{ steps.gate.outputs.verdict }}
           PR_URL: ${{ steps.pr.outputs.url }}
           DETAIL: ${{ steps.gate.outputs.detail }}
+          MERGED: ${{ steps.merge.outputs.merged }}
         run: |
-          # PRが作れたら必ず review（人のレビュー待ち・PR URL付き）。変更ゼロ/失敗は failed。
+          # merged=本番反映まで完走／review=人のMerge待ち／failed=変更ゼロ・PR不成立。
           # failureClass：callback側の契約（result=failed のとき分類必須）に合わせて送る。
           if [ "$GATE_VERDICT" = "failed" ] || [ -z "$PR_URL" ]; then
             RESULT="failed"
             FCLASS="IMPL_FAILED"
+          elif [ "$MERGED" = "true" ]; then
+            RESULT="merged"
+            FCLASS=""
           else
             RESULT="review"
             FCLASS=""
