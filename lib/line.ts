@@ -485,6 +485,11 @@ const INFRA_ERROR_PATTERNS: RegExp[] = [
   /env(?:ironment)? .*(?:not set|missing)/i,
   /\b[A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|CREDENTIAL)S?\b[^\n]*(?:not set|is missing|missing|undefined)/i,
   /fatal: (?:Authentication|could not read|unable to access)/i,
+  // AI実装ステップの異常終了（ワークフローが gate 未到達時に付けるマーカー・2026-07-04）。
+  // モデル指定ミス等の設定系＝真田が直せば自動再走できる基盤エラーとして扱う。
+  /implement step crashed/i,
+  // Anthropic API のモデル未存在（設定ミス）。例: not_found_error "model: claude-..."
+  /not_found_error/i,
 ];
 
 /** detail（実行ワークフローのエラー詳細）が「基盤エラー（認証/権限/設定系）」かどうか。

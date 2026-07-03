@@ -410,6 +410,10 @@ jobs:
         run: |
           # failureClass：callback側の契約（result=failed のとき分類必須）に合わせて送る。
           # 旧実装は未送信→callbackが400で捨てられ→失敗が永遠に無音リトライされていた。
+          # 実装ステップ異常終了（gate未到達）は基盤エラーとして分類（kaizen-execute.yml と同一）。
+          if [ -z "$GATE_VERDICT" ]; then
+            DETAIL="implement step crashed（AI実装ステップ異常終了・モデル/権限/設定の基盤不調の可能性）"
+          fi
           if [ "$GATE_VERDICT" = "failed" ] || [ -z "$PR_URL" ]; then
             RESULT="failed"
             FCLASS="IMPL_FAILED"

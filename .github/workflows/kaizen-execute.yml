@@ -70,6 +70,10 @@ jobs:
         uses: anthropics/claude-code-base-action@beta
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # モデルはアクションの入力(model)で渡す（kaizen-loop.yml と同一）。指定しないと既定の
+          # 旧モデル(claude-sonnet-4-20250514)になり 404 not_found で必ず失敗する
+          # （2026-07-04 GO即時経路の実走で再発を確認・修正）。
+          model: claude-sonnet-4-6
           # 既定はpermission拒否でEditすらできない（KZ-3実走4回目で判明）。実装に必要な道具だけ許可。
           allowed_tools: "Read,Glob,Grep,Edit,MultiEdit,Write,Bash(npm install),Bash(npm ci),Bash(npm run build),Bash(npm run lint),Bash(npx vitest run),Bash(npx tsc --noEmit)"
           prompt: |
@@ -199,6 +203,12 @@ jobs:
         run: |
           # merged=本番反映まで完走／review=人のMerge待ち／failed=変更ゼロ・PR不成立。
           # failureClass：callback側の契約（result=failed のとき分類必須）に合わせて送る。
+          # 実装ステップが異常終了（gateまで到達せず）＝仕組み側の不調の可能性が高い。
+          # マーカー文字列 "implement step crashed" は isInfraError が基盤エラーとして分類し、
+          # チケットは「実装中」のまま保持＝基盤復旧後に自動で再走される（差し戻しにしない）。
+          if [ -z "$GATE_VERDICT" ]; then
+            DETAIL="implement step crashed（AI実装ステップ異常終了・モデル/権限/設定の基盤不調の可能性）"
+          fi
           if [ "$GATE_VERDICT" = "failed" ] || [ -z "$PR_URL" ]; then
             RESULT="failed"
             FCLASS="IMPL_FAILED"
