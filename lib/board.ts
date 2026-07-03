@@ -79,6 +79,8 @@ export interface BoardCard {
   urgency?: number;
   importanceScore?: number;
   priority?: string;
+  /** 状態が変わった日時（ISO文字列）。完了列の完了日表示用。旧チケットは undefined。 */
+  statusChangedAt?: string;
 }
 
 export interface BoardColumn {
@@ -108,6 +110,7 @@ export function toBoardCard(t: TicketRow): BoardCard {
     ...(typeof t.urgency === "number" ? { urgency: t.urgency } : {}),
     ...(typeof t.importanceScore === "number" ? { importanceScore: t.importanceScore } : {}),
     ...(t.priority ? { priority: t.priority } : {}),
+    ...(t.statusChangedAt ? { statusChangedAt: t.statusChangedAt } : {}),
   };
 }
 

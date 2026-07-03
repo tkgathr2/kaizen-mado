@@ -38,6 +38,13 @@ function relTime(iso: string): string {
   return `${d}日前`;
 }
 
+function doneDateMD(iso: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
 function clockHHMM(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
@@ -183,6 +190,9 @@ export default function BoardPage() {
                           )}
                           {c.lastEdited && (
                             <span className="board-card-time">{relTime(c.lastEdited)}</span>
+                          )}
+                          {col.state === "完了" && c.statusChangedAt && (
+                            <span className="board-card-done-date">{doneDateMD(c.statusChangedAt)}</span>
                           )}
                         </div>
                       </a>
