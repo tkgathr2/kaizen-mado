@@ -41,7 +41,8 @@ export async function applyGoAction(
       newState: "着手",
       reply:
         `${msgHead("✅", "GO受けました", ticket.system, ticket.title)}\n` + // まず「何の件か」
-        `（${ticket.ticketId}）進めます。結果はまたお知らせします。\n\n` +
+        `（${ticket.ticketId}）自動改修を始めます（目安：15分〜3時間）。\n` +
+        `終わったら「反映しました」か「Merge待ち」を必ずお知らせします。\n\n` +
         `${stageBar(3)}\n` + // ③GO受領（→着手へ）
         `全体像 ▶ ${BOARD_URL}`,
     };

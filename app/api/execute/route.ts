@@ -41,7 +41,31 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const planMode = req.nextUrl.searchParams.get("mode") === "plan";
+  const mode = req.nextUrl.searchParams.get("mode");
+  const planMode = mode === "plan";
+
+  // ── mode=review-list：「レビュー」滞留チケットの一覧を返す（read-only） ──
+  // 人がPRをMerge/Closeしても従来は誰も検知せず、チケットが「レビュー」のまま
+  // 永久に残り完了連絡も出なかった（社長指摘 2026-07-03「GOしても完了しない」の一因）。
+  // GitHub側の照合はワークフロー（kaizen-loop の review_sync ジョブ）が担い、
+  // 検知結果は /api/execute/callback（result=merged/closed）で反映される。
+  if (mode === "review-list") {
+    try {
+      const rows = await fetchTicketsByState("レビュー", 20);
+      const reviewList = rows
+        .map((t) => {
+          const target = findTarget(t.system);
+          return target?.repo
+            ? { ticketId: t.ticketId, pageId: t.pageId, system: t.system, targetRepo: target.repo }
+            : null;
+        })
+        .filter(Boolean);
+      return NextResponse.json({ ok: true, reviewList });
+    } catch (err) {
+      console.error("[execute] review-list failed:", (err as Error).message);
+      return NextResponse.json({ ok: false, error: "review-list取得に失敗" }, { status: 502 });
+    }
+  }
 
   let limit = 3;
   try {

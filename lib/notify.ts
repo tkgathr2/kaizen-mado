@@ -27,6 +27,9 @@ const NOTION_VERSION = "2022-06-28";
 /** 詰まり通知の de-dup 用の印（heading_3 の見出し文言）。 */
 export const STUCK_MARKER_HEADING = "詰まり通知済み";
 
+/** Merge待ち（レビュー到達）通知の de-dup 用の印。 */
+export const REVIEW_MARKER_HEADING = "Merge待ち通知済み";
+
 /** Notion auth（tickets.ts と同じ env を読む）。未設定なら null（fail-safe）。 */
 function notionToken(): string | null {
   return process.env.NOTION_TOKEN || null;
@@ -39,6 +42,14 @@ function notionToken(): string | null {
  * に倒す（連打防止を優先）。LINE自体は fail-safe で副作用が小さいため、安全側＝送らない。
  */
 export async function hasStuckMarker(pageId: string): Promise<boolean> {
+  return hasMarker(pageId, STUCK_MARKER_HEADING);
+}
+
+/**
+ * 指定した印（heading_3 の見出し文言）がページに既にあるか（de-dup の共通実装）。
+ * 取得失敗・例外は「ある（＝送らない側）」に倒して連打を防ぐ。
+ */
+export async function hasMarker(pageId: string, heading: string): Promise<boolean> {
   const token = notionToken();
   if (!token || !pageId) return false;
   try {
@@ -63,7 +74,7 @@ export async function hasStuckMarker(pageId: string): Promise<boolean> {
       const text: string = (b?.heading_3?.rich_text || [])
         .map((r: any) => r?.plain_text ?? "")
         .join("");
-      if (text.includes(STUCK_MARKER_HEADING)) return true;
+      if (text.includes(heading)) return true;
     }
     return false;
   } catch (e) {
@@ -116,4 +127,59 @@ export async function notifyStuckOnce(
   });
 
   return true;
+}
+
+/** Merge待ち連絡の本文（社長のアクション＝Mergeボタン1タップを求める形・素人語）。 */
+export function buildReviewText(ticket: TicketRow, prUrl: string, detail: string): string {
+  return [
+    msgHead("✋", "Merge待ちです", ticket.system, ticket.title),
+    `（${ticket.ticketId}）直すコードはできました。自動反映の条件を満たさなかったため、`,
+    `社長のMerge1タップで本番に反映されます。`,
+    `理由：${truncateForLine(detail || "自動マージ条件を満たさず", 60)}`,
+    ``,
+    `PR ▶ ${prUrl}`,
+    stageBar(5), // ⑤PRまで完了・反映待ち
+    `全体像 ▶ ${BOARD_URL}`,
+  ].join("\n");
+}
+
+/**
+ * Merge待ち（レビュー到達）連絡を「同じチケットで1回だけ」LINEへ送る。
+ * GO済み案件が自動マージできず止まったとき、無音で放置されるのを防ぐ
+ * （社長指摘 2026-07-03「GOしても完了しない・止まっても連絡がない」対策）。
+ * de-dup・fail-safe の方針は notifyStuckOnce と同じ。
+ */
+export async function notifyReviewOnce(
+  ticket: TicketRow,
+  prUrl: string,
+  detail: string
+): Promise<boolean> {
+  if (!lineEnabled()) return false;
+  if (await hasMarker(ticket.pageId, REVIEW_MARKER_HEADING)) return false;
+
+  const sent = await pushText(buildReviewText(ticket, prUrl, detail));
+  if (!sent) return false;
+
+  await appendDiscussionBlocks(ticket.pageId, [
+    {
+      heading: REVIEW_MARKER_HEADING,
+      body: `Merge待ち連絡をLINEで1回送信しました。PR：${truncateForLine(prUrl, 100)}`,
+    },
+  ]).catch((e) => {
+    console.error("[notify] 印の追記に失敗", (e as Error).message);
+  });
+
+  return true;
+}
+
+/** 完了連絡の本文（GO案件が本番反映まで完走したことを短く報告）。 */
+export function buildMergedText(ticket: TicketRow, prUrl: string): string {
+  return [
+    msgHead("✅", "直して反映しました", ticket.system, ticket.title),
+    `（${ticket.ticketId}）自動改修→検証→本番反映まで完了しました。`,
+    ``,
+    ...(prUrl ? [`変更内容 ▶ ${prUrl}`] : []),
+    stageBar(5), // ⑥反映まで完了
+    `全体像 ▶ ${BOARD_URL}`,
+  ].join("\n");
 }
