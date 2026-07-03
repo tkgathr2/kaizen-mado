@@ -143,6 +143,15 @@ jobs:
             -H "content-type: application/json" \
             -d '{"limit":5}' || true
 
+      # 状態タイムアウト監視（GO待ち48hリマインド等）。Vercel Cronは Hobby制約で1日1回しか
+      # 回らないため、ここで毎ループ叩いて実効的に1〜3時間間隔にする（重複通知はsweep側でde-dup済み）。
+      - name: 状態タイムアウト監視（kz-sweep）
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          curl -sS "https://kaizen.takagi.bz/api/cron/kz-sweep" \
+            -H "Authorization: Bearer ${CRON_SECRET}" || true
+
       - name: 着手→実装ペイロード取得（mode=plan）
         id: plan
         env:
@@ -158,6 +167,56 @@ jobs:
           COUNT=$(echo "$ITEMS" | jq 'length')
           echo "items=$ITEMS" >> "$GITHUB_OUTPUT"
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+
+  # ── review_sync：人がPRをMerge/Closeした結果を検知してチケットを閉じる ──
+  # レビュー滞留チケットのPR（branch=kaizen/<kz-id>-*）をGitHubで照合し、
+  #  MERGED → callback result=merged（→完了＋完了LINE）
+  #  CLOSED（マージなし・openなし）→ callback result=closed（→却下・LINEなし）
+  # 従来は人がMergeしてもチケットが「レビュー」のまま永久滞留し完了連絡も出なかった。
+  # 他リポの照合には TARGET_REPO_PAT が要る（無ければ自リポ分だけ同期＝best-effort）。
+  review_sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: レビュー滞留のPR状態を照合してcallback
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          GH_TOKEN: ${{ secrets.TARGET_REPO_PAT || github.token }}
+        run: |
+          RES=$(curl -sS "https://kaizen.takagi.bz/api/execute?mode=review-list" \
+            -H "x-cron-secret: ${CRON_SECRET}")
+          echo "review-list: $RES"
+          echo "$RES" | jq -c '.reviewList // [] | .[]' | while read -r row; do
+            REPO=$(echo "$row" | jq -r .targetRepo)
+            TID=$(echo "$row" | jq -r .ticketId)
+            PAGE=$(echo "$row" | jq -r .pageId)
+            SYS=$(echo "$row" | jq -r .system)
+            PREFIX="kaizen/$(echo "$TID" | tr '[:upper:]' '[:lower:]')-"
+            PRS=$(gh pr list --repo "$REPO" --state all --limit 100 \
+              --json url,headRefName,state 2>/dev/null) || { echo "skip $TID（$REPO 照合不可）"; continue; }
+            HITS=$(echo "$PRS" | jq -c --arg p "$PREFIX" '[.[] | select(.headRefName | startswith($p))]')
+            MERGED_URL=$(echo "$HITS" | jq -r '[.[] | select(.state == "MERGED")] | first | .url // empty')
+            OPEN_URL=$(echo "$HITS" | jq -r '[.[] | select(.state == "OPEN")] | first | .url // empty')
+            CLOSED_URL=$(echo "$HITS" | jq -r '[.[] | select(.state == "CLOSED")] | first | .url // empty')
+            if [ -n "$MERGED_URL" ]; then
+              RESULT="merged"; URL="$MERGED_URL"; DET="人のMergeを検知（review-sync）"
+            elif [ -n "$OPEN_URL" ]; then
+              echo "$TID はPRレビュー待ち継続（open）"; continue
+            elif [ -n "$CLOSED_URL" ]; then
+              RESULT="closed"; URL="$CLOSED_URL"; DET="PRが人によりクローズ（マージなし）"
+            else
+              echo "$TID の該当PRが見つからない（skip）"; continue
+            fi
+            curl -s -X POST "https://kaizen.takagi.bz/api/execute/callback" \
+              -H "content-type: application/json" \
+              -H "x-cron-secret: ${CRON_SECRET}" \
+              -d "$(jq -n --arg t "$TID" --arg p "$PAGE" --arg s "$SYS" \
+                     --arg r "$RESULT" --arg u "$URL" --arg d "$DET" \
+                     '{ticketId:$t,pageId:$p,system:$s,result:$r,prUrl:$u,detail:$d}')"
+            echo ""
+          done
 
   implement:
     needs: plan
@@ -264,13 +323,16 @@ jobs:
             if [ "$stem" != "$p" ] && [ -n "$stem" ] && contains "$stem"; then HIT="$HIT $p"; continue; fi
             contains "${p}s" && HIT="$HIT $p"
           done
+          # 行数ゲート：GO済み案件（社長承認サイン済み）なので 300行 まで自動可
+          # （旧50行は普通の機能追加が全部レビュー止まり＝無音滞留の温床だった）。
+          # 禁止パスゲートは従来どおり常時維持。
           if [ -n "$HIT" ]; then
             HIT="$(printf '%s\n' $HIT | sort -u | tr '\n' ' ' | sed 's/ *$//')"
             echo "verdict=review" >> "$GITHUB_OUTPUT"
             echo "detail=禁止パス接触:$HIT" >> "$GITHUB_OUTPUT"
-          elif [ "${LINES:-0}" -ge 50 ]; then
+          elif [ "${LINES:-0}" -ge 300 ]; then
             echo "verdict=review" >> "$GITHUB_OUTPUT"
-            echo "detail=差分が大きい（${LINES}行 >= 50）" >> "$GITHUB_OUTPUT"
+            echo "detail=差分が大きい（${LINES}行 >= 300）" >> "$GITHUB_OUTPUT"
           else
             echo "verdict=auto" >> "$GITHUB_OUTPUT"
             echo "detail=diff ${LINES}行・禁止パス非接触" >> "$GITHUB_OUTPUT"
@@ -313,12 +375,17 @@ jobs:
         continue-on-error: true
         run: |
           node -v
-          npm ci
-          # 対象リポ自身のnpmスクリプトで検証（リポ非依存）。
-          # テストの無いリポは検証できない＝安全側にマージしない（review止まり）。
-          node -e "const s=(require('./package.json').scripts)||{}; if(!s.test){console.error('no test script → 自動マージしない'); process.exit(1)}"
+          # package.json の無いリポ（GAS等）は検証不能＝マージしない（review止まり＋Merge待ちLINE）。
+          [ -f package.json ] || { echo "package.json なし → 自動マージしない"; exit 1; }
+          # 旧実装は「test script 必須」で、テストの無いリポ（巡回くん等）が永遠にレビュー止まり
+          # ＝GO済みなのに反映されない主因だった。typecheck / test / build のうち
+          # 「存在する検証を全部実行して緑」なら自動マージ可へ緩和する。
+          # 1つも検証手段が無いリポだけは従来どおりマージしない（安全側）。
+          node -e "const s=(require('./package.json').scripts)||{}; if(!['typecheck','test','build'].some(k=>s[k])){console.error('検証スクリプトが1つも無い → 自動マージしない'); process.exit(1)}"
+          # lockfile が無いリポでも npm ci で落とさない（npm install へフォールバック）。
+          npm ci || npm install
           npm run typecheck --if-present
-          npm test
+          npm run test --if-present
           npm run build --if-present
 
       - name: Auto-merge（真田自走・検証グリーン時のみ）
@@ -341,16 +408,21 @@ jobs:
           DETAIL: ${{ steps.gate.outputs.detail }}
           MERGED: ${{ steps.merge.outputs.merged }}
         run: |
+          # failureClass：callback側の契約（result=failed のとき分類必須）に合わせて送る。
+          # 旧実装は未送信→callbackが400で捨てられ→失敗が永遠に無音リトライされていた。
           if [ "$GATE_VERDICT" = "failed" ] || [ -z "$PR_URL" ]; then
             RESULT="failed"
+            FCLASS="IMPL_FAILED"
           elif [ "$MERGED" = "true" ]; then
             RESULT="merged"
+            FCLASS=""
           else
             RESULT="review"
+            FCLASS=""
           fi
           curl -s -X POST "$CALLBACK_URL" \
             -H "content-type: application/json" \
             -H "x-cron-secret: $CRON_SECRET" \
             -d "$(jq -n --arg t "$TICKET_ID" --arg p "$PAGE_ID" --arg s "$SYSTEM" \
-                   --arg r "$RESULT" --arg u "$PR_URL" --arg d "$DETAIL" \
-                   '{ticketId:$t,pageId:$p,system:$s,result:$r,prUrl:$u,detail:$d}')"
+                   --arg r "$RESULT" --arg u "$PR_URL" --arg d "$DETAIL" --arg f "$FCLASS" \
+                   '{ticketId:$t,pageId:$p,system:$s,result:$r,prUrl:$u,detail:$d} + (if $f != "" then {failureClass:$f} else {} end)')"

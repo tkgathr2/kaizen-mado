@@ -155,14 +155,17 @@ jobs:
           DETAIL: ${{ steps.gate.outputs.detail }}
         run: |
           # PRが作れたら必ず review（人のレビュー待ち・PR URL付き）。変更ゼロ/失敗は failed。
+          # failureClass：callback側の契約（result=failed のとき分類必須）に合わせて送る。
           if [ "$GATE_VERDICT" = "failed" ] || [ -z "$PR_URL" ]; then
             RESULT="failed"
+            FCLASS="IMPL_FAILED"
           else
             RESULT="review"
+            FCLASS=""
           fi
           curl -s -X POST "$CALLBACK_URL" \
             -H "content-type: application/json" \
             -H "x-cron-secret: $CRON_SECRET" \
             -d "$(jq -n --arg t "$TICKET_ID" --arg p "$PAGE_ID" --arg s "$SYSTEM" \
-                   --arg r "$RESULT" --arg u "$PR_URL" --arg d "$DETAIL" \
-                   '{ticketId:$t,pageId:$p,system:$s,result:$r,prUrl:$u,detail:$d}')"
+                   --arg r "$RESULT" --arg u "$PR_URL" --arg d "$DETAIL" --arg f "$FCLASS" \
+                   '{ticketId:$t,pageId:$p,system:$s,result:$r,prUrl:$u,detail:$d} + (if $f != "" then {failureClass:$f} else {} end)')"
