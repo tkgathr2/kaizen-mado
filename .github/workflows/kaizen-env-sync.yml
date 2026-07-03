@@ -1,0 +1,60 @@
+# ── Vercel env 同期（手動キック・真田用） ──
+# GH secret を Vercel 本番 env へ upsert し、再デプロイして反映する。
+# 第1用途：KAIZEN_DISPATCH_PAT → GITHUB_DISPATCH_TOKEN（GO即時実行の配線）。
+#   これが入ると LINE GO 直後に kickEndpoint("/api/execute") → repository_dispatch →
+#   kaizen-execute.yml が即起動する（従来は kaizen-loop の cron 待ち＝最大3時間）。
+# 冪等：既存 env があれば PATCH、無ければ POST。何度流しても安全。
+name: kaizen-env-sync
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: GITHUB_DISPATCH_TOKEN を Vercel へ upsert → 再デプロイ
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          DISPATCH_PAT: ${{ secrets.KAIZEN_DISPATCH_PAT }}
+        run: |
+          set -e
+          TEAM=team_HCFohEhWeRbk5gTvqF5idqyU
+          PROJ=prj_a1ETMXMCCY6HZ6OCZsiszHjU7qWn
+          [ -n "$DISPATCH_PAT" ] || { echo "KAIZEN_DISPATCH_PAT が未設定"; exit 1; }
+
+          RES=$(curl -s "https://api.vercel.com/v9/projects/${PROJ}/env?teamId=${TEAM}" \
+            -H "Authorization: Bearer ${VERCEL_TOKEN}")
+          ENV_ID=$(echo "$RES" | jq -r '(.envs // []) | map(select(.key == "GITHUB_DISPATCH_TOKEN")) | first | .id // empty')
+
+          if [ -z "$ENV_ID" ]; then
+            echo "GITHUB_DISPATCH_TOKEN を新規作成"
+            curl -sf -X POST "https://api.vercel.com/v9/projects/${PROJ}/env?teamId=${TEAM}" \
+              -H "Authorization: Bearer ${VERCEL_TOKEN}" -H "Content-Type: application/json" \
+              -d "[{\"key\":\"GITHUB_DISPATCH_TOKEN\",\"value\":\"${DISPATCH_PAT}\",\"type\":\"encrypted\",\"target\":[\"production\"]}]" > /dev/null
+          else
+            echo "GITHUB_DISPATCH_TOKEN を更新 (${ENV_ID})"
+            curl -sf -X PATCH "https://api.vercel.com/v9/projects/${PROJ}/env/${ENV_ID}?teamId=${TEAM}" \
+              -H "Authorization: Bearer ${VERCEL_TOKEN}" -H "Content-Type: application/json" \
+              -d "{\"value\":\"${DISPATCH_PAT}\"}" > /dev/null
+          fi
+
+          # 最新本番デプロイをコピーして再デプロイ（envを反映）
+          LATEST=$(curl -s "https://api.vercel.com/v6/deployments?projectId=${PROJ}&teamId=${TEAM}&target=production&limit=1" \
+            -H "Authorization: Bearer ${VERCEL_TOKEN}" | jq -r '.deployments[0].uid // empty')
+          [ -n "$LATEST" ] || { echo "最新デプロイが見つからない"; exit 1; }
+          DEPLOY_ID=$(curl -s -X POST "https://api.vercel.com/v13/deployments?teamId=${TEAM}&forceNew=1" \
+            -H "Authorization: Bearer ${VERCEL_TOKEN}" -H "Content-Type: application/json" \
+            -d "{\"name\":\"kaizen-mado\",\"deploymentId\":\"${LATEST}\",\"target\":\"production\"}" | jq -r '.id // empty')
+          echo "Deploy: $DEPLOY_ID"
+          [ -n "$DEPLOY_ID" ] || { echo "再デプロイ起動に失敗"; exit 1; }
+
+          for i in $(seq 1 30); do
+            sleep 10
+            STATE=$(curl -s "https://api.vercel.com/v13/deployments/${DEPLOY_ID}?teamId=${TEAM}" \
+              -H "Authorization: Bearer ${VERCEL_TOKEN}" | jq -r '.readyState // empty')
+            echo "  [$i] $STATE"
+            [ "$STATE" = "READY" ] && { echo "✅ 反映完了"; exit 0; }
+            [ "$STATE" = "ERROR" ] && { echo "Deploy error"; exit 1; }
+          done
+          echo "READY待ちタイムアウト"; exit 1
