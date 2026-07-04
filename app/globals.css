@@ -592,6 +592,15 @@ button.attach-btn.edit-btn { font-size: 20px; }
 }
 .template-chip:hover { background: #fbeee8; border-color: var(--brand); color: var(--brand); }
 
+/* ───── ボード：LINE会話リンク ───── */
+.board-card-chatlink {
+  display: inline-block;
+  font-size: 11.5px; color: var(--muted);
+  padding: 4px 10px 8px; text-decoration: none;
+  transition: color 0.15s ease;
+}
+.board-card-chatlink:hover { color: var(--brand); }
+
 /* ───── ボード：GO/却下ボタン ───── */
 .board-card-wrap {
   position: relative;
