@@ -1,6 +1,7 @@
 // ── 認証ミドルウェア（optional auth・段階リリース fail-safe） ──
-// isAuthEnabled() が false の間は一切保護しない＝従来どおり全公開で動く（今と同じ挙動）。
 // OAuth鍵(AUTH_GOOGLE_ID/SECRET + AUTH_SECRET)が揃った瞬間に認証がONになる。
+// isAuthEnabled() が false（鍵未投入）の間：公開窓口(/・起票導線)は素通しで動くが、
+//   管理系(/board・/dashboard・管理データAPI)は 503 で閉じる（fail-close＝無認証全公開を作らない）。
 //
 // 【重要・optional auth】カイゼン窓口(/) は社内各システムから widget.js(iframe) で embed される
 //   "公開・無認証"の入口。窓口(/)・/api/chat・/api/submit を強制ログイン保護すると全システムで
@@ -74,10 +75,31 @@ const protectedMw = auth((req) => {
   return NextResponse.next();
 });
 
-// 鍵が未投入なら auth ラッパに一切触れず素通し＝本番窓口を止めない fail-safe。
-// （auth ラッパを呼ぶと鍵未設定でも UntrustedHost 等のノイズが出るため、無効時は完全に回避する）
+// 鍵が未投入（認証OFF）のときの挙動 — fail-open 禁止の fail-close 設計：
+//   ・公開窓口（/・/api/chat・/api/submit など shouldProtectPath=false）は従来どおり素通し。
+//     掲示中の窓口・埋め込みウィジェットを絶対に止めない fail-safe を維持する。
+//   ・管理系（/board・/dashboard・/api/board・/api/stats・/api/kaizen/ticket・context）は
+//     社長のLINE会話・社内チケット内容を含むため、認証を張れない鍵未設定状態では公開せず
+//     503 で閉じる。以前はここで一律 next() していたため、鍵が空に戻る／鍵なしのプレビュー配備で
+//     管理ページ・管理APIが無認証全公開に落ちる穴があった（監査 2026-07-04 HIGH）。それを塞ぐ。
+//   鍵が揃えば下の通常フロー（protectedMw）で認証保護されるので、この分岐は通らない。
+// （auth ラッパを呼ぶと鍵未設定でも UntrustedHost 等のノイズが出るため、無効時は auth に触れない）
 export default function middleware(req: NextRequest, ev: NextFetchEvent) {
-  if (!isAuthEnabled()) return NextResponse.next();
+  if (!isAuthEnabled()) {
+    if (shouldProtectPath(req.nextUrl.pathname)) {
+      return new NextResponse(
+        "この管理ページは認証設定が完了するまで利用できません。管理者にお問い合わせください。",
+        {
+          status: 503,
+          headers: {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Cache-Control": "no-store",
+          },
+        }
+      );
+    }
+    return NextResponse.next();
+  }
 
   // 認証ONの場合でも WebView リダイレクトは先に実行する
   // （protectedMw 内でも呼ぶが、auth ラッパ起動前に確実に拾う）
