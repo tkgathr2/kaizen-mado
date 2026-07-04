@@ -7,10 +7,11 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@/auth";
+import { isAuthEnabled } from "@/lib/authz";
 import { verifyProposalToken } from "@/lib/line";
 import { fetchTicketByPageId } from "@/lib/tickets";
 import { applyGoAction } from "@/lib/govote";
-import { isAuthorizedUser } from "@/lib/line";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,6 +24,14 @@ interface ActionRequest {
 
 export async function POST(req: NextRequest) {
   try {
+    // 認証必須（有効時）：ログイン済みでなければ GO/却下（不可逆・自動改修起動）を実行させない。
+    if (isAuthEnabled()) {
+      const session = await auth();
+      if (!session?.user) {
+        return NextResponse.json({ ok: false, error: "認証が必要です" }, { status: 401 });
+      }
+    }
+
     const body = (await req.json()) as ActionRequest;
     const { pageId, action, token } = body;
 

@@ -91,7 +91,16 @@ export function isOriginAllowed(
  * 公開（false）：窓口(/)・起票導線 /api/chat /api/submit・静的アセット・その他すべて。
  * 比較は前後空白除去・大文字小文字無視。末尾スラッシュは無視。
  */
-const PROTECTED_PREFIXES = ["/board", "/dashboard", "/api/board", "/api/stats"] as const;
+// 管理データAPIは社長のLINE会話・社内チケット内容を返すため必ず保護する。
+// /api/kaizen/ticket・context は lineChat（社長の生発言）を返すので特に重要。
+const PROTECTED_PREFIXES = [
+  "/board",
+  "/dashboard",
+  "/api/board",
+  "/api/stats",
+  "/api/kaizen/ticket",
+  "/api/kaizen/context",
+] as const;
 
 export function shouldProtectPath(pathname: string | null | undefined): boolean {
   const p = (pathname ?? "").trim().toLowerCase().replace(/\/+$/, "");

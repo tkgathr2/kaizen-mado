@@ -23,6 +23,26 @@ export interface QueuedNotification {
 const QUEUE: QueuedNotification[] = []; // インメモリ（本番は Redis）
 const SENT_LOG = new Map<string, Date>(); // ticketId+type → 最後の送信時刻（再送抑止用）
 
+// Vercel は既定 UTC で動くため getHours() は使えない（静穏時間・朝バッチが9時間ズレる）。
+// 必ず JST（Asia/Tokyo）の時・分を明示的に算出する。hourCycle:h23 で 0〜23（深夜0時が"24"にならない）。
+function jstHour(d: Date = new Date()): number {
+  return Number(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "Asia/Tokyo",
+      hour: "2-digit",
+      hourCycle: "h23",
+    }).format(d)
+  );
+}
+function jstMinute(d: Date = new Date()): number {
+  return Number(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "Asia/Tokyo",
+      minute: "2-digit",
+    }).format(d)
+  );
+}
+
 /**
  * 通知をキューに追加（即座には送信しない）。
  * @param ticketId チケット ID
@@ -72,9 +92,8 @@ export async function enqueueNotification(
  * 22:00-07:00 は保留、08:00-21:59 は送信対象。
  */
 export function getReadyNotifications(): QueuedNotification[] {
-  const now = new Date();
-  const hour = now.getHours();
-  // 静穏時間: 22:00-06:59（22-23, 0-6）
+  const hour = jstHour();
+  // 静穏時間: 22:00-06:59 JST（22-23, 0-6）／07:00 JST 解禁
   const isQuietHour = hour >= 22 || hour < 7;
 
   if (isQuietHour) {
@@ -147,11 +166,10 @@ export async function sendBatchNotifications(notifications: QueuedNotification[]
  * ③ SENT_LOG を更新
  */
 export async function runDailyNotificationBatch(): Promise<void> {
-  const now = new Date();
-  const hour = now.getHours();
-  const minutes = now.getMinutes();
+  const hour = jstHour();
+  const minutes = jstMinute();
 
-  // 08:00-08:30 の間に走る想定（CronJob / ScheduledTask）
+  // 08:00-08:30 JST の間に走る想定（CronJob / ScheduledTask）
   if (hour !== 8 || minutes >= 30) {
     console.log(`[notification] 定時ではない時刻（${hour}:${minutes}）。スキップ。`);
     return;
