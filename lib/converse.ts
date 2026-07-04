@@ -25,8 +25,10 @@ const DEFAULT_MODEL = "claude-sonnet-4-6";
 // status   = 状況質問（今どう？／詰まってるのある？） → チケット状況から会話で答える
 // request  = 要望（○○を直して／△△を改善して） → 改善チケット（受付）を自動作成
 // command  = 既存案件への指示（さっきのGO／ステレポのやつ却下） → 参照解決して applyGoAction
+// question = 質問（○○ってどうやるの？何ですか？） → 会話で答える（チケット化しない）
+// fragment = 断片・文脈不足（「あれ？」「何これ？」） → 聞き返してからチケット化
 // chat     = それ以外の雑談・あいさつ → 会話で軽く返す（チケットは作らない）
-export type Intent = "status" | "request" | "command" | "chat";
+export type Intent = "status" | "request" | "command" | "question" | "fragment" | "chat";
 export type RefAction = "go" | "fix" | "reject";
 
 export interface IntentResult {
@@ -70,6 +72,12 @@ const RE_BUG = /(バグ|エラー|落ちる|動かない|おかしい|壊れて|
 const RE_NEW = /(新(しく|機能)|追加して|つけて|付けて|作って|つくって|できるように)/;
 const RE_HIGH = /(至急|急ぎ|今すぐ|大至急|止まって|使えない|全員|困って|やばい|重大|致命)/;
 const RE_LOW = /(いつか|余裕(が)?あれば|そのうち|できれば|気になる程度|細かい|ちょっとした)/;
+
+// 質問（情報質問・確認）。「何ですか」「なぜ」「どうやって」等。要望（~してほしい）とは異なる。
+const RE_QUESTION = /(何(です|か|ですか)|なぜ|どうして|どうやって|やり方|方法|どこ|誰|いつ|説明|教えて|参考|例|サンプル|テンプレート|やり方|使い方|設定方法|仕様|スペック)/i;
+
+// 断片（短い・不完全・文脈不足）。「あれ？」「これ？」「何これ？」等。
+const RE_FRAGMENT = /^(あ(れ|の)?|こ(れ|の)?|そ(れ|の)?|何|え|へ|ん|えっ|は|ぁ|あ\?|これ\?|何これ|何この|ど(ういう|うなって))(\?|？|$)/;
 
 /** 文面からチケットID（KZ-5 等）を1つ抜く。表記ゆれ（KZ5 / KZ－5 / KZ 5）を正規化。無ければ null。 */
 export function extractTicketId(text: string | null | undefined): string | null {
@@ -141,42 +149,56 @@ export function makeTitle(text: string | null | undefined): string {
  * ルールベースの意図判定（LLM不要・決定論）。
  * 鍵が無くても効く一次判定。優先順位は：
  *  1) GO/修正/却下 の動詞 ＋（ID or 参照語）＝ command（既存案件への指示）
- *  2) 状況質問の語 ＝ status
- *  3) 要望の語 ＝ request
- *  4) それ以外 ＝ chat
+ *  2) 短い・不完全＝ fragment（聞き返してからチケット化）
+ *  3) 状況質問の語 ＝ status
+ *  4) 情報質問の語 ＝ question（要望ではなく質問）
+ *  5) 要望の語 ＝ request
+ *  6) それ以外 ＝ chat
  */
 export function classifyIntent(text: string | null | undefined): IntentResult {
-  const t = (text || "").trim();
+  const t = (text || “”).trim();
   const ticketId = extractTicketId(t);
 
   // ── 1) 既存案件への指示（command） ──
-  // GO/修正/却下 の動詞があり、かつ「ID or 参照語」で“既存の何か”を指していると分かる場合。
+  // GO/修正/却下 の動詞があり、かつ「ID or 参照語」で”既存の何か”を指していると分かる場合。
   const hasRef = ticketId !== null || RE_REFERENCE.test(t);
   if (RE_REJECT.test(t) && hasRef) {
-    return { intent: "command", refAction: "reject", ticketId };
+    return { intent: “command”, refAction: “reject”, ticketId };
   }
   // 「修正して」は要望(request)とも取れるが、ID/参照語があれば既存案件への修正指示とみなす。
   if (RE_FIX.test(t) && hasRef) {
-    return { intent: "command", refAction: "fix", ticketId };
+    return { intent: “command”, refAction: “fix”, ticketId };
   }
   if (RE_GO.test(t) && hasRef) {
-    return { intent: "command", refAction: "go", ticketId };
+    return { intent: “command”, refAction: “go”, ticketId };
   }
   // ID だけ来て動詞が無いとき：既存案件に触れているが操作不明 → command(go扱いにはしない)。
   // 安全側で status（その件どうなってる？）として状況を返す。
   if (ticketId && RE_STATUS.test(t)) {
-    return { intent: "status", ticketId };
+    return { intent: “status”, ticketId };
   }
 
-  // ── 2) 状況質問（status） ──
+  // ── 2) 断片・文脈不足（fragment） ──
+  // 短い・「あれ？」「何これ？」など不完全な文 → 聞き返してからチケット化
+  if (RE_FRAGMENT.test(t)) {
+    return { intent: “fragment”, ticketId };
+  }
+
+  // ── 3) 状況質問（status） ──
   if (RE_STATUS.test(t) && !RE_REQUEST.test(t)) {
-    return { intent: "status", ticketId };
+    return { intent: “status”, ticketId };
   }
 
-  // ── 3) 要望（request） ──
+  // ── 4) 情報質問（question） ──
+  // 「何ですか」「どうやって」など、要望ではなく情報を求めている。チケット化しない。
+  if (RE_QUESTION.test(t) && !RE_REQUEST.test(t)) {
+    return { intent: “question”, ticketId };
+  }
+
+  // ── 5) 要望（request） ──
   if (RE_REQUEST.test(t)) {
     return {
-      intent: "request",
+      intent: “request”,
       ticketId: null,
       request: {
         system: guessSystem(t),
@@ -188,8 +210,8 @@ export function classifyIntent(text: string | null | undefined): IntentResult {
     };
   }
 
-  // ── 4) それ以外＝雑談 ──
-  return { intent: "chat", ticketId };
+  // ── 6) それ以外＝雑談 ──
+  return { intent: “chat”, ticketId };
 }
 
 // ── 参照解決（複数LINEが来た時、前のチケットに返せる） ──
