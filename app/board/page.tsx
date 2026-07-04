@@ -56,6 +56,9 @@ export default function BoardPage() {
   const [data, setData] = useState<BoardData | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  // 列ごとの折りたたみ状態。モバイル初回表示では「完了」を畳んで現役チケットを先に見せる。
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const didInitCollapse = useRef(false);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async () => {
@@ -80,6 +83,27 @@ export default function BoardPage() {
       if (timer.current) clearInterval(timer.current);
     };
   }, [load]);
+
+  // 初回データ到着時のみ：モバイル幅なら「完了」列を畳む（開閉操作はその後ユーザーに委ねる）。
+  useEffect(() => {
+    if (!data || didInitCollapse.current) return;
+    didInitCollapse.current = true;
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 719px)").matches) {
+      setCollapsed({ 完了: true });
+    }
+  }, [data]);
+
+  const toggleCol = (state: string) =>
+    setCollapsed((p) => ({ ...p, [state]: !p[state] }));
+
+  // サマリーチップ→該当列へスクロール（畳まれていれば開く）。
+  // smooth は展開に伴う再レイアウトで中断されることがあるため、確実な即時ジャンプにする。
+  const jumpToCol = (state: string) => {
+    setCollapsed((p) => ({ ...p, [state]: false }));
+    setTimeout(() => {
+      document.getElementById(`col-${state}`)?.scrollIntoView({ block: "start" });
+    }, 80);
+  };
 
   return (
     <div className="board">
@@ -127,24 +151,45 @@ export default function BoardPage() {
               .map(([state, count]) => {
                 const m = metaOf(state);
                 return (
-                  <span key={state} className="board-summary-item">
+                  <button
+                    key={state}
+                    type="button"
+                    className="board-summary-item"
+                    onClick={() => jumpToCol(state)}
+                    title={`${state}の列へ移動`}
+                  >
                     <span aria-hidden>{m.emoji}</span>
                     {state}: {count}
-                  </span>
+                  </button>
                 );
               })}
           </div>
           <div className="board-cols">
             {data.columns.map((col) => {
               const m = metaOf(col.state);
+              const isCollapsed = !!collapsed[col.state];
               return (
-                <section key={col.state} className="board-col">
-                  <div className="board-col-head" style={{ borderTopColor: m.color }}>
+                <section
+                  key={col.state}
+                  id={`col-${col.state}`}
+                  className={`board-col${col.cards.length === 0 ? " is-empty" : ""}${isCollapsed ? " is-collapsed" : ""}`}
+                >
+                  <button
+                    type="button"
+                    className="board-col-head"
+                    style={{ borderTopColor: m.color }}
+                    onClick={() => toggleCol(col.state)}
+                    aria-expanded={!isCollapsed}
+                    title={isCollapsed ? "タップで開く" : "タップで畳む"}
+                  >
                     <span className="board-col-name">
                       <span aria-hidden>{m.emoji}</span> {col.state}
                     </span>
                     <span className="board-col-count">{col.cards.length}</span>
-                  </div>
+                    <span className="board-col-chevron" aria-hidden>
+                      {isCollapsed ? "▸" : "▾"}
+                    </span>
+                  </button>
                   <div className="board-col-body">
                     {col.cards.length === 0 && <div className="board-empty">—</div>}
                     {col.cards.map((c) => (
