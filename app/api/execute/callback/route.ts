@@ -21,6 +21,7 @@ import { checkCronSecret } from "@/lib/cronAuth";
 import { isInfraError, buildInfraNoticeText, pushText } from "@/lib/line";
 import { isValidFailureClass, type FailureClass } from "@/lib/kz-state";
 import { postToSlack } from "@/lib/slack";
+import { enqueueNotification } from "@/lib/notification";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -117,6 +118,12 @@ export async function POST(req: NextRequest) {
       // 完了報告LINE（社長指示 2026-07-03「GOしたのに完了したか分からない」対策）。
       // GO済み案件の終点なので1回だけ・fail-safe（送信失敗でもループは止めない）。
       await pushText(buildMergedText(current, prUrl)).catch(() => false);
+      // 日次ダイジェスト（改善⑤）へ完了を1件積む＝朝8時のふりかえりまとめ用。
+      await enqueueNotification(
+        ticketId,
+        "completion",
+        `「${current.title}」を本番反映しました`
+      ).catch(() => {});
       // 学び還元（KNOWHOW_ENABLED時のみ実働。OFFなら no-op）。
       const learn = await returnLearningFromCompleted(5).catch(() => ({ memorized: 0 }));
       return NextResponse.json({ ok: true, state: "完了", learned: learn.memorized });
@@ -145,6 +152,12 @@ export async function POST(req: NextRequest) {
       // （実測でKZ-24/25/26/32/37の5本が無音滞留）。1チケット1回・de-dup付き
       // （master側の素のpushTextはreaper再走で連打し得るため、de-dup付きへ統合）。
       await notifyReviewOnce(current, prUrl, detail).catch(() => false);
+      // 日次ダイジェスト（改善⑤）へレビュー待ちを1件積む。
+      await enqueueNotification(
+        ticketId,
+        "pr_ready",
+        `「${current.title}」のPRができました（レビュー待ち）`
+      ).catch(() => {});
       return NextResponse.json({ ok: true, state: "レビュー" });
     }
 
@@ -173,6 +186,14 @@ export async function POST(req: NextRequest) {
       { heading: "実装失敗（差し戻し）", body: `[${failureClass}] ${detail || "(理由不明)"}` },
     ]);
     await notifyStuckOnce(current, detail || "不明（くわしくは /board をご確認ください）");
+    // 日次ダイジェスト（改善⑤）へエラーを1件積む。要約が不明瞭（空/「不明」）なら
+    // enqueue 側で積まれない（「理由：不明」の禁止）＝実エラー文があるときだけ載る。
+    await enqueueNotification(
+      ticketId,
+      "error",
+      `「${current.title}」の自動改修が失敗（差し戻し）`,
+      detail
+    ).catch(() => {});
     return NextResponse.json({ ok: true, state: "差し戻し" });
   } catch (err) {
     console.error("[execute/callback] failed:", (err as Error).message);

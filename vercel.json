@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/kz-sweep",
       "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/cron/notification-batch",
+      "schedule": "0 23 * * *"
     }
   ]
 }

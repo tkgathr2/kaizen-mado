@@ -25,6 +25,7 @@ import {
 } from "@/lib/orchestrate";
 import { pushText, truncateForLine, notionPageUrl, stageBar, BOARD_URL, msgHead } from "@/lib/line";
 import { checkCronSecret } from "@/lib/cronAuth";
+import { enqueueNotification } from "@/lib/notification";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -172,6 +173,12 @@ export async function POST(req: NextRequest) {
           // ワークフロー側の安全網（CI(tsc/test/build)緑＋禁止パス非接触）を満たすときだけ実行される。
           plan.push(buildDispatchPayload(ticket, target, true));
           dispatched.push(ticket.ticketId);
+          // 日次ダイジェスト（改善⑤）：着手を1件だけ積む。即時FYIは送らない（新仕様）。
+          await enqueueNotification(
+            ticket.ticketId,
+            "execution_started",
+            `「${truncateForLine(ticket.title, 30)}」の自動改修を開始（${target.repo}）`
+          ).catch(() => {});
         } catch (e) {
           await updateTicketState(ticket.pageId, "着手").catch((e2) => {
             console.error("[execute] plan経路の巻き戻し失敗", ticket.ticketId, (e2 as Error).message);
@@ -201,8 +208,14 @@ export async function POST(req: NextRequest) {
         await appendDiscussionBlocks(ticket.pageId, [
           { heading: "自動着手", body: `実行ワークフローを起動（${target.repo}）。AIが改修→PR作成→レビュー待ち（PRレビュー型）。` },
         ]);
-        // 新仕様：着手の進捗FYI（旧「🔧 いま直しています」）は送らない（自分から送るLINEは
-        // 「GO伺い」と「詰まり連絡」だけ）。状態遷移・dispatchは維持する。
+        // 新仕様：着手の進捗FYI（旧「🔧 いま直しています」）は即時には送らない（自分から送る
+        // LINEは「GO伺い」と「詰まり連絡」だけ）。状態遷移・dispatchは維持する。
+        // 代わりに日次ダイジェスト（改善⑤）へ1件積む＝朝8時にまとめて1通。
+        await enqueueNotification(
+          ticket.ticketId,
+          "execution_started",
+          `「${truncateForLine(ticket.title, 30)}」の自動改修を開始（${target.repo}）`
+        ).catch(() => {});
         dispatched.push(ticket.ticketId);
       } else {
         // dispatch失敗：先に進めた「実装中」を「着手」へ巻き戻す（次のexecuteで再試行できるように）。
