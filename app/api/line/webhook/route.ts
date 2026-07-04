@@ -137,6 +137,12 @@ async function handleEvent(ev: any): Promise<void> {
     // 社長の判断（GO/却下/修正）を教師信号として全体学習に記録（非ブロッキング）。
     if (r.ok) recordInBackground(recordDecisionTurn(p.action, ticket));
     if (replyToken) await replyText(replyToken, r.reply);
+    // LINE 往復をチケットに記録（非ブロッキング）。
+    recordInBackground(
+      appendLineChat(ticket.pageId, `user: [ボタン操作: ${p.action}]`).then(() =>
+        appendLineChat(ticket.pageId, `assistant: ${r.reply}`)
+      )
+    );
     return;
   }
 
@@ -239,10 +245,19 @@ async function handleConversation(
         const created = dup
           ? { ticketId: dup.ticketId }
           : await createTicket(ticket, "社長(LINE)");
-        await safeReply(
-          replyToken,
-          `チケットにしました（${created.ticketId}）。順番に進めます。` +
-            `\n対象：${ticket.system}／${ticket.type}／重要度${ticket.importance}`
+        const reply = `チケットにしました（${created.ticketId}）。順番に進めます。` +
+          `\n対象：${ticket.system}／${ticket.type}／重要度${ticket.importance}`;
+        await safeReply(replyToken, reply);
+        // LINE 往復をチケットに記録（非ブロッキング）。
+        recordInBackground(
+          (async () => {
+            const t = await fetchTicketByPageId(created.ticketId) ||
+                     (dup ? await findGoMachiByTicketId(created.ticketId) : null);
+            if (t?.pageId) {
+              await appendLineChat(t.pageId, `user: ${text}`);
+              await appendLineChat(t.pageId, `assistant: ${reply}`);
+            }
+          })()
         );
       } catch (e) {
         console.error("[line/converse] createTicket失敗", (e as Error).message);
