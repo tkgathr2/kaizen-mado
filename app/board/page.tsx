@@ -276,6 +276,14 @@ export default function BoardPage() {
                             )}
                           </div>
                         </a>
+                        <a
+                          href={`/board/ticket/${encodeURIComponent(c.pageId)}`}
+                          className="board-card-chatlink"
+                          title="LINE会話を見る"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          💬 LINE会話
+                        </a>
                         {col.state === "GO待ち" && (
                           <div className="board-card-actions">
                             <button
