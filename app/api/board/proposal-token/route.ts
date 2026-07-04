@@ -6,7 +6,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { crypto } from "node:crypto";
+import { createHmac } from "node:crypto";
 
 const SECRET = process.env.LINE_CHANNEL_SECRET || "dev-secret";
 
@@ -16,8 +16,7 @@ const SECRET = process.env.LINE_CHANNEL_SECRET || "dev-secret";
 function generateProposalToken(pageId: string, state: string): string {
   // HMAC-SHA256 でトークンを生成
   const data = `${pageId}:${state}`;
-  const hmac = crypto
-    .createHmac("sha256", SECRET)
+  const hmac = createHmac("sha256", SECRET)
     .update(data)
     .digest("base64");
   return hmac;
