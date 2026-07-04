@@ -39,6 +39,7 @@ import {
 } from "@/lib/converse";
 import { createTicket } from "@/lib/notion";
 import { findRecentDuplicate } from "@/lib/tickets";
+import { appendLineChat } from "@/lib/kaizen-notion";
 
 // GO適用の結果が「着手」になったら、即 /api/execute を起こして実改修へ進める（応答はブロックしない）。
 function kickIfStarted(newState?: string) {
@@ -203,6 +204,12 @@ async function handleConversation(
         kickIfStarted(r.newState);
         // 社長の判断（GO/却下/修正）を教師信号として全体学習に記録（非ブロッキング）。
         if (r.ok) recordInBackground(recordDecisionTurn(intent.refAction, res.ticket, text));
+        // LINE 往復をチケットに記録（非ブロッキング）。
+        recordInBackground(
+          appendLineChat(res.ticket.pageId, `user: ${text}`).then(() =>
+            appendLineChat(res.ticket!.pageId, `assistant: ${r.reply}`)
+          )
+        );
         await safeReply(replyToken, r.reply);
         return;
       }

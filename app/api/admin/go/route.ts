@@ -8,6 +8,7 @@ import type { GoAction } from "@/lib/line";
 import { kickEndpoint } from "@/lib/trigger";
 import { checkAdminGoAuth } from "@/lib/cronAuth";
 import { waitUntil } from "@vercel/functions";
+import { disambiguateGoTarget } from "@/lib/kaizen-ai";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,7 +24,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  let body: { ticketId?: string; action?: string; note?: string } = {};
+  let body: { ticketId?: string; action?: string; note?: string; recentContext?: string } = {};
   try {
     body = await req.json();
   } catch {
@@ -39,6 +40,8 @@ export async function POST(req: NextRequest) {
   }
 
   let ticket = null;
+  let disambiguationResult = null;
+
   if (body.ticketId) {
     ticket = await findGoMachiByTicketId(body.ticketId);
     if (!ticket) {
@@ -52,16 +55,35 @@ export async function POST(req: NextRequest) {
     if (rows.length === 0) {
       return NextResponse.json({ error: "GO待ちのチケットがありません" }, { status: 404 });
     }
-    if (rows.length > 1) {
-      return NextResponse.json(
-        {
-          error: `GO待ちが${rows.length}件あります。ticketId を指定してください`,
-          tickets: rows.map((r) => ({ ticketId: r.ticketId, title: r.title, system: r.system })),
-        },
-        { status: 409 }
-      );
+    if (rows.length === 1) {
+      ticket = rows[0];
+    } else {
+      // 複数候補：recentContext があれば LLM で推定
+      if (body.recentContext) {
+        disambiguationResult = await disambiguateGoTarget(body.recentContext, rows);
+        if (disambiguationResult) {
+          ticket = rows.find((r) => r.ticketId === disambiguationResult!.ticketId) || null;
+          if (!ticket) {
+            return NextResponse.json(
+              { error: "Disambiguation result ticket not found" },
+              { status: 500 }
+            );
+          }
+        }
+      }
+
+      // LLM 推定失敗 or recentContext なし：手動指定を促す
+      if (!ticket) {
+        return NextResponse.json(
+          {
+            error: `GO待ちが${rows.length}件あります。ticketId を指定してください`,
+            candidates: rows.map((r) => ({ ticketId: r.ticketId, title: r.title, system: r.system })),
+            hint: "または recentContext（直前のメッセージ）を含めると AI で推定します",
+          },
+          { status: 409 }
+        );
+      }
     }
-    ticket = rows[0];
   }
 
   const result = await applyGoAction(action, ticket, body.note);
@@ -77,5 +99,12 @@ export async function POST(req: NextRequest) {
     newState: result.newState,
     skipped: result.skipped,
     reply: result.reply,
+    ...(disambiguationResult && {
+      disambiguation: {
+        confidence: disambiguationResult.confidence,
+        reason: disambiguationResult.reason,
+        hasMultipleCandidates: disambiguationResult.hasMultipleCandidates,
+      },
+    }),
   });
 }
