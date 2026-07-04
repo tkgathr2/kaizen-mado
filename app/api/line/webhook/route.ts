@@ -37,7 +37,6 @@ import {
   type ResolveContext,
   type ConverseTurn,
 } from "@/lib/converse";
-import { enqueueNotification } from "@/lib/notification";
 import { createTicket } from "@/lib/notion";
 import { findRecentDuplicate } from "@/lib/tickets";
 import { appendLineChat } from "@/lib/kaizen-notion";

@@ -22,6 +22,7 @@ import type { TicketRow } from "@/lib/tickets";
 import { checkCronSecret } from "@/lib/cronAuth";
 import { TIMEOUTS, KZ_STATUS } from "@/lib/kz-state";
 import { lineEnabled, pushText } from "@/lib/line";
+import { enqueueNotification } from "@/lib/notification";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -108,6 +109,11 @@ async function processTicket(row: TicketRow, now: number): Promise<SweepResult> 
         await notify(
           `⏰ ${row.ticketId}「${row.title}」\nGO待ちになってから48時間以上経過しています。ご確認をお願いします。\n対象: ${row.system}`
         );
+        await enqueueNotification(
+          row.ticketId,
+          "stalled",
+          `「${row.title}」がGO待ちのまま48時間以上（${row.system}）`
+        ).catch(() => {});
         return { ...base, action: "reminded", reason: "AWAITING_GO 48h remind" };
       }
     }
@@ -143,6 +149,11 @@ async function processTicket(row: TicketRow, now: number): Promise<SweepResult> 
         await notify(
           `⏰ ${row.ticketId}「${row.title}」\n差し戻しになってから48時間以上経過しています。\n対象: ${row.system}`
         );
+        await enqueueNotification(
+          row.ticketId,
+          "stalled",
+          `「${row.title}」が差し戻しのまま48時間以上（${row.system}）`
+        ).catch(() => {});
         return { ...base, action: "reminded", reason: "BLOCKED 48h remind" };
       }
     }
@@ -163,6 +174,11 @@ async function processTicket(row: TicketRow, now: number): Promise<SweepResult> 
         await notify(
           `⏰ ${row.ticketId}「${row.title}」\nレビュー待ちになってから7日以上経過しています。\n対象: ${row.system}`
         );
+        await enqueueNotification(
+          row.ticketId,
+          "stalled",
+          `「${row.title}」がレビュー待ちのまま7日以上（${row.system}）`
+        ).catch(() => {});
         return { ...base, action: "reminded", reason: "REVIEW 7d remind" };
       }
     }
