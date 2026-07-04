@@ -308,11 +308,13 @@ button.ghost:hover:not(:disabled) { background: #f5f3ec; }
   display: flex; flex-wrap: wrap; gap: 12px 16px; padding: 2px 2px 12px;
   font-size: 11.5px; color: var(--muted);
 }
-.board-summary-item { 
+.board-summary-item {
   display: flex; align-items: center; gap: 4px;
   background: #f8f6f0; border-radius: 999px; padding: 3px 8px;
   border: 1px solid #ebe7dc;
+  font: inherit; color: inherit; cursor: pointer;
 }
+.board-summary-item:hover { border-color: var(--brand); }
 .board-note {
   border: 1px solid var(--line); background: #fffdf8; border-radius: 12px;
   padding: 14px 16px; font-size: 13.5px; color: var(--muted);
@@ -328,10 +330,15 @@ button.ghost:hover:not(:disabled) { background: #f5f3ec; }
 }
 .board-col-head {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 11px 13px; border-top: 3px solid var(--brand); border-radius: 14px 14px 0 0;
+  padding: 11px 13px; border: none; border-top: 3px solid var(--brand);
+  border-radius: 14px 14px 0 0;
   background: #fffdf8;
+  width: 100%; font-family: inherit; text-align: left; cursor: pointer;
 }
-.board-col-name { font-size: 13.5px; font-weight: 600; color: var(--ink); }
+.board-col-name { font-size: 13.5px; font-weight: 600; color: var(--ink); flex: 1; min-width: 0; }
+.board-col-chevron { font-size: 11px; color: var(--muted); flex: none; }
+.board-col.is-collapsed .board-col-body { display: none; }
+.board-col.is-collapsed .board-col-head { border-radius: 14px; }
 .board-col-count {
   font-size: 12px; color: var(--muted); background: #efece3; border-radius: 999px;
   padding: 1px 9px; font-weight: 600; flex: none;
@@ -368,6 +375,26 @@ button.ghost:hover:not(:disabled) { background: #f5f3ec; }
 .board-card-done-date { font-size: 11px; color: #3f7a3f; margin-left: 4px; font-weight: 600; }
 .board-footer { text-align: center; color: var(--muted); font-size: 11.5px; padding: 14px 0 8px; }
 .board-footer a { color: var(--brand); text-decoration: none; }
+
+/* ── 状況ボード モバイル（≤719px）：横スクロールカンバン→縦積みアコーディオン ── */
+@media (max-width: 719px) {
+  .board { padding: 0 12px 20px; }
+  .board-head { padding: 14px 0 8px; gap: 10px; }
+  .board-head h1 { font-size: 17px; }
+  .board-logo { width: 34px; height: 34px; }
+  .board-sub { font-size: 10.5px; }
+  .board-refresh { padding: 6px 11px; font-size: 12px; }
+  .board-cols {
+    flex-direction: column; overflow-x: visible; gap: 10px;
+    scroll-snap-type: none; align-items: stretch;
+  }
+  .board-col { width: 100%; flex: none; scroll-margin-top: 8px; }
+  /* 空列はモバイルでは出さない（サマリーチップも0件は非表示なので整合する） */
+  .board-col.is-empty { display: none; }
+  /* タップしやすく */
+  .board-col-head { padding: 13px 14px; }
+  .board-card { padding: 12px 13px; }
+}
 
 /* ───── 埋め込みモード（widget.js の iframe 内 / ?embed=1） ─────
    ヘッダー・フッターはJSX側で出さない。狭いパネルに収まるよう余白と文字を少し詰める。
