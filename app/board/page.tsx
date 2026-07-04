@@ -289,16 +289,18 @@ export default function BoardPage() {
                             <button
                               className="board-action-btn go-btn"
                               onClick={() => handleBoardAction(c.pageId, "go")}
+                              disabled={actionInFlight === c.pageId}
                               title="このチケットにGOします"
                             >
-                              ✓ GO
+                              {actionInFlight === c.pageId ? "…" : "✓ GO"}
                             </button>
                             <button
                               className="board-action-btn reject-btn"
                               onClick={() => handleBoardAction(c.pageId, "reject")}
+                              disabled={actionInFlight === c.pageId}
                               title="このチケットを却下します"
                             >
-                              ✕ 却下
+                              {actionInFlight === c.pageId ? "…" : "✕ 却下"}
                             </button>
                           </div>
                         )}

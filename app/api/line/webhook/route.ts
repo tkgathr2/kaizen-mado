@@ -295,8 +295,8 @@ async function handleConversation(
       try {
         // インスタンス跨ぎの二重起票防止（best-effort・失敗時は通常作成へ）。
         const dup = await findRecentDuplicate(ticket, "社長(LINE)");
-        const created = dup
-          ? { ticketId: dup.ticketId }
+        const created: { ticketId: string; pageId: string } = dup
+          ? { ticketId: dup.ticketId, pageId: dup.pageId }
           : await createTicket(ticket, "社長(LINE)");
         const reply = `チケットにしました（${created.ticketId}）。順番に進めます。` +
           `\n対象：${ticket.system}／${ticket.type}／重要度${ticket.importance}`;
@@ -304,11 +304,11 @@ async function handleConversation(
         // LINE 往復をチケットに記録（非ブロッキング）。
         recordInBackground(
           (async () => {
-            const t = await fetchTicketByPageId(created.ticketId) ||
-                     (dup ? await findGoMachiByTicketId(created.ticketId) : null);
-            if (t?.pageId) {
-              await appendLineChat(t.pageId, `user: ${text}`);
-              await appendLineChat(t.pageId, `assistant: ${reply}`);
+            // createTicket / dup どちらも pageId を返すので、それを直接使う
+            // （旧実装は ticketId を fetchTicketByPageId に渡していて常に取得失敗していた）。
+            if (created.pageId) {
+              await appendLineChat(created.pageId, `user: ${text}`);
+              await appendLineChat(created.pageId, `assistant: ${reply}`);
             }
           })()
         );

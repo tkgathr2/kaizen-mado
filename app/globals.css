@@ -630,6 +630,10 @@ button.attach-btn.edit-btn { font-size: 20px; }
 .board-action-btn.reject-btn:hover {
   background: #a63e24; box-shadow: 0 2px 8px rgba(196, 95, 63, 0.3);
 }
+/* 実行中（連打防止）：GO は不可逆でデプロイを起こすため、多重送信を必ず止める。 */
+.board-action-btn:disabled {
+  opacity: 0.5; cursor: not-allowed; box-shadow: none;
+}
 
 /* モバイル：ボタンを下に配置、フルスタック */
 @media (max-width: 719px) {
