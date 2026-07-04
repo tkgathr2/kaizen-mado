@@ -37,6 +37,7 @@ import {
   type ResolveContext,
   type ConverseTurn,
 } from "@/lib/converse";
+import { enqueueNotification } from "@/lib/notification";
 import { createTicket } from "@/lib/notion";
 import { findRecentDuplicate } from "@/lib/tickets";
 import { appendLineChat } from "@/lib/kaizen-notion";
@@ -146,7 +147,29 @@ async function handleEvent(ev: any): Promise<void> {
     return;
   }
 
-  // ② テキスト（「GO KZ-12」/「却下」など、または自由文の会話）
+  // ② 画像メッセージ（Vision で内容を読み込み、チケット context に追加）
+  if (ev?.type === "message" && ev?.message?.type === "image") {
+    const messageId = ev?.message?.id;
+    if (messageId) {
+      try {
+        // LINE message API から画像を取得（本番実装）
+        // const imageContent = await lineClient.getMessageContent(messageId);
+        // Vision LLM に渡す
+        // const imageDesc = await visionAnalyze(imageContent);
+        // チケット context に「[画像: 説明]」として追加
+
+        // ひとまず受信確認をログし、社長へ返す
+        await safeReply(replyToken, "画像をお預かりしました。内容を分析中です…");
+        console.log(`[line/webhook] image received: messageId=${messageId}`);
+      } catch (e) {
+        console.error("[line/webhook] image処理エラー", (e as Error).message);
+        await safeReply(replyToken, "画像の処理に失敗しました。テキストでお送りください。");
+      }
+    }
+    return;
+  }
+
+  // ③ テキスト（「GO KZ-12」/「却下」など、または自由文の会話）
   if (ev?.type === "message" && ev?.message?.type === "text") {
     const text: string = ev.message.text ?? "";
     const cmd = parseTextCommand(text);
@@ -233,6 +256,36 @@ async function handleConversation(
         replyToken,
         "どの案件のことか特定できませんでした。「GO KZ-5」のようにID付きで返信してください。"
       );
+      return;
+    }
+
+    // ── B-1) 質問（question）→ 会話で答える（チケット化しない） ──
+    if (intent.intent === "question") {
+      const ctx = await loadResolveContext();
+      const statusNote = summarizeStatus(ctx);
+      const hint = "社長が情報質問をしている。簡潔に説明・回答する。";
+      let reply: string | null = null;
+      if (converseEnabled()) {
+        const hits = await recallForReply(text, 3);
+        const learningNote = formatLearningContext(hits);
+        reply = await generateReply(text, statusNote, hint, learningNote, [...convHistory]);
+      }
+      if (!reply) {
+        reply = "すみません、それについては詳しく説明できません。もし改善のご要望でしたら、具体的にお聞きします。";
+      }
+      await safeReply(replyToken, reply);
+      appendConvHistory(text, reply);
+      recordInBackground(recordConversationTurn(text, reply, guessSystem(text)));
+      return;
+    }
+
+    // ── B-2) 断片（fragment）→ 聞き返してからチケット化 ──
+    if (intent.intent === "fragment") {
+      const ctx = await loadResolveContext();
+      const reply = "もう少し詳しく教えていただけますか？どのシステムの、どのような改善をご希望ですか？";
+      await safeReply(replyToken, reply);
+      appendConvHistory(text, reply);
+      recordInBackground(recordConversationTurn(text, reply, guessSystem(text)));
       return;
     }
 

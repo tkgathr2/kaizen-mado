@@ -591,3 +591,52 @@ button.attach-btn.edit-btn { font-size: 20px; }
   transition: background 0.15s ease, border-color 0.15s ease;
 }
 .template-chip:hover { background: #fbeee8; border-color: var(--brand); color: var(--brand); }
+
+/* ───── ボード：GO/却下ボタン ───── */
+.board-card-wrap {
+  position: relative;
+}
+.board-card-wrap.has-actions .board-card {
+  padding-right: 100px; /* ボタンエリア用スペース */
+}
+.board-card-actions {
+  position: absolute; top: 0; right: 0; bottom: 0;
+  display: flex; gap: 6px; align-items: center; padding: 8px;
+  background: linear-gradient(to left, #faf9f5 60%, rgba(250, 249, 245, 0));
+}
+.board-action-btn {
+  font-size: 12px; font-weight: 600; padding: 6px 12px;
+  border: 1px solid transparent; border-radius: 6px; cursor: pointer;
+  white-space: nowrap; flex: none; transition: all 0.15s ease;
+}
+.board-action-btn.go-btn {
+  background: #3f7a3f; color: #fff;
+}
+.board-action-btn.go-btn:hover {
+  background: #2d5a2d; box-shadow: 0 2px 8px rgba(63, 122, 63, 0.3);
+}
+.board-action-btn.reject-btn {
+  background: #c45f3f; color: #fff;
+}
+.board-action-btn.reject-btn:hover {
+  background: #a63e24; box-shadow: 0 2px 8px rgba(196, 95, 63, 0.3);
+}
+
+/* モバイル：ボタンを下に配置、フルスタック */
+@media (max-width: 719px) {
+  .board-card-wrap.has-actions .board-card {
+    padding-right: 0; padding-bottom: 56px;
+  }
+  .board-card-actions {
+    position: absolute; bottom: 0; left: 0; right: 0; top: auto;
+    background: #f5f1e8; border-top: 1px solid var(--line);
+    flex-direction: row; gap: 0; justify-content: stretch;
+  }
+  .board-action-btn {
+    flex: 1; border-radius: 0;
+    border-right: 1px solid var(--line);
+  }
+  .board-action-btn:last-child {
+    border-right: none;
+  }
+}

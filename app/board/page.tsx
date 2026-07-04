@@ -60,6 +60,7 @@ export default function BoardPage() {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const didInitCollapse = useRef(false);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [actionInFlight, setActionInFlight] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -103,6 +104,37 @@ export default function BoardPage() {
     setTimeout(() => {
       document.getElementById(`col-${state}`)?.scrollIntoView({ block: "start" });
     }, 80);
+  };
+
+  const handleBoardAction = async (pageId: string, action: "go" | "reject") => {
+    setActionInFlight(pageId);
+    try {
+      // サーバーからトークンを取得してから操作を実行
+      const tokenResp = await fetch(`/api/board/proposal-token?pageId=${encodeURIComponent(pageId)}`);
+      const tokenData = await tokenResp.json();
+      if (!tokenData.token) {
+        alert("トークン取得に失敗しました");
+        return;
+      }
+
+      const resp = await fetch("/api/board/action", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ pageId, action, token: tokenData.token }),
+      });
+      const result = await resp.json();
+      if (!result.ok) {
+        alert(`操作に失敗しました: ${result.error}`);
+        return;
+      }
+      alert(`✓ ${action === "go" ? "GO" : "却下"} を実行しました`);
+      // 即座に再読み込み
+      await load();
+    } catch (e) {
+      alert(`エラー: ${(e as Error).message}`);
+    } finally {
+      setActionInFlight(null);
+    }
   };
 
   return (
@@ -193,54 +225,76 @@ export default function BoardPage() {
                   <div className="board-col-body">
                     {col.cards.length === 0 && <div className="board-empty">—</div>}
                     {col.cards.map((c) => (
-                      <a
+                      <div
                         key={c.pageId}
-                        className="board-card"
-                        href={c.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        title="Notionでチケット全文を開く"
+                        className={`board-card-wrap${col.state === "GO待ち" ? " has-actions" : ""}`}
                       >
-                        <div className="board-card-top">
-                          <span className="board-card-id">{c.ticketId || "KZ-?"}</span>
-                          <span className="board-card-sys">{c.system}</span>
-                        </div>
-                        <div className="board-card-title">{c.title}</div>
-                        <div className="board-card-foot">
-                          {c.type && <span className="board-tag">{c.type}</span>}
-                          {/* 優先度バッジ（新）。旧チケット（priority無し）は出さず重要度のみ表示。 */}
-                          {c.priority ? (
-                            <span
-                              className="board-prio"
-                              style={{ background: PRIO_COLOR[c.priority] ?? "#5F5E5A" }}
-                            >
-                              優先度{c.priority}
-                            </span>
-                          ) : (
-                            c.importance && (
+                        <a
+                          className="board-card"
+                          href={c.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          title="Notionでチケット全文を開く"
+                        >
+                          <div className="board-card-top">
+                            <span className="board-card-id">{c.ticketId || "KZ-?"}</span>
+                            <span className="board-card-sys">{c.system}</span>
+                          </div>
+                          <div className="board-card-title">{c.title}</div>
+                          <div className="board-card-foot">
+                            {c.type && <span className="board-tag">{c.type}</span>}
+                            {/* 優先度バッジ（新）。旧チケット（priority無し）は出さず重要度のみ表示。 */}
+                            {c.priority ? (
                               <span
-                                className="board-tag"
-                                style={{ color: IMP_COLOR[c.importance] ?? "#83807a" }}
+                                className="board-prio"
+                                style={{ background: PRIO_COLOR[c.priority] ?? "#5F5E5A" }}
                               >
-                                重要度{c.importance}
+                                優先度{c.priority}
                               </span>
-                            )
-                          )}
-                          {(typeof c.urgency === "number" ||
-                            typeof c.importanceScore === "number") && (
-                            <span className="board-tag" title="緊急度／重要度（各10点満点）">
-                              {typeof c.urgency === "number" ? c.urgency : "—"}／
-                              {typeof c.importanceScore === "number" ? c.importanceScore : "—"}
-                            </span>
-                          )}
-                          {c.lastEdited && (
-                            <span className="board-card-time">{relTime(c.lastEdited)}</span>
-                          )}
-                          {col.state === "完了" && c.statusChangedAt && (
-                            <span className="board-card-done-date">{doneDateMD(c.statusChangedAt)}</span>
-                          )}
-                        </div>
-                      </a>
+                            ) : (
+                              c.importance && (
+                                <span
+                                  className="board-tag"
+                                  style={{ color: IMP_COLOR[c.importance] ?? "#83807a" }}
+                                >
+                                  重要度{c.importance}
+                                </span>
+                              )
+                            )}
+                            {(typeof c.urgency === "number" ||
+                              typeof c.importanceScore === "number") && (
+                              <span className="board-tag" title="緊急度／重要度（各10点満点）">
+                                {typeof c.urgency === "number" ? c.urgency : "—"}／
+                                {typeof c.importanceScore === "number" ? c.importanceScore : "—"}
+                              </span>
+                            )}
+                            {c.lastEdited && (
+                              <span className="board-card-time">{relTime(c.lastEdited)}</span>
+                            )}
+                            {col.state === "完了" && c.statusChangedAt && (
+                              <span className="board-card-done-date">{doneDateMD(c.statusChangedAt)}</span>
+                            )}
+                          </div>
+                        </a>
+                        {col.state === "GO待ち" && (
+                          <div className="board-card-actions">
+                            <button
+                              className="board-action-btn go-btn"
+                              onClick={() => handleBoardAction(c.pageId, "go")}
+                              title="このチケットにGOします"
+                            >
+                              ✓ GO
+                            </button>
+                            <button
+                              className="board-action-btn reject-btn"
+                              onClick={() => handleBoardAction(c.pageId, "reject")}
+                              title="このチケットを却下します"
+                            >
+                              ✕ 却下
+                            </button>
+                          </div>
+                        )}
+                      </div>
                     ))}
                   </div>
                 </section>
