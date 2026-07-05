@@ -77,6 +77,8 @@ const PII_HEAVY_FORBIDDEN = [
 // （execute側で再判定して止めるのをやめた）。止まるのは repo:null（リポ未設定）のときだけ。
 // 提案(GO伺い)フェーズでは preGate が機微・新機能を見て社長にGO伺いを出す挙動は維持。
 export const TARGETS: TargetMeta[] = [
+  // 履歴書メーカー（在留カードOCR→履歴書PDF）。Next.js／Vercel本番。
+  { system: "履歴書メーカー", repo: "tkgathr2/resume-maker", healthUrl: "https://rirekisyo.takagi.bz/auth/signin", forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
   { system: "プロレポ", repo: null, healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
   // ステレポ（SNS運用・分析）。TSバックエンド＝build:tsc / test:vitest / typecheck:tsc。
   { system: "ステレポ", repo: "tkgathr2/sterepo", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
