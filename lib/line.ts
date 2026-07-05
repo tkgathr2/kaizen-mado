@@ -302,13 +302,24 @@ export async function pushTextReturningId(
   return { ok: true, messageId: sent[0]?.id };
 }
 
-/** postback応答用の簡易reply（「着手します」等の受領返信）。 */
-export async function replyText(replyToken: string, text: string): Promise<boolean> {
+/** postback応答用の簡易reply（「着手します」等の受領返信）。
+ *  quoteToken を渡すと、そのメッセージ（＝相手の発言）を引用した形で表示される
+ *  （LINEネイティブの引用返信UI・何に対しての返事か視覚的にわかる）。 */
+export async function replyText(
+  replyToken: string,
+  text: string,
+  quoteToken?: string
+): Promise<boolean> {
   if (!process.env.LINE_CHANNEL_ACCESS_TOKEN) return false;
+  const message: { type: string; text: string; quoteToken?: string } = {
+    type: "text",
+    text,
+  };
+  if (quoteToken) message.quoteToken = quoteToken;
   return Boolean(
     await postLine(LINE_REPLY_ENDPOINT, {
       replyToken,
-      messages: [{ type: "text", text }],
+      messages: [message],
     })
   );
 }
