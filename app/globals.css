@@ -304,6 +304,28 @@ button.ghost:hover:not(:disabled) { background: #f5f3ec; }
 .board-refresh:hover:not(:disabled) { background: #f5f3ec; }
 .board-refresh:disabled { opacity: 0.5; cursor: default; }
 .board-meta { font-size: 12px; color: var(--muted); padding: 2px 2px 8px; }
+
+/* ── 要対応ヒーローバー（GO待ち／止まってるかも／今日完了）── */
+.board-hero {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  padding: 12px 14px; margin: 2px 0 10px;
+  background: #fffdf8; border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+.board-hero-item {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: inherit; font-size: 14.5px; font-weight: 700; color: var(--ink);
+  background: #f8f6f0; border: 1.5px solid #ebe7dc; border-radius: 999px;
+  padding: 8px 16px; cursor: pointer; line-height: 1.4;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.board-hero-item:hover { border-color: var(--brand); }
+.board-hero-item.hero-go { border-color: rgba(217, 119, 87, 0.55); background: #fdf2ec; }
+.board-hero-item.hero-stall { border-color: rgba(180, 69, 43, 0.6); background: #fbeeea; color: #b4452b; }
+.board-hero-item.hero-done { border-color: rgba(63, 122, 63, 0.45); background: #f0f6ee; color: #3f7a3f; }
+.board-hero-sub { font-size: 12px; font-weight: 600; color: #b4452b; }
+.board-hero-ok { font-size: 14.5px; font-weight: 700; color: #3f7a3f; padding: 2px 4px; }
+.board-hero-ok .board-hero-sub { color: #3f7a3f; }
 .board-summary { 
   display: flex; flex-wrap: wrap; gap: 12px 16px; padding: 2px 2px 12px;
   font-size: 11.5px; color: var(--muted);
@@ -371,6 +393,19 @@ button.ghost:hover:not(:disabled) { background: #f5f3ec; }
   font-size: 11px; font-weight: 700; color: #fff;
   padding: 1px 8px; border-radius: 999px; line-height: 1.5;
 }
+/* ── 滞留バッジ（着手・実装中30分超＝赤系／GO待ち48h超＝オレンジ系）── */
+.board-stall-badge {
+  font-size: 10.5px; font-weight: 700; color: #fff; background: #b4452b;
+  padding: 1px 8px; border-radius: 999px; line-height: 1.6; white-space: nowrap;
+}
+.board-stall-badge.is-gowait { background: #b45309; }
+/* 停滞カードは枠線を warn 色に */
+.board-card.is-stalled { border-color: #cf8a6f; }
+.board-card.is-stalled:hover { border-color: #b4452b; }
+/* 列ヘッダの警告ドット（停滞カードあり） */
+.board-col-warn-dot {
+  color: #b4452b; font-size: 18px; line-height: 0; margin-left: 5px; vertical-align: middle;
+}
 .board-card-time { font-size: 11px; color: #aaa69e; margin-left: auto; }
 .board-card-done-date { font-size: 11px; color: #3f7a3f; margin-left: 4px; font-weight: 600; }
 .board-footer { text-align: center; color: var(--muted); font-size: 11.5px; padding: 14px 0 8px; }
@@ -384,6 +419,13 @@ button.ghost:hover:not(:disabled) { background: #f5f3ec; }
   .board-logo { width: 34px; height: 34px; }
   .board-sub { font-size: 10.5px; }
   .board-refresh { padding: 6px 11px; font-size: 12px; }
+  /* ヒーローバーはモバイルで上部固定（スクロールしても要対応が見える） */
+  .board-hero {
+    position: sticky; top: 0; z-index: 5;
+    margin-top: 0; border-radius: 0 0 14px 14px;
+    padding: 10px 12px; gap: 8px;
+  }
+  .board-hero-item { font-size: 13px; padding: 7px 13px; }
   .board-cols {
     flex-direction: column; overflow-x: visible; gap: 10px;
     scroll-snap-type: none; align-items: stretch;
