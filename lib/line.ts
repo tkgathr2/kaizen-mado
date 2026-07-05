@@ -27,13 +27,14 @@ function targetUserId(): string {
 }
 // ── Slack 代替警告（LINE死亡時の非LINE経路） ──
 // 新規 Webhook は作らず、既存の persona-slack-relay（Railway 常駐・真田Bot名義）に乗せる。
-// 宛先はカイゼン監視チャンネル（社長＋幹部Botのみ・従業員なし）。3env が揃わない限り no-op。
+// 宛先はカイゼン監視チャンネル（社長＋幹部Botのみ・従業員なし）＝固定。
+// LINE失効時に届く経路なので env に依存させない（2env が揃わない限り no-op）。
+const SLACK_ALERT_CHANNEL = "C0BD5ESUFMM";
 function slackAlertRelay(): { url: string; secret: string; channel: string } | null {
   const url = process.env.PERSONA_RELAY_URL?.trim();
   const secret = process.env.PERSONA_RELAY_SECRET?.trim();
-  const channel = process.env.SLACK_ALERT_CHANNEL?.trim();
-  if (!url || !secret || !channel) return null;
-  return { url: url.replace(/\/+$/, ""), secret, channel };
+  if (!url || !secret) return null;
+  return { url: url.replace(/\/+$/, ""), secret, channel: SLACK_ALERT_CHANNEL };
 }
 
 /** LINE連携が有効か（3鍵すべて揃ったときだけ送信する。未設定なら静かにスキップ）。 */
@@ -223,12 +224,12 @@ export function getQuotedMap(): Record<string, string> {
 // 返値：失敗時は null、成功時は LINE応答（sentMessages を含む）。旧来の boolean 判定は
 /** LINE失敗時の管理者向け警告を persona-relay（真田Bot名義）で Slack へ送る。
  * 監視パイプライン（Slack→LINE→案文）と混線しないよう「返信不要」を明記する。
- * 通知失敗は無視（本体の改善ループを止めない・fail-safe）。 */
-async function notifySlackAlert(title: string, detail: string): Promise<void> {
+ * 通知失敗は false を返すだけで throw しない（本体の改善ループを止めない・fail-safe）。 */
+export async function notifySlackAlert(detail: string): Promise<boolean> {
   const relay = slackAlertRelay();
-  if (!relay) return; // 未設定なら無視（fail-safe）
+  if (!relay) return false; // 未設定なら無視（fail-safe）
   try {
-    await fetch(`${relay.url}/send`, {
+    const res = await fetch(`${relay.url}/send`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json; charset=utf-8",
@@ -237,10 +238,13 @@ async function notifySlackAlert(title: string, detail: string): Promise<void> {
       body: JSON.stringify({
         persona: "sanada",
         channel: relay.channel,
-        text: `${title}\n${detail}\n(自動警告・このメッセージへの返信は不要です)`,
+        text: `🚨 LINE トークン失効の疑い\n${detail}\n(自動警告・このメッセージへの返信は不要です)`,
       }),
-    }).catch(() => {});
-  } catch {}
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 // `!!await postLine(...)` で互換。
@@ -258,11 +262,11 @@ async function postLine(endpoint: string, payload: unknown): Promise<any | null>
       const detail = await res.text().catch(() => "");
       console.error("[line] post失敗", { endpoint, status: res.status, detail: detail.slice(0, 200) });
       // 401 Unauthorized は LINE トークン失効の可能性が高い → Slack alert
+      // await して送信完了まで待つ（serverless で応答後に切られて未送信になるのを防ぐ）。
       if (res.status === 401) {
-        notifySlackAlert(
-          "🚨 LINE トークン失効 (401)",
-          `カイゼンくん通知が送信できません。トークンを確認してください。\n詳細: ${detail.slice(0, 100)}`
-        ).catch(() => {});
+        await notifySlackAlert(
+          `401 @ ${endpoint} カイゼンくん通知が送信できません。トークンを確認してください。詳細: ${detail.slice(0, 100)}`
+        ).catch(() => false);
       }
       return null;
     }
