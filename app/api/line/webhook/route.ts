@@ -42,10 +42,10 @@ import { findRecentDuplicate } from "@/lib/tickets";
 import { appendLineChat } from "@/lib/kaizen-notion";
 import {
   isMonitorApproval,
-  isMonitorCancel,
   monitorReplyEnabled,
   approveLatestPendingReply,
   findPendingByLineMessageId,
+  classifyMonitorReplyIntent,
 } from "@/lib/monitor-reply";
 
 // GO適用の結果が「着手」になったら、即 /api/execute を起こして実改修へ進める（応答はブロックしない）。
@@ -245,12 +245,24 @@ async function handleConversation(
         : null;
 
       if (pendingRef?.found) {
-        if (isMonitorCancel(text)) {
+        // 言い回しに依存しない意図判定（定型は高速パス・それ以外はLLM）。
+        // 「そのまま返して」等を自由文と誤解して本文投稿する事故（2026-07-05）の根治。
+        // draft を渡す＝「案への同意」か「自分で書いた返信文」かを文脈で見分けられる。
+        const intent = await classifyMonitorReplyIntent(text, pendingRef.entry?.draft);
+        if (intent === "cancel") {
           await pendingRef.cancel();
           await safeReply(replyToken, "承知しました。この返信は送らず取り下げました。", senderQuoteToken);
           return;
         }
-        const useDraft = isMonitorApproval(text);
+        if (intent === "unclear") {
+          await safeReply(
+            replyToken,
+            "どうしますか？\n・案のまま送る →「これで返事して」\n・別の文章で送る → その文章をそのまま送信\n・送らない →「やめて」",
+            senderQuoteToken
+          );
+          return; // 保留は消費しない（次の返信で確定）
+        }
+        const useDraft = intent === "approve";
         const r = await pendingRef.execute(useDraft ? undefined : text);
         if (r.ok) {
           // senderQuoteToken で社長の発言をネイティブ引用＝何に対しての返事か視覚的にわかる
