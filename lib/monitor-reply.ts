@@ -188,47 +188,56 @@ interface IntentLog {
 }
 
 /** 引用返信の意図判定ログを記録する（成長エンジン向け学習データ蓄積）。
- *  fail-safe: NOTION_TOKEN なしでも何もしない（webhook壊さない）。 */
+ *  fail-safe: NOTION_TOKEN なしでも何もしない。Notion 呼び出しエラーも握る（webhook壊さない）。 */
 export async function recordIntentClassification(
   text: string,
   intent: MonitorReplyIntent,
   draftPreview?: string
 ): Promise<void> {
-  const token = notionToken();
-  if (!token) return;
-  const entry: IntentLog = {
-    text: text.slice(0, 200),
-    intent,
-    timestamp: Date.now(),
-    draftPreview: draftPreview ? draftPreview.slice(0, 80) : undefined,
-  };
-  await fetch(
-    `https://api.notion.com/v1/blocks/${statePageId()}/children`,
-    {
-      method: "PATCH",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Notion-Version": NOTION_VERSION,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        children: [
-          {
-            object: "block",
-            type: "paragraph",
-            paragraph: {
-              rich_text: [
-                {
-                  type: "text",
-                  text: { content: MILOG_PREFIX + JSON.stringify(entry) },
-                },
-              ],
+  try {
+    const token = notionToken();
+    if (!token) return;
+    const entry: IntentLog = {
+      text: text.slice(0, 200),
+      intent,
+      timestamp: Date.now(),
+      draftPreview: draftPreview ? draftPreview.slice(0, 80) : undefined,
+    };
+    const res = await fetch(
+      `https://api.notion.com/v1/blocks/${statePageId()}/children`,
+      {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Notion-Version": NOTION_VERSION,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          children: [
+            {
+              object: "block",
+              type: "paragraph",
+              paragraph: {
+                rich_text: [
+                  {
+                    type: "text",
+                    text: { content: MILOG_PREFIX + JSON.stringify(entry) },
+                  },
+                ],
+              },
             },
-          },
-        ],
-      }),
+          ],
+        }),
+      }
+    );
+    if (!res.ok) {
+      console.warn(
+        `[intent-logging] notion error: ${res.status} ${res.statusText}`
+      );
     }
-  ).catch(() => {});
+  } catch (e) {
+    console.warn(`[intent-logging] exception: ${(e as Error).message}`);
+  }
 }
 
 /** 保留を登録する（B スクリプトが LINE 報告直後に呼ぶ）。 */
