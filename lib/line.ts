@@ -25,8 +25,15 @@ function targetUserId(): string {
   if (!v) throw new Error("LINE_TARGET_USER_ID is not set");
   return v;
 }
-function slackAlertWebhook(): string | null {
-  return process.env.SLACK_ALERT_WEBHOOK_URL || null;
+// ── Slack 代替警告（LINE死亡時の非LINE経路） ──
+// 新規 Webhook は作らず、既存の persona-slack-relay（Railway 常駐・真田Bot名義）に乗せる。
+// 宛先はカイゼン監視チャンネル（社長＋幹部Botのみ・従業員なし）。3env が揃わない限り no-op。
+function slackAlertRelay(): { url: string; secret: string; channel: string } | null {
+  const url = process.env.PERSONA_RELAY_URL?.trim();
+  const secret = process.env.PERSONA_RELAY_SECRET?.trim();
+  const channel = process.env.SLACK_ALERT_CHANNEL?.trim();
+  if (!url || !secret || !channel) return null;
+  return { url: url.replace(/\/+$/, ""), secret, channel };
 }
 
 /** LINE連携が有効か（3鍵すべて揃ったときだけ送信する。未設定なら静かにスキップ）。 */
@@ -214,20 +221,25 @@ export function getQuotedMap(): Record<string, string> {
 
 // ── 送信系（失敗してもthrowしない：呼び出し元の改善ループを止めないため fail-safe） ──
 // 返値：失敗時は null、成功時は LINE応答（sentMessages を含む）。旧来の boolean 判定は
-/** Slack alert webhook へ管理者向け警告を送信（LINE失敗時など）。 */
+/** LINE失敗時の管理者向け警告を persona-relay（真田Bot名義）で Slack へ送る。
+ * 監視パイプライン（Slack→LINE→案文）と混線しないよう「返信不要」を明記する。
+ * 通知失敗は無視（本体の改善ループを止めない・fail-safe）。 */
 async function notifySlackAlert(title: string, detail: string): Promise<void> {
-  const webhook = slackAlertWebhook();
-  if (!webhook) return; // 未設定なら無視（fail-safe）
+  const relay = slackAlertRelay();
+  if (!relay) return; // 未設定なら無視（fail-safe）
   try {
-    const body = JSON.stringify({
-      text: title,
-      attachments: [{ color: "danger", text: detail, mrkdwn_in: ["text"] }],
-    });
-    await fetch(webhook, {
+    await fetch(`${relay.url}/send`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body,
-    }).catch(() => {}); // 通知失敗は無視（本体に影響させない）
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        "x-relay-secret": relay.secret,
+      },
+      body: JSON.stringify({
+        persona: "sanada",
+        channel: relay.channel,
+        text: `${title}\n${detail}\n(自動警告・このメッセージへの返信は不要です)`,
+      }),
+    }).catch(() => {});
   } catch {}
 }
 
