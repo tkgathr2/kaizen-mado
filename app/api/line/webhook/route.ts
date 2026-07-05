@@ -250,10 +250,11 @@ async function handleConversation(
         const useDraft = isMonitorApproval(text);
         const r = await pendingRef.execute(useDraft ? undefined : text);
         if (r.ok) {
-          await safeReply(
-            replyToken,
-            `${useDraft ? "返信案の内容" : "いただいた文章"}で真田Botが返信しました。\n${r.permalink ?? ""}`.trim()
-          );
+          // LINE の視覚的な引用表示：元のメッセージが「何に対しての返事か」わかりやすく
+          // メッセージ本文に「> 引用」形式を付ける（LINE がマークダウン風に解釈）
+          const quotedText = text.split('\n')[0].slice(0, 50);
+          const replyMsg = `> ${quotedText}\n\n${useDraft ? "返信案の内容" : "いただいた文章"}で真田Botが返信しました。\n${r.permalink ?? ""}`.trim();
+          await safeReply(replyToken, replyMsg);
         } else {
           await safeReply(
             replyToken,
