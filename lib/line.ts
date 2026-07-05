@@ -25,6 +25,9 @@ function targetUserId(): string {
   if (!v) throw new Error("LINE_TARGET_USER_ID is not set");
   return v;
 }
+function slackAlertWebhook(): string | null {
+  return process.env.SLACK_ALERT_WEBHOOK_URL || null;
+}
 
 /** LINE連携が有効か（3鍵すべて揃ったときだけ送信する。未設定なら静かにスキップ）。 */
 export function lineEnabled(): boolean {
@@ -211,6 +214,23 @@ export function getQuotedMap(): Record<string, string> {
 
 // ── 送信系（失敗してもthrowしない：呼び出し元の改善ループを止めないため fail-safe） ──
 // 返値：失敗時は null、成功時は LINE応答（sentMessages を含む）。旧来の boolean 判定は
+/** Slack alert webhook へ管理者向け警告を送信（LINE失敗時など）。 */
+async function notifySlackAlert(title: string, detail: string): Promise<void> {
+  const webhook = slackAlertWebhook();
+  if (!webhook) return; // 未設定なら無視（fail-safe）
+  try {
+    const body = JSON.stringify({
+      text: title,
+      attachments: [{ color: "danger", text: detail, mrkdwn_in: ["text"] }],
+    });
+    await fetch(webhook, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+    }).catch(() => {}); // 通知失敗は無視（本体に影響させない）
+  } catch {}
+}
+
 // `!!await postLine(...)` で互換。
 async function postLine(endpoint: string, payload: unknown): Promise<any | null> {
   try {
@@ -225,6 +245,13 @@ async function postLine(endpoint: string, payload: unknown): Promise<any | null>
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
       console.error("[line] post失敗", { endpoint, status: res.status, detail: detail.slice(0, 200) });
+      // 401 Unauthorized は LINE トークン失効の可能性が高い → Slack alert
+      if (res.status === 401) {
+        notifySlackAlert(
+          "🚨 LINE トークン失効 (401)",
+          `カイゼンくん通知が送信できません。トークンを確認してください。\n詳細: ${detail.slice(0, 100)}`
+        ).catch(() => {});
+      }
       return null;
     }
     return await res.json().catch(() => ({}));
