@@ -7,6 +7,7 @@ import { checkLinePushAuth } from "@/lib/cronAuth";
 import {
   registerPendingReply,
   approveLatestPendingReply,
+  sendMonitorReportAndRegister,
 } from "@/lib/monitor-reply";
 
 export const runtime = "nodejs";
@@ -19,15 +20,39 @@ export async function POST(req: NextRequest) {
 
   let body: {
     action?: string;
+    report_text?: string;
     channel_id?: string;
     thread_ts?: string;
     draft?: string;
     source_text?: string;
+    sender_id?: string;
   };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "invalid json" }, { status: 400 });
+  }
+
+  // 報告送信＋保留登録（LINE報告のメッセージIDを保留に紐付け＝引用返信での対象特定を可能にする）
+  if (body.action === "report") {
+    if (!body.report_text || !body.channel_id || !body.thread_ts || !body.draft) {
+      return NextResponse.json(
+        { error: "missing report_text/channel_id/thread_ts/draft" },
+        { status: 400 }
+      );
+    }
+    const r = await sendMonitorReportAndRegister({
+      reportText: body.report_text,
+      channelId: body.channel_id,
+      threadTs: body.thread_ts,
+      draft: body.draft,
+      sourceText: body.source_text,
+      senderId: body.sender_id,
+    });
+    if (!r.ok) {
+      return NextResponse.json({ ok: false, error: r.error }, { status: 502 });
+    }
+    return NextResponse.json({ ok: true, id: r.id, line_message_id: r.lineMessageId });
   }
 
   // 承認実行（最新保留 → 真田Botでスレッド返信）

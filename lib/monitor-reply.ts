@@ -17,6 +17,8 @@
  * webhook の通常会話は一切壊さない。
  */
 
+import { pushTextReturningId } from "@/lib/line";
+
 const MPR_PREFIX = "⟦MPR⟧";
 const MPR_DONE_PREFIX = "⟦MPRD⟧";
 const NOTION_VERSION = "2022-06-28";
@@ -31,6 +33,10 @@ export interface PendingReply {
   threadTs: string;
   draft: string;
   sourceText?: string;
+  /** 元Slack投稿の送信者（自由文返信時のメンション先） */
+  senderId?: string;
+  /** この保留を提示したLINE報告メッセージのID（引用返信での対象特定に使う） */
+  lineMessageId?: string;
   createdAt: number;
 }
 
@@ -68,12 +74,24 @@ export function isMonitorApproval(text: string): boolean {
          /^(これで|この内容で|それで)\s*送って/.test(t);
 }
 
+/**
+ * 「監視返信の取り下げ」か判定する（引用返信時のみ有効）。
+ * 例: 「やめて」「送らないで」「返信しないで」「キャンセル」「却下」
+ */
+export function isMonitorCancel(text: string): boolean {
+  const t = (text || "").trim();
+  if (!t || t.length > 20) return false;
+  return /^(やめて|やめておいて|送らないで|返信しないで|返事しないで|キャンセル|取り下げ|却下|なし)/.test(t);
+}
+
 /** 保留を登録する（B スクリプトが LINE 報告直後に呼ぶ）。 */
 export async function registerPendingReply(input: {
   channelId: string;
   threadTs: string;
   draft: string;
   sourceText?: string;
+  senderId?: string;
+  lineMessageId?: string;
 }): Promise<{ ok: boolean; id?: string; error?: string }> {
   const token = notionToken();
   if (!token) return { ok: false, error: "NOTION_TOKEN not set" };
@@ -83,6 +101,8 @@ export async function registerPendingReply(input: {
     threadTs: input.threadTs,
     draft: input.draft,
     sourceText: (input.sourceText || "").slice(0, 300),
+    senderId: input.senderId,
+    lineMessageId: input.lineMessageId,
     createdAt: Date.now(),
   };
   const res = await fetch(
@@ -114,6 +134,33 @@ export async function registerPendingReply(input: {
   );
   if (!res.ok) return { ok: false, error: `notion ${res.status}` };
   return { ok: true, id: entry.id };
+}
+
+/**
+ * LINE報告を送信し、返ってきた sentMessages[].id を保留に紐付けて登録する（原子的な1操作）。
+ * これにより社長がそのLINE報告を「引用返信」したとき quotedMessageId で保留を特定できる。
+ * kaizen-monitor（B スクリプト）はこの1コールだけで報告＋保留登録が完了する。
+ */
+export async function sendMonitorReportAndRegister(input: {
+  reportText: string;
+  channelId: string;
+  threadTs: string;
+  draft: string;
+  sourceText?: string;
+  senderId?: string;
+}): Promise<{ ok: boolean; id?: string; lineMessageId?: string; error?: string }> {
+  const sent = await pushTextReturningId(input.reportText);
+  if (!sent.ok) return { ok: false, error: "LINE push failed" };
+  const reg = await registerPendingReply({
+    channelId: input.channelId,
+    threadTs: input.threadTs,
+    draft: input.draft,
+    sourceText: input.sourceText,
+    senderId: input.senderId,
+    lineMessageId: sent.messageId,
+  });
+  if (!reg.ok) return { ok: false, error: reg.error };
+  return { ok: true, id: reg.id, lineMessageId: sent.messageId };
 }
 
 /** ページの子ブロックから保留（⟦MPR⟧・TTL内）を新しい順で返す。 */
@@ -243,35 +290,71 @@ function threadPermalink(channelId: string, ts: string, threadTs: string): strin
 
 export interface ApprovalResult {
   ok: boolean;
-  reason?: "no_pending" | "relay_failed" | "not_configured";
+  reason?: "no_pending" | "multiple_pending" | "relay_failed" | "not_configured";
   error?: string;
   permalink?: string;
   entry?: PendingReply;
+  /** multiple_pending のとき、保留の件数 */
+  pendingCount?: number;
+}
+
+/** 保留1件を実行する共通処理：Slackへ真田Bot投稿→保留を消費→permalink。
+ *  overrideText があれば AI 案の代わりにその文面（社長の自由文）を送る。 */
+async function executePending(
+  pb: PendingBlock,
+  overrideText?: string
+): Promise<ApprovalResult> {
+  let text = overrideText?.trim() || pb.entry.draft;
+  // 自由文のときも元投稿者への冒頭メンションを保証（draft には B が付与済み）
+  if (overrideText && pb.entry.senderId && !text.includes(`<@${pb.entry.senderId}>`)) {
+    text = `<@${pb.entry.senderId}> ${text}`;
+  }
+  const posted = await postSanadaReply(pb.entry.channelId, pb.entry.threadTs, text);
+  if (!posted.ok) {
+    return { ok: false, reason: "relay_failed", error: posted.error };
+  }
+  await consumePending(pb);
+  return {
+    ok: true,
+    entry: pb.entry,
+    permalink: posted.ts
+      ? threadPermalink(pb.entry.channelId, posted.ts, pb.entry.threadTs)
+      : undefined,
+  };
+}
+
+/** LINEの引用メッセージIDから保留を特定する（引用返信での対象特定）。 */
+export async function findPendingByLineMessageId(
+  lineMessageId: string
+): Promise<{ found: boolean; execute: (overrideText?: string) => Promise<ApprovalResult>; cancel: () => Promise<void>; entry?: PendingReply }> {
+  const pending = await listPending();
+  const hit = pending.find((p) => p.entry.lineMessageId === lineMessageId);
+  if (!hit) {
+    return {
+      found: false,
+      execute: async () => ({ ok: false, reason: "no_pending" }),
+      cancel: async () => {},
+    };
+  }
+  return {
+    found: true,
+    entry: hit.entry,
+    execute: (overrideText?: string) => executePending(hit, overrideText),
+    cancel: () => consumePending(hit),
+  };
 }
 
 /**
- * 最新の保留返信を承認・実行する（LINE「これで返事して」から呼ばれる本体）。
- * 成功: Slackへ真田Bot投稿→保留を消費→permalink を返す。
+ * 保留返信を承認・実行する（引用なしの「これで返事して」から呼ばれる）。
+ * 保留が1件だけならそれを実行。複数あるときは誤爆防止のため実行せず
+ * multiple_pending を返す（呼び出し側が「引用して返信して」と促す）。
  */
 export async function approveLatestPendingReply(): Promise<ApprovalResult> {
   if (!monitorReplyEnabled()) return { ok: false, reason: "not_configured" };
   const pending = await listPending();
   if (pending.length === 0) return { ok: false, reason: "no_pending" };
-  const latest = pending[0];
-  const posted = await postSanadaReply(
-    latest.entry.channelId,
-    latest.entry.threadTs,
-    latest.entry.draft
-  );
-  if (!posted.ok) {
-    return { ok: false, reason: "relay_failed", error: posted.error };
+  if (pending.length > 1) {
+    return { ok: false, reason: "multiple_pending", pendingCount: pending.length };
   }
-  await consumePending(latest);
-  return {
-    ok: true,
-    entry: latest.entry,
-    permalink: posted.ts
-      ? threadPermalink(latest.entry.channelId, posted.ts, latest.entry.threadTs)
-      : undefined,
-  };
+  return executePending(pending[0]);
 }
