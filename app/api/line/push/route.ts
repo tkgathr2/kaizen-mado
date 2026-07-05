@@ -1,8 +1,9 @@
 // ── LINE push エンドポイント（カイゼンくん自身から送る） ──
-// checkCronSecret (x-cron-secret / Authorization: Bearer) で認証（相乗り禁止グランドルール 2026-06-28）。
-// mention-hisho への相乗りを廃止し、カイゼンくん固有の LINE チャンネルのみで送る。
+// checkLinePushAuth で認証：CRON_SECRET (x-cron-secret / Authorization: Bearer) に加え、
+// 監視系クライアント専用の MONITOR_PUSH_SECRET (x-monitor-secret) も受ける（LINE通知のみの最小権限鍵）。
+// mention-hisho への相乗りを廃止し、カイゼンくん固有の LINE チャンネルのみで送る（2026-06-28）。
 import { NextRequest, NextResponse } from "next/server";
-import { checkCronSecret } from "@/lib/cronAuth";
+import { checkLinePushAuth } from "@/lib/cronAuth";
 import { pushText } from "@/lib/line";
 
 export const runtime = "nodejs";
@@ -11,7 +12,7 @@ export const dynamic = "force-dynamic";
 const LINE_TEXT_MAX = 5000;
 
 export async function POST(req: NextRequest) {
-  if (!checkCronSecret(req)) {
+  if (!checkLinePushAuth(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 

@@ -23,6 +23,21 @@ export function checkCronSecret(req: NextRequest): boolean {
   return false;
 }
 
+// ── LINE push 専用認証 ──
+// /api/line/push は「社長へLINE通知を送る」だけの口。共用 CRON_SECRET に加え、
+// 監視系クライアント（kaizen-monitor 等のローカル常駐）向けの専用鍵 MONITOR_PUSH_SECRET も受ける。
+// 分離の意図：この鍵が漏れても送れるのは LINE 通知のみで、GO奪取・実行系（/api/process 等）には
+// 一切使えない（それらは checkCronSecret のまま＝最小権限）。
+export function checkLinePushAuth(req: NextRequest): boolean {
+  if (checkCronSecret(req)) return true;
+  const monitor = process.env.MONITOR_PUSH_SECRET;
+  if (monitor && monitor.trim()) {
+    const x = req.headers.get("x-monitor-secret");
+    if (x && safeEqual(x, monitor)) return true;
+  }
+  return false;
+}
+
 // ── admin/go 専用認証 ──
 // /api/admin/go は「GO/修正/却下を直接適用する」強い操作（社長GOの奪取に直結）。
 // 共用の CRON_SECRET だけに依存すると、cron 用の鍵を知る者が誰でも GO を奪える。
