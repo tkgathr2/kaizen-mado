@@ -356,6 +356,115 @@ export async function fetchStaleImplementing(
   return rows.filter((r) => isStaleImplementing(r, now, minutes));
 }
 
+// ── 自動リトライ上限（reaper の無限リトライ根絶・KZ-17事案） ──
+// reaper は「実装中」滞留チケットを「着手」へ戻すたびに議論ブロックへ印（REAPER_RESET_HEADING）を
+// 残している。この印の「数」をリトライ回数の真実の源にする（Notionが正＝インスタンス跨ぎでも効く・
+// 追加のNotionプロパティ不要＝プロパティが無いDBでも壊れない）。
+// 上限（env KAIZEN_MAX_RETRIES・既定3）に達したら「着手」へ戻さず「差し戻し」へ落とす。
+
+/** reaper が「実装中→着手」へ戻すとき議論に残す印の見出し（カウント対象）。 */
+export const REAPER_RESET_HEADING = "stuck回収（自動リセット）";
+
+/** リトライ上限到達で差し戻したときの見出し。これ「以降」の印だけを数える＝
+ * 人が原因を直して再GOしたら、また上限までリトライ枠が復活する（永久封印にしない）。 */
+export const RETRY_CAP_HEADING = "自動リトライ上限（差し戻し）";
+
+/** 直近の失敗理由を拾う見出し（callback が残す議論ブロック）。 */
+const FAILURE_HEADINGS = ["基盤エラー", "実装失敗"];
+
+/** 自動リトライの上限回数。env KAIZEN_MAX_RETRIES（既定3・0〜20にクランプ）。
+ * 0＝自動リトライ禁止（初回stuckで即差し戻し）。不正値・負値は既定3（安全側）。 */
+export function maxAutoRetries(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env.KAIZEN_MAX_RETRIES);
+  if (!Number.isFinite(raw) || raw < 0) return 3;
+  return Math.min(20, Math.floor(raw));
+}
+
+export interface ReaperRetryInfo {
+  /** これまでに reaper が「着手」へ戻した回数（最後の上限到達以降）。 */
+  count: number;
+  /** 議論ブロックに残っている直近の失敗理由（無ければ null）。 */
+  lastFailure: string | null;
+}
+
+function plainFromBlockRichText(block: any, type: string): string {
+  const arr = block?.[type]?.rich_text;
+  if (!Array.isArray(arr)) return "";
+  return arr.map((r: any) => r?.plain_text ?? "").join("");
+}
+
+/** 議論ブロック列から「リトライ回数」と「直近の失敗理由」を数える純粋ロジック。
+ * - REAPER_RESET_HEADING を含む heading_3 を1リトライと数える。
+ * - RETRY_CAP_HEADING を見たらカウントをリセット（再GO後は枠が復活）。
+ * - FAILURE_HEADINGS（基盤エラー/実装失敗）直後の paragraph を失敗理由として拾う（最後のものが勝つ）。
+ *   本文に「詳細：」があればその後ろだけを理由として使う（定型文を除いた実エラー文）。 */
+export function summarizeRetryBlocks(blocks: any[]): ReaperRetryInfo {
+  let count = 0;
+  let lastFailure: string | null = null;
+  let pendingFailureHeading = false;
+  for (const b of blocks || []) {
+    if (b?.type === "heading_3") {
+      const text = plainFromBlockRichText(b, "heading_3");
+      if (text.includes(RETRY_CAP_HEADING)) {
+        count = 0; // 上限到達で一区切り。以降（人が再GOした後）の印だけ数える。
+      } else if (text.includes(REAPER_RESET_HEADING)) {
+        count++;
+      }
+      pendingFailureHeading = FAILURE_HEADINGS.some((h) => text.includes(h));
+    } else if (b?.type === "paragraph" && pendingFailureHeading) {
+      const raw = plainFromBlockRichText(b, "paragraph").trim();
+      if (raw) {
+        const idx = raw.lastIndexOf("詳細：");
+        const reason = (idx >= 0 ? raw.slice(idx + "詳細：".length) : raw).trim();
+        if (reason) lastFailure = reason;
+      }
+      pendingFailureHeading = false;
+    }
+  }
+  return { count, lastFailure };
+}
+
+/** チケットページの議論ブロックを読み、リトライ回数と直近失敗理由を返す。
+ * ★ fail-safe：取得失敗・鍵未設定・例外はすべて { count: 0, lastFailure: null } を返す
+ * ＝「数えられないときは従来どおり『着手』へ戻す側」に倒す（誤って差し戻さない安全側）。 */
+export async function getReaperRetryInfo(pageId: string): Promise<ReaperRetryInfo> {
+  const empty: ReaperRetryInfo = { count: 0, lastFailure: null };
+  try {
+    const token = process.env.NOTION_TOKEN;
+    if (!token || !pageId) return empty;
+    const blocks: any[] = [];
+    let cursor: string | undefined = undefined;
+    let pages = 0;
+    // 100件×10ページ＝最大1000ブロックまで見る（議論が異常に長いページでも処理を有界に保つ）。
+    do {
+      const url = new URL(`https://api.notion.com/v1/blocks/${pageId}/children`);
+      url.searchParams.set("page_size", "100");
+      if (cursor) url.searchParams.set("start_cursor", cursor);
+      const res = await fetch(url.toString(), {
+        method: "GET",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "Notion-Version": NOTION_VERSION,
+        },
+      });
+      if (!res.ok) {
+        console.error("[tickets] getReaperRetryInfo 取得失敗（count=0の安全側）", res.status);
+        return empty;
+      }
+      const data = await res.json();
+      blocks.push(...(Array.isArray(data?.results) ? data.results : []));
+      cursor = data?.has_more && data?.next_cursor ? data.next_cursor : undefined;
+    } while (cursor && ++pages < 10);
+    return summarizeRetryBlocks(blocks);
+  } catch (err) {
+    console.error(
+      "[tickets] getReaperRetryInfo 例外（count=0の安全側）:",
+      (err as Error).message
+    );
+    return empty;
+  }
+}
+
 /** 完了済みかつ未学習（FGSリンク空）のチケットを取得 */
 export async function fetchCompletedUnlearned(limit = 10): Promise<TicketRow[]> {
   return queryDatabase(

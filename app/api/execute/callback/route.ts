@@ -20,6 +20,7 @@ import { notifyStuckOnce, notifyReviewOnce, buildMergedText } from "@/lib/notify
 import { checkCronSecret } from "@/lib/cronAuth";
 import { isInfraError, buildInfraNoticeText, pushText } from "@/lib/line";
 import { isValidFailureClass, type FailureClass } from "@/lib/kz-state";
+import { findTarget } from "@/lib/targets";
 import { postToSlack } from "@/lib/slack";
 import { enqueueNotification } from "@/lib/notification";
 
@@ -180,19 +181,29 @@ export async function POST(req: NextRequest) {
     }
 
     // (B) AI改修の失敗 → 差し戻し。「人の助けが要る詰まり」として詰まり連絡を1回だけ送る（de-dup）。
+    // 「理由：不明」の根絶：detail が空でも「何が失敗したか＋次のアクション」が分かる1行を必ず入れる
+    // （旧実装の「不明（くわしくは /board を…）」は社長が判断できない＝KZ-17事案の一因）。
+    const failedTarget = findTarget(system);
+    const actionsUrl = failedTarget?.repo
+      ? `https://github.com/${failedTarget.repo}/actions`
+      : null;
+    const failureReason =
+      detail ||
+      `実装ジョブが失敗理由を返さず終了しました（分類: ${failureClass}／Actionsログ確認: ${actionsUrl ?? "対象リポのGitHub Actions"}）`;
     await updateTicketState(pageId, "差し戻し");
     await setStatusChangedAt(pageId); // Phase 1: 状態変更日時を記録
     await appendDiscussionBlocks(pageId, [
-      { heading: "実装失敗（差し戻し）", body: `[${failureClass}] ${detail || "(理由不明)"}` },
+      { heading: "実装失敗（差し戻し）", body: `[${failureClass}] ${failureReason}` },
     ]);
-    await notifyStuckOnce(current, detail || "不明（くわしくは /board をご確認ください）");
+    await notifyStuckOnce(current, failureReason);
     // 日次ダイジェスト（改善⑤）へエラーを1件積む。要約が不明瞭（空/「不明」）なら
-    // enqueue 側で積まれない（「理由：不明」の禁止）＝実エラー文があるときだけ載る。
+    // enqueue 側で積まれない（「理由：不明」の禁止）。failureReason は空にならず
+    // 「不明」も含まない文言なので、詳細ゼロの失敗もダイジェストに載る。
     await enqueueNotification(
       ticketId,
       "error",
       `「${current.title}」の自動改修が失敗（差し戻し）`,
-      detail
+      failureReason
     ).catch(() => {});
     return NextResponse.json({ ok: true, state: "差し戻し" });
   } catch (err) {

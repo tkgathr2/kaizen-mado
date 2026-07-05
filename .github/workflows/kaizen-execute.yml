@@ -212,6 +212,12 @@ jobs:
           if [ "$GATE_VERDICT" = "failed" ] || [ -z "$PR_URL" ]; then
             RESULT="failed"
             FCLASS="IMPL_FAILED"
+            # gateは通ったのにPRが無い＝push/PR作成の失敗。gateのdetail（例「diff 12行・禁止パス非接触」）
+            # をそのまま流すと失敗理由に見えないため、「何が失敗したか」を1行で明示する（理由：不明の根絶）。
+            if [ "$GATE_VERDICT" != "failed" ] && [ -n "$GATE_VERDICT" ]; then
+              DETAIL="PR作成/pushに失敗しました（gate判定: ${DETAIL:-なし}。Actionsログを確認してください）"
+            fi
+            [ -z "$DETAIL" ] && DETAIL="実装ジョブが失敗理由を出力せず終了（Actionsログを確認してください）"
           elif [ "$MERGED" = "true" ]; then
             RESULT="merged"
             FCLASS=""
