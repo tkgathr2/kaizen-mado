@@ -279,6 +279,19 @@ async function handleConversation(
           );
           return;
         }
+      }
+
+      // 引用なしで「これで返事して」以外の会話の場合（複数保留時の誤爆防止）
+      if (text && !quotedMessageId && !isMonitorApproval(text)) {
+        const pending = await listPending();
+        if (pending.length > 1) {
+          await safeReply(
+            replyToken,
+            `返信待ちが複数あります。「引用」して返信してください（そうしないと別の案件に返信される可能性があります）。`
+          );
+          return;
+        }
+      }
         if (r.reason === "no_pending") {
           await safeReply(
             replyToken,
