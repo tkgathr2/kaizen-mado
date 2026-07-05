@@ -183,7 +183,7 @@ async function handleEvent(ev: any): Promise<void> {
     // コマンド（GO/修正/却下）でない自由文は双方向会話エンジンへ。
     // 鍵未設定・例外でも replyText で必ず返し、webhook は壊さない（fail-safe）。
     if (!cmd) {
-      await handleConversation(text, ev?.message?.quotedMessageId, replyToken);
+      await handleConversation(text, ev?.message?.quotedMessageId, replyToken, ev?.message?.quoteToken);
       return;
     }
 
@@ -225,7 +225,10 @@ async function handleEvent(ev: any): Promise<void> {
 async function handleConversation(
   text: string,
   quotedMessageId: string | null | undefined,
-  replyToken: string | undefined
+  replyToken: string | undefined,
+  // 社長のこの発言自体の quoteToken。応答時に渡すと「社長のこの発言への引用返信」として
+  // LINEネイティブの引用UIで表示される（何に対しての返事か視覚的にわかる）。
+  senderQuoteToken?: string
 ): Promise<void> {
   try {
     // ── 監視返信フロー ── 通常会話より先に判定する。未設定なら素通し（挙動不変・fail-safe）。
@@ -244,21 +247,23 @@ async function handleConversation(
       if (pendingRef?.found) {
         if (isMonitorCancel(text)) {
           await pendingRef.cancel();
-          await safeReply(replyToken, "承知しました。この返信は送らず取り下げました。");
+          await safeReply(replyToken, "承知しました。この返信は送らず取り下げました。", senderQuoteToken);
           return;
         }
         const useDraft = isMonitorApproval(text);
         const r = await pendingRef.execute(useDraft ? undefined : text);
         if (r.ok) {
-          // LINE の視覚的な引用表示：元のメッセージが「何に対しての返事か」わかりやすく
-          // メッセージ本文に「> 引用」形式を付ける（LINE がマークダウン風に解釈）
-          const quotedText = text.split('\n')[0].slice(0, 50);
-          const replyMsg = `> ${quotedText}\n\n${useDraft ? "返信案の内容" : "いただいた文章"}で真田Botが返信しました。\n${r.permalink ?? ""}`.trim();
-          await safeReply(replyToken, replyMsg);
+          // senderQuoteToken で社長の発言をネイティブ引用＝何に対しての返事か視覚的にわかる
+          await safeReply(
+            replyToken,
+            `${useDraft ? "返信案の内容" : "いただいた文章"}で真田Botが返信しました。\n${r.permalink ?? ""}`.trim(),
+            senderQuoteToken
+          );
         } else {
           await safeReply(
             replyToken,
-            `返信の投稿に失敗しました（${r.error ?? r.reason}）。真田に確認を依頼してください。`
+            `返信の投稿に失敗しました（${r.error ?? r.reason}）。真田に確認を依頼してください。`,
+            senderQuoteToken
           );
         }
         return;
@@ -269,40 +274,31 @@ async function handleConversation(
         if (r.ok) {
           await safeReply(
             replyToken,
-            `真田Botで返信しました。\n${r.permalink ?? ""}`.trim()
+            `真田Botで返信しました。\n${r.permalink ?? ""}`.trim(),
+            senderQuoteToken
           );
           return;
         }
         if (r.reason === "multiple_pending") {
           await safeReply(
             replyToken,
-            `返信待ちが${r.pendingCount}件あります。対象のLINE報告を「引用」して返信してください（引用すればその案件に返せます）。`
+            `返信待ちが${r.pendingCount}件あります。対象のLINE報告を「引用」して返信してください（引用すればその案件に返せます）。`,
+            senderQuoteToken
           );
           return;
         }
-      }
-
-      // 引用なしで「これで返事して」以外の会話の場合（複数保留時の誤爆防止）
-      if (text && !quotedMessageId && !isMonitorApproval(text)) {
-        const pending = await listPending();
-        if (pending.length > 1) {
-          await safeReply(
-            replyToken,
-            `返信待ちが複数あります。「引用」して返信してください（そうしないと別の案件に返信される可能性があります）。`
-          );
-          return;
-        }
-      }
         if (r.reason === "no_pending") {
           await safeReply(
             replyToken,
-            "返信待ちの監視案件が見つかりませんでした（承認済み・期限切れの可能性）。"
+            "返信待ちの監視案件が見つかりませんでした（承認済み・期限切れの可能性）。",
+            senderQuoteToken
           );
           return;
         }
         await safeReply(
           replyToken,
-          `返信の投稿に失敗しました（${r.error ?? r.reason}）。真田に確認を依頼してください。`
+          `返信の投稿に失敗しました（${r.error ?? r.reason}）。真田に確認を依頼してください。`,
+          senderQuoteToken
         );
         return;
       }
@@ -457,10 +453,14 @@ function actionWord(a: "go" | "fix" | "reject"): string {
 }
 
 /** replyToken があれば返信（fail-safe）。 */
-async function safeReply(replyToken: string | undefined, text: string): Promise<void> {
+async function safeReply(
+  replyToken: string | undefined,
+  text: string,
+  quoteToken?: string
+): Promise<void> {
   if (!replyToken) return;
   try {
-    await replyText(replyToken, text);
+    await replyText(replyToken, text, quoteToken);
   } catch (e) {
     console.error("[line/converse] reply失敗", (e as Error).message);
   }
