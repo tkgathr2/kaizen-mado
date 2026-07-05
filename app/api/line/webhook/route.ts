@@ -42,8 +42,10 @@ import { findRecentDuplicate } from "@/lib/tickets";
 import { appendLineChat } from "@/lib/kaizen-notion";
 import {
   isMonitorApproval,
+  isMonitorCancel,
   monitorReplyEnabled,
   approveLatestPendingReply,
+  findPendingByLineMessageId,
 } from "@/lib/monitor-reply";
 
 // GO適用の結果が「着手」になったら、即 /api/execute を起こして実改修へ進める（応答はブロックしない）。
@@ -226,30 +228,70 @@ async function handleConversation(
   replyToken: string | undefined
 ): Promise<void> {
   try {
-    // ── 監視返信の承認（「これで返事して」）── 通常会話より先に判定する。
-    // kaizen-monitor が LINE 報告に同梱した返信案を、真田Bot として Slack スレッドへ投稿。
-    // 未設定（relay鍵なし）なら通常会話へ素通し（挙動不変・fail-safe）。
-    if (isMonitorApproval(text) && monitorReplyEnabled()) {
-      const r = await approveLatestPendingReply();
-      if (r.ok) {
+    // ── 監視返信フロー ── 通常会話より先に判定する。未設定なら素通し（挙動不変・fail-safe）。
+    //
+    // A) 監視のLINE報告を「引用」して返信した場合（複数報告があっても引用元で対象を特定）:
+    //    - 承認ワード（これで返事して等）→ 同梱したAI返信案をそのまま真田Botで投稿
+    //    - 取り下げワード（やめて等）    → 送信せず保留を消費
+    //    - それ以外の普通の文章          → 社長のその文章を真田Botの返事としてそのまま投稿
+    // B) 引用なしで承認ワードだけの場合:
+    //    - 保留1件ならそれを実行。複数あれば誤爆防止のため実行せず「引用して」と促す。
+    if (monitorReplyEnabled()) {
+      const pendingRef = quotedMessageId
+        ? await findPendingByLineMessageId(quotedMessageId)
+        : null;
+
+      if (pendingRef?.found) {
+        if (isMonitorCancel(text)) {
+          await pendingRef.cancel();
+          await safeReply(replyToken, "承知しました。この返信は送らず取り下げました。");
+          return;
+        }
+        const useDraft = isMonitorApproval(text);
+        const r = await pendingRef.execute(useDraft ? undefined : text);
+        if (r.ok) {
+          await safeReply(
+            replyToken,
+            `${useDraft ? "返信案の内容" : "いただいた文章"}で真田Botが返信しました。\n${r.permalink ?? ""}`.trim()
+          );
+        } else {
+          await safeReply(
+            replyToken,
+            `返信の投稿に失敗しました（${r.error ?? r.reason}）。真田に確認を依頼してください。`
+          );
+        }
+        return;
+      }
+
+      if (isMonitorApproval(text)) {
+        const r = await approveLatestPendingReply();
+        if (r.ok) {
+          await safeReply(
+            replyToken,
+            `真田Botで返信しました。\n${r.permalink ?? ""}`.trim()
+          );
+          return;
+        }
+        if (r.reason === "multiple_pending") {
+          await safeReply(
+            replyToken,
+            `返信待ちが${r.pendingCount}件あります。対象のLINE報告を「引用」して返信してください（引用すればその案件に返せます）。`
+          );
+          return;
+        }
+        if (r.reason === "no_pending") {
+          await safeReply(
+            replyToken,
+            "返信待ちの監視案件が見つかりませんでした（承認済み・期限切れの可能性）。"
+          );
+          return;
+        }
         await safeReply(
           replyToken,
-          `真田Botで返信しました。\n${r.permalink ?? ""}`.trim()
+          `返信の投稿に失敗しました（${r.error ?? r.reason}）。真田に確認を依頼してください。`
         );
         return;
       }
-      if (r.reason === "no_pending") {
-        await safeReply(
-          replyToken,
-          "返信待ちの監視案件が見つかりませんでした（承認済み・期限切れの可能性）。"
-        );
-        return;
-      }
-      await safeReply(
-        replyToken,
-        `返信の投稿に失敗しました（${r.error ?? r.reason}）。真田に確認を依頼してください。`
-      );
-      return;
     }
 
     const intent = classifyIntent(text);

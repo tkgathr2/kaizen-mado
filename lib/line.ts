@@ -245,6 +245,24 @@ export async function pushText(text: string): Promise<boolean> {
   );
 }
 
+/**
+ * pushText の sentMessages[].id 返却版。
+ * 監視返信フローで「社長がどのLINE報告を引用したか」（webhook の quotedMessageId）と
+ * 保留返信を紐付けるために使う。
+ */
+export async function pushTextReturningId(
+  text: string
+): Promise<{ ok: boolean; messageId?: string }> {
+  if (!lineEnabled()) return { ok: false };
+  const res = (await postLine(LINE_PUSH_ENDPOINT, {
+    to: targetUserId(),
+    messages: [{ type: "text", text }],
+  })) as { sentMessages?: Array<{ id?: string }> } | null;
+  if (!res) return { ok: false };
+  const sent = Array.isArray(res.sentMessages) ? res.sentMessages : [];
+  return { ok: true, messageId: sent[0]?.id };
+}
+
 /** postback応答用の簡易reply（「着手します」等の受領返信）。 */
 export async function replyText(replyToken: string, text: string): Promise<boolean> {
   if (!process.env.LINE_CHANNEL_ACCESS_TOKEN) return false;
