@@ -15,6 +15,11 @@ import {
   appendDiscussionBlocks,
   fetchStaleImplementing,
   staleImplementingMinutes,
+  getReaperRetryInfo,
+  maxAutoRetries,
+  setStatusChangedAt,
+  REAPER_RESET_HEADING,
+  RETRY_CAP_HEADING,
 } from "@/lib/tickets";
 import { findTarget } from "@/lib/targets";
 import {
@@ -85,20 +90,61 @@ export async function POST(req: NextRequest) {
     // チケットが「実装中」のまま永久滞留する（回収経路ゼロ）のを防ぐ。戻したものは
     // 「次回スキャン」で再処理される＝同じ実行では着手リストから除外して二重処理を避ける。
     const reaped: string[] = [];
+    const retryCapped: string[] = [];
     const reapedPageIds = new Set<string>();
     if (planMode) {
       const minutes = staleImplementingMinutes();
+      const maxRetries = maxAutoRetries();
       const stale = await fetchStaleImplementing(minutes, Math.max(limit, 5)).catch((e) => {
         console.error("[execute] stuck回収の取得失敗", (e as Error).message);
         return [] as Awaited<ReturnType<typeof fetchStaleImplementing>>;
       });
       for (const s of stale) {
         try {
+          // ── リトライ上限（無限リトライ根絶・KZ-17事案） ──
+          // 何回目の自動リセットかは、議論ブロックの印（REAPER_RESET_HEADING）の数で数える
+          // （真実の源=Notion・インスタンス跨ぎでも効く）。取得に失敗したときは count=0
+          // ＝従来どおり「着手」へ戻す側に倒す（fail-safe。誤って差し戻さない）。
+          const retry = await getReaperRetryInfo(s.pageId);
+          if (retry.count >= maxRetries) {
+            // 上限到達：戻さず「差し戻し」へ。理由が議論に残っていなければ
+            // 「不明」ではなく次のアクション（Actionsログ確認）が分かる文言にする。
+            const capTarget = findTarget(s.system);
+            const actionsUrl = capTarget?.repo
+              ? `https://github.com/${capTarget.repo}/actions`
+              : null;
+            const lastFailure =
+              retry.lastFailure ||
+              `実装ジョブが完了報告なしで停止（Actionsログ確認: ${actionsUrl ?? "対象リポのGitHub Actions"}）`;
+            await updateTicketState(s.pageId, "差し戻し");
+            await setStatusChangedAt(s.pageId);
+            await appendDiscussionBlocks(s.pageId, [
+              {
+                heading: RETRY_CAP_HEADING,
+                body: `自動改修を${maxRetries}回試して失敗したため停止しました。最後の失敗理由: ${lastFailure}`,
+              },
+            ]);
+            await pushText(
+              [
+                msgHead("🛑", "自動改修を停止しました", s.system, s.title),
+                `（${s.ticketId}）自動改修を${maxRetries}回試して失敗したため停止しました。`,
+                `最後の失敗理由: ${truncateForLine(lastFailure, 120)}`,
+                `差し戻しに移しました。`,
+                ``,
+                stageBar(4),
+                `詳細 ▶ ${notionPageUrl(s.pageId)}`,
+                `全体像 ▶ ${BOARD_URL}`,
+              ].join("\n")
+            ).catch(() => false);
+            retryCapped.push(s.ticketId);
+            reapedPageIds.add(s.pageId);
+            continue;
+          }
           await updateTicketState(s.pageId, "着手");
           await appendDiscussionBlocks(s.pageId, [
             {
-              heading: "stuck回収（自動リセット）",
-              body: `「実装中」のまま${minutes}分以上応答が無かったため「着手」へ戻しました（次回スキャンで再処理）。`,
+              heading: REAPER_RESET_HEADING,
+              body: `「実装中」のまま${minutes}分以上応答が無かったため「着手」へ戻しました（次回スキャンで再処理・自動リトライ ${retry.count + 1}/${maxRetries} 回目）。`,
             },
           ]);
           reaped.push(s.ticketId);
@@ -232,6 +278,7 @@ export async function POST(req: NextRequest) {
       escalated,
       ...(planMode ? { plan } : {}),
       ...(reaped.length ? { reaped } : {}),
+      ...(retryCapped.length ? { retryCapped } : {}),
       ...(skipped.length ? { skipped } : {}),
     });
   } catch (err) {

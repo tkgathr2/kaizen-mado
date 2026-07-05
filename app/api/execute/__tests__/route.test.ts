@@ -23,6 +23,12 @@ vi.mock("@/lib/tickets", () => ({
   appendDiscussionBlocks: (...a: unknown[]) => appendDiscussionBlocks(...a),
   fetchStaleImplementing: (...a: unknown[]) => fetchStaleImplementing(...a),
   staleImplementingMinutes: () => staleImplementingMinutes(),
+  // リトライ上限（reaper無限リトライ根絶）関連。この既存テストでは stale=[] なので通常呼ばれない。
+  getReaperRetryInfo: async () => ({ count: 0, lastFailure: null }),
+  maxAutoRetries: () => 3,
+  setStatusChangedAt: async () => {},
+  REAPER_RESET_HEADING: "stuck回収（自動リセット）",
+  RETRY_CAP_HEADING: "自動リトライ上限（差し戻し）",
 }));
 vi.mock("@/lib/targets", () => ({ findTarget: (...a: unknown[]) => findTarget(...a) }));
 vi.mock("@/lib/orchestrate", () => ({
