@@ -40,6 +40,11 @@ import {
 import { createTicket } from "@/lib/notion";
 import { findRecentDuplicate } from "@/lib/tickets";
 import { appendLineChat } from "@/lib/kaizen-notion";
+import {
+  isMonitorApproval,
+  monitorReplyEnabled,
+  approveLatestPendingReply,
+} from "@/lib/monitor-reply";
 
 // GO適用の結果が「着手」になったら、即 /api/execute を起こして実改修へ進める（応答はブロックしない）。
 function kickIfStarted(newState?: string) {
@@ -221,6 +226,32 @@ async function handleConversation(
   replyToken: string | undefined
 ): Promise<void> {
   try {
+    // ── 監視返信の承認（「これで返事して」）── 通常会話より先に判定する。
+    // kaizen-monitor が LINE 報告に同梱した返信案を、真田Bot として Slack スレッドへ投稿。
+    // 未設定（relay鍵なし）なら通常会話へ素通し（挙動不変・fail-safe）。
+    if (isMonitorApproval(text) && monitorReplyEnabled()) {
+      const r = await approveLatestPendingReply();
+      if (r.ok) {
+        await safeReply(
+          replyToken,
+          `真田Botで返信しました。\n${r.permalink ?? ""}`.trim()
+        );
+        return;
+      }
+      if (r.reason === "no_pending") {
+        await safeReply(
+          replyToken,
+          "返信待ちの監視案件が見つかりませんでした（承認済み・期限切れの可能性）。"
+        );
+        return;
+      }
+      await safeReply(
+        replyToken,
+        `返信の投稿に失敗しました（${r.error ?? r.reason}）。真田に確認を依頼してください。`
+      );
+      return;
+    }
+
     const intent = classifyIntent(text);
 
     // ── A) 既存案件への指示（GO/修正/却下） ──
