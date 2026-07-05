@@ -46,6 +46,7 @@ import {
   approveLatestPendingReply,
   findPendingByLineMessageId,
   classifyMonitorReplyIntent,
+  recordIntentClassification,
 } from "@/lib/monitor-reply";
 
 // GO適用の結果が「着手」になったら、即 /api/execute を起こして実改修へ進める（応答はブロックしない）。
@@ -249,6 +250,10 @@ async function handleConversation(
         // 「そのまま返して」等を自由文と誤解して本文投稿する事故（2026-07-05）の根治。
         // draft を渡す＝「案への同意」か「自分で書いた返信文」かを文脈で見分けられる。
         const intent = await classifyMonitorReplyIntent(text, pendingRef.entry?.draft);
+        // 意図判定ログを記録（成長エンジン向け学習データ蓄積・非ブロッキング）
+        recordInBackground(
+          recordIntentClassification(text, intent, pendingRef.entry?.draft?.slice(0, 80))
+        );
         if (intent === "cancel") {
           await pendingRef.cancel();
           await safeReply(replyToken, "承知しました。この返信は送らず取り下げました。", senderQuoteToken);

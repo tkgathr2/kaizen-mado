@@ -175,6 +175,62 @@ function heuristicIntent(t: string): MonitorReplyIntent {
   return t.length >= 20 ? "custom" : "unclear";
 }
 
+// ── 意図判定の成長エンジン ──
+// 社長の引用返信パターンを全件ログ → 定期分析 → 新パターン自動提案の閉路。
+// intent判定ログ: ⟦MILOG⟧{json}
+const MILOG_PREFIX = "⟦MILOG⟧";
+
+interface IntentLog {
+  text: string;
+  intent: MonitorReplyIntent;
+  timestamp: number;
+  draftPreview?: string; // 意思決定のコンテキスト（返信案を見て判定したか）
+}
+
+/** 引用返信の意図判定ログを記録する（成長エンジン向け学習データ蓄積）。
+ *  fail-safe: NOTION_TOKEN なしでも何もしない（webhook壊さない）。 */
+export async function recordIntentClassification(
+  text: string,
+  intent: MonitorReplyIntent,
+  draftPreview?: string
+): Promise<void> {
+  const token = notionToken();
+  if (!token) return;
+  const entry: IntentLog = {
+    text: text.slice(0, 200),
+    intent,
+    timestamp: Date.now(),
+    draftPreview: draftPreview ? draftPreview.slice(0, 80) : undefined,
+  };
+  await fetch(
+    `https://api.notion.com/v1/blocks/${statePageId()}/children`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Notion-Version": NOTION_VERSION,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        children: [
+          {
+            object: "block",
+            type: "paragraph",
+            paragraph: {
+              rich_text: [
+                {
+                  type: "text",
+                  text: { content: MILOG_PREFIX + JSON.stringify(entry) },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    }
+  ).catch(() => {});
+}
+
 /** 保留を登録する（B スクリプトが LINE 報告直後に呼ぶ）。 */
 export async function registerPendingReply(input: {
   channelId: string;
