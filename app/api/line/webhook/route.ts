@@ -179,6 +179,19 @@ async function handleEvent(ev: any): Promise<void> {
   // ③ テキスト（「GO KZ-12」/「却下」など、または自由文の会話）
   if (ev?.type === "message" && ev?.message?.type === "text") {
     const text: string = ev.message.text ?? "";
+
+    // 監視のLINE報告への「引用返信」は、コマンド解析より先に監視返信フローへ回す。
+    // 理由: 「OKOK わかった…」等が TEXT_GO(/^ok/i) に誤マッチしてチケットGOフローに
+    // 吸われ、Slack返信が実行されない事故が起きた（2026-07-05 3通目テストで実測）。
+    // 引用元が保留中の監視報告なら、社長の意図は明らかに「その報告への返事」である。
+    if (ev?.message?.quotedMessageId && monitorReplyEnabled()) {
+      const quotedPending = await findPendingByLineMessageId(ev.message.quotedMessageId);
+      if (quotedPending?.found) {
+        await handleConversation(text, ev.message.quotedMessageId, replyToken, ev?.message?.quoteToken);
+        return;
+      }
+    }
+
     const cmd = parseTextCommand(text);
 
     // コマンド（GO/修正/却下）でない自由文は双方向会話エンジンへ。
