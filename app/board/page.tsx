@@ -7,7 +7,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BoardColumn } from "@/lib/board";
 // 状態ごとの見た目（絵文字＋色）は lib/board.ts の正本を使う（状態名のズレを防ぐ）。
-import { metaOf } from "@/lib/board";
+// 滞留判定・要対応集計も lib/board.ts の純粋関数（テスト済み）を使う。
+import { metaOf, isCardStalled, heroSummary } from "@/lib/board";
 
 interface BoardData {
   ok: boolean;
@@ -85,13 +86,21 @@ export default function BoardPage() {
     };
   }, [load]);
 
-  // 初回データ到着時のみ：モバイル幅なら「完了」列を畳む（開閉操作はその後ユーザーに委ねる）。
+  // 初回データ到着時のみ：
+  // - モバイル幅なら「完了」列を畳む（現役チケットを先に見せる）
+  // - 空列（0件）はデスクトップでも畳んだ状態で始める（視覚ノイズ削減。開閉は既存トグルで可能）
+  // 開閉操作はその後ユーザーに委ねる。
   useEffect(() => {
     if (!data || didInitCollapse.current) return;
     didInitCollapse.current = true;
-    if (typeof window !== "undefined" && window.matchMedia("(max-width: 719px)").matches) {
-      setCollapsed({ 完了: true });
+    const init: Record<string, boolean> = {};
+    for (const col of data.columns) {
+      if (col.cards.length === 0) init[col.state] = true;
     }
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 719px)").matches) {
+      init["完了"] = true;
+    }
+    setCollapsed(init);
   }, [data]);
 
   const toggleCol = (state: string) =>
@@ -105,6 +114,11 @@ export default function BoardPage() {
       document.getElementById(`col-${state}`)?.scrollIntoView({ block: "start" });
     }, 80);
   };
+
+  // 要対応サマリー（ヒーローバー）。20秒ポーリングごとの再レンダーで now も進む。
+  const now = Date.now();
+  const hero =
+    data && data.configured && data.total > 0 ? heroSummary(data.columns, now) : null;
 
   const handleBoardAction = async (pageId: string, action: "go" | "reject") => {
     setActionInFlight(pageId);
@@ -172,8 +186,53 @@ export default function BoardPage() {
         </div>
       )}
 
-      {data && data.configured && data.total > 0 && (
+      {data && data.configured && data.total > 0 && hero && (
         <>
+          {/* 要対応ヒーローバー：GO待ち／止まってるかも／今日完了 を最上部で大きく見せる */}
+          <div className="board-hero" role="status">
+            {hero.allClear ? (
+              <div className="board-hero-ok">
+                🟢 すべて順調・要対応なし
+                {hero.doneToday > 0 && (
+                  <span className="board-hero-sub">（✅ 今日完了 {hero.doneToday}件）</span>
+                )}
+              </div>
+            ) : (
+              <>
+                {hero.goWait > 0 && (
+                  <button
+                    type="button"
+                    className="board-hero-item hero-go"
+                    onClick={() => jumpToCol("GO待ち")}
+                    title="GO待ち列へ移動"
+                  >
+                    🟢 GO待ち {hero.goWait}件
+                    {hero.goWaitOver > 0 && (
+                      <span className="board-hero-sub">（⏰48時間超 {hero.goWaitOver}件）</span>
+                    )}
+                  </button>
+                )}
+                {hero.stalledActive > 0 && (
+                  <button
+                    type="button"
+                    className="board-hero-item hero-stall"
+                    onClick={() => jumpToCol(hero.firstStalledState ?? "着手")}
+                    title="停滞中の列へ移動"
+                  >
+                    ⚠️ 止まってるかも {hero.stalledActive}件
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="board-hero-item hero-done"
+                  onClick={() => jumpToCol("完了")}
+                  title="完了列へ移動"
+                >
+                  ✅ 今日完了 {hero.doneToday}件
+                </button>
+              </>
+            )}
+          </div>
           <div className="board-meta">
             全 {data.total} 件 ／ 最終取得 {clockHHMM(data.updatedAt)}
           </div>
@@ -200,6 +259,10 @@ export default function BoardPage() {
             {data.columns.map((col) => {
               const m = metaOf(col.state);
               const isCollapsed = !!collapsed[col.state];
+              // 列内に停滞カードがあれば、列ヘッダに警告ドットを出す。
+              const hasStalled = col.cards.some(
+                (c) => isCardStalled(col.state, c.lastEdited, now).stalled
+              );
               return (
                 <section
                   key={col.state}
@@ -216,6 +279,15 @@ export default function BoardPage() {
                   >
                     <span className="board-col-name">
                       <span aria-hidden>{m.emoji}</span> {col.state}
+                      {hasStalled && (
+                        <span
+                          className="board-col-warn-dot"
+                          title="停滞しているカードがあります"
+                          aria-label="停滞しているカードがあります"
+                        >
+                          •
+                        </span>
+                      )}
                     </span>
                     <span className="board-col-count">{col.cards.length}</span>
                     <span className="board-col-chevron" aria-hidden>
@@ -224,17 +296,26 @@ export default function BoardPage() {
                   </button>
                   <div className="board-col-body">
                     {col.cards.length === 0 && <div className="board-empty">—</div>}
-                    {col.cards.map((c) => (
+                    {col.cards.map((c) => {
+                      const stall = isCardStalled(col.state, c.lastEdited, now);
+                      // 緊急度／重要度の数字は常時表示をやめ、ホバー（title）へ移動（ノイズ削減）。
+                      const scoreHint =
+                        typeof c.urgency === "number" || typeof c.importanceScore === "number"
+                          ? ` ／ 緊急度${typeof c.urgency === "number" ? c.urgency : "—"}／重要度${
+                              typeof c.importanceScore === "number" ? c.importanceScore : "—"
+                            }（各10点満点）`
+                          : "";
+                      return (
                       <div
                         key={c.pageId}
                         className={`board-card-wrap${col.state === "GO待ち" ? " has-actions" : ""}`}
                       >
                         <a
-                          className="board-card"
+                          className={`board-card${stall.stalled ? " is-stalled" : ""}`}
                           href={c.url}
                           target="_blank"
                           rel="noreferrer"
-                          title="Notionでチケット全文を開く"
+                          title={`Notionでチケット全文を開く${scoreHint}`}
                         >
                           <div className="board-card-top">
                             <span className="board-card-id">{c.ticketId || "KZ-?"}</span>
@@ -261,11 +342,11 @@ export default function BoardPage() {
                                 </span>
                               )
                             )}
-                            {(typeof c.urgency === "number" ||
-                              typeof c.importanceScore === "number") && (
-                              <span className="board-tag" title="緊急度／重要度（各10点満点）">
-                                {typeof c.urgency === "number" ? c.urgency : "—"}／
-                                {typeof c.importanceScore === "number" ? c.importanceScore : "—"}
+                            {stall.stalled && (
+                              <span
+                                className={`board-stall-badge${stall.kind === "goWait" ? " is-gowait" : ""}`}
+                              >
+                                {stall.label}
                               </span>
                             )}
                             {c.lastEdited && (
@@ -305,7 +386,8 @@ export default function BoardPage() {
                           </div>
                         )}
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </section>
               );

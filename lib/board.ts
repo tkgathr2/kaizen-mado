@@ -161,3 +161,137 @@ export function countByState(columns: BoardColumn[]): Record<string, number> {
   for (const c of columns) out[c.state] = c.cards.length;
   return out;
 }
+
+// ── 滞留（止まってるかも）判定 ──
+// 「開発が止まった場合に気づけるか」が社長の関心事。閾値は仕様固定：
+// - 着手・実装中: lastEdited から 30分超 → 停滞
+// - GO待ち: lastEdited から 48時間超 → 返答待ちアラート
+// ここは純粋関数（now を引数で受ける）にしてテスト可能に保つ。
+
+/** 停滞判定の対象となる「作業中」状態。 */
+export const STALL_ACTIVE_STATES: string[] = ["着手", "実装中"];
+/** 着手・実装中の停滞閾値（30分）。 */
+export const STALL_ACTIVE_MS = 30 * 60 * 1000;
+/** GO待ちの返答待ち閾値（48時間）。 */
+export const STALL_GO_WAIT_MS = 48 * 60 * 60 * 1000;
+
+/** 滞留判定の結果。stalled=false 以外は表示用ラベルまで組み立てて返す。 */
+export type StallInfo =
+  | { stalled: false }
+  | {
+      stalled: true;
+      /** active=着手/実装中の停滞、goWait=GO待ち48h超。 */
+      kind: "active" | "goWait";
+      /** 経過分数（切り捨て）。 */
+      minutes: number;
+      /** カードバッジにそのまま出せるラベル。 */
+      label: string;
+    };
+
+const NOT_STALLED: StallInfo = { stalled: false };
+
+function toEpochMs(now: number | Date): number {
+  return typeof now === "number" ? now : now.getTime();
+}
+
+/**
+ * カードが「止まってるかも」かを判定する純粋関数。
+ * - state が対象外／lastEdited 無し／不正ISO → stalled:false（誤警報より沈黙を選ぶ）
+ * - 着手・実装中: 30分超で停滞（60分超は時間表示）
+ * - GO待ち: 48時間超で返答待ちアラート
+ */
+export function isCardStalled(
+  state: string,
+  lastEditedIso: string | null | undefined,
+  now: number | Date = Date.now()
+): StallInfo {
+  if (!lastEditedIso) return NOT_STALLED;
+  const edited = new Date(lastEditedIso).getTime();
+  if (Number.isNaN(edited)) return NOT_STALLED;
+  const elapsed = toEpochMs(now) - edited;
+  if (elapsed <= 0) return NOT_STALLED;
+
+  if (STALL_ACTIVE_STATES.includes(state)) {
+    if (elapsed <= STALL_ACTIVE_MS) return NOT_STALLED;
+    const minutes = Math.floor(elapsed / 60000);
+    const label =
+      minutes > 60 ? `⚠️ 停滞 ${Math.floor(minutes / 60)}時間` : `⚠️ 停滞 ${minutes}分`;
+    return { stalled: true, kind: "active", minutes, label };
+  }
+
+  if (state === "GO待ち") {
+    if (elapsed <= STALL_GO_WAIT_MS) return NOT_STALLED;
+    const minutes = Math.floor(elapsed / 60000);
+    return { stalled: true, kind: "goWait", minutes, label: "⏰ 48h超・返答待ち" };
+  }
+
+  return NOT_STALLED;
+}
+
+/** iso が now と同じローカル日付（年月日一致）か。「今日完了」の判定に使う。 */
+export function isSameLocalDay(
+  iso: string | null | undefined,
+  now: number | Date = Date.now()
+): boolean {
+  if (!iso) return false;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return false;
+  const n = new Date(toEpochMs(now));
+  return (
+    d.getFullYear() === n.getFullYear() &&
+    d.getMonth() === n.getMonth() &&
+    d.getDate() === n.getDate()
+  );
+}
+
+/** 要対応ヒーローバー用の集計。 */
+export interface HeroSummary {
+  /** GO待ちの件数。 */
+  goWait: number;
+  /** GO待ちのうち lastEdited が48時間超のもの。 */
+  goWaitOver: number;
+  /** 着手・実装中で30分超停滞しているカード数。 */
+  stalledActive: number;
+  /** 停滞カードを含む最初の列名（ジャンプ先）。無ければ null。 */
+  firstStalledState: string | null;
+  /** statusChangedAt が今日の「完了」カード数。 */
+  doneToday: number;
+  /** 要対応（GO待ち＋停滞）がゼロか。 */
+  allClear: boolean;
+}
+
+/** 列データから要対応サマリーを集計する純粋関数。 */
+export function heroSummary(
+  columns: BoardColumn[],
+  now: number | Date = Date.now()
+): HeroSummary {
+  let goWait = 0;
+  let goWaitOver = 0;
+  let stalledActive = 0;
+  let firstStalledState: string | null = null;
+  let doneToday = 0;
+
+  for (const col of columns) {
+    for (const card of col.cards) {
+      const stall = isCardStalled(card.state, card.lastEdited, now);
+      if (col.state === "GO待ち") {
+        goWait++;
+        if (stall.stalled && stall.kind === "goWait") goWaitOver++;
+      }
+      if (stall.stalled && stall.kind === "active") {
+        stalledActive++;
+        if (!firstStalledState) firstStalledState = col.state;
+      }
+      if (col.state === "完了" && isSameLocalDay(card.statusChangedAt, now)) doneToday++;
+    }
+  }
+
+  return {
+    goWait,
+    goWaitOver,
+    stalledActive,
+    firstStalledState,
+    doneToday,
+    allClear: goWait === 0 && stalledActive === 0,
+  };
+}
