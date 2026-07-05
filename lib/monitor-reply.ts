@@ -84,6 +84,97 @@ export function isMonitorCancel(text: string): boolean {
   return /^(やめて|やめておいて|送らないで|返信しないで|返事しないで|キャンセル|取り下げ|却下|なし)/.test(t);
 }
 
+// ── 引用返信の意図判定（LLM）──
+// 「これで返事して」「そのまま返して」「OK」…承認の言い回しは無限にあり、正規表現の
+// 追いかけっこでは社長の日本語を取りこぼす（2026-07-05「そのまま返して」が自由文扱いに
+// なり、その文字列がそのままSlackへ投稿された事故）。以後、明白な定型だけ高速パスで
+// 判定し、残りは LLM に意図を聞く。LLM不通時は控えめフォールバック（誤投稿より確認）。
+export type MonitorReplyIntent = "approve" | "cancel" | "custom" | "unclear";
+
+const INTENT_TOOL = {
+  name: "classify_intent",
+  description: "社長の引用返信の意図を分類する",
+  input_schema: {
+    type: "object",
+    properties: {
+      intent: {
+        type: "string",
+        enum: ["approve", "cancel", "custom"],
+        description:
+          "approve=用意済みの返信案をそのまま送ってよいという承認（例:これで返事して/そのまま返して/OK/いいよ/送って/お願い/承認）。" +
+          "cancel=返信を送らない・取り下げ（例:やめて/送らないで/却下）。" +
+          "custom=このメッセージ自体が返信本文（実際に相手へ送る文章が書かれている）。",
+      },
+    },
+    required: ["intent"],
+  },
+} as const;
+
+/** 引用返信テキストの意図を判定する。定型は正規表現の高速パス、それ以外は LLM。
+ *  draft（提示済みの返信案）を渡すと LLM が文脈込みで判定できる（精度向上）。 */
+export async function classifyMonitorReplyIntent(
+  text: string,
+  draft?: string
+): Promise<MonitorReplyIntent> {
+  const t = (text || "").trim();
+  if (!t) return "unclear";
+  // 高速パス（明白な定型のみ・API代ゼロ）
+  if (isMonitorApproval(t)) return "approve";
+  if (isMonitorCancel(t)) return "cancel";
+  if (/^(そのまま|それ)(返して|送って|で(いい|OK|オッケー|お願い))/.test(t)) return "approve";
+  if (t.length <= 10 && /^(ok|okay|オッケー|おっけー|おけ|了解|りょ|いいよ|良い|はい|お願い|頼む|承認|GO|ゴー)[。．!！~〜]*$/i.test(t)) return "approve";
+
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return heuristicIntent(t);
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      signal: AbortSignal.timeout(10_000),
+      body: JSON.stringify({
+        model: "claude-haiku-4-5",
+        max_tokens: 100,
+        system:
+          "背景：Slack投稿への返信案をLINEで社長に提示し、社長がそれに引用返信した。社長のメッセージを分類する。\n" +
+          "- approve：提示済みの案を**そのまま送れ**という承認・同意。案の内容に言及せず GO だけを伝える言葉（例：これで返事して／そのまま返して／OK／いいよ／それでいこう）。\n" +
+          "- custom：社長自身が書いた**返信文そのもの**。Slackの相手に宛てたメッセージとして成立する文章（挨拶・状況説明・対応の約束・具体的内容を含む）。案の代わりにこれを送る。\n" +
+          "- cancel：送らない・取り下げ。\n" +
+          "判定基準：そのメッセージをそのままSlackの相手に送って意味が通るなら custom。案への同意・指示なら approve。承諾の挨拶で始まっていても、具体的な対応内容や約束が書かれていれば custom。",
+        messages: [
+          {
+            role: "user",
+            content:
+              (draft ? `【提示済みの返信案】\n${draft.slice(0, 500)}\n\n` : "") +
+              `【社長の引用返信】\n${t}`,
+          },
+        ],
+        tools: [INTENT_TOOL],
+        tool_choice: { type: "tool", name: "classify_intent" },
+      }),
+    });
+    if (!res.ok) return heuristicIntent(t);
+    const data = (await res.json()) as {
+      content?: Array<{ type: string; input?: { intent?: string } }>;
+    };
+    const tu = (data.content || []).find((c) => c.type === "tool_use");
+    const intent = tu?.input?.intent;
+    if (intent === "approve" || intent === "cancel" || intent === "custom") return intent;
+    return heuristicIntent(t);
+  } catch {
+    return heuristicIntent(t);
+  }
+}
+
+/** LLM不通時の控えめフォールバック。短文を誤って本文投稿する事故を避け、
+ *  相手に向けた文章と思える長文だけ custom、短文は unclear（聞き直し）。 */
+function heuristicIntent(t: string): MonitorReplyIntent {
+  return t.length >= 20 ? "custom" : "unclear";
+}
+
 /** 保留を登録する（B スクリプトが LINE 報告直後に呼ぶ）。 */
 export async function registerPendingReply(input: {
   channelId: string;
