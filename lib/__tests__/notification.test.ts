@@ -28,6 +28,7 @@ vi.mock("@/lib/line", () => ({
     return t.length <= max ? t : t.slice(0, Math.max(0, max - 1)) + "…";
   },
   BOARD_URL: "https://kaizen.example/board",
+  actionBanner: (kind: string, action?: string) => `BANNER(${kind}:${action ?? ""})`,
 }));
 
 // ── テスト用のインメモリストア ──

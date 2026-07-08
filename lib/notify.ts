@@ -20,7 +20,7 @@
 //   （カイゼンくんの改善ループを通知の失敗で止めない）。
 import type { TicketRow } from "./tickets";
 import { appendDiscussionBlocks } from "./tickets";
-import { lineEnabled, pushText, truncateForLine, BOARD_URL, msgHead, stageBar } from "./line";
+import { lineEnabled, pushText, truncateForLine, BOARD_URL, msgHead, stageBar, actionBanner } from "./line";
 
 const NOTION_VERSION = "2022-06-28";
 
@@ -86,6 +86,8 @@ export async function hasMarker(pageId: string, heading: string): Promise<boolea
 /** 詰まり連絡の本文（助けを求める形・素人語・短く）。 */
 export function buildStuckText(ticket: TicketRow, reason: string): string {
   return [
+    actionBanner("reply", "教えてほしいことがあります"),
+    ``,
     msgHead("🆘", "ちょっと詰まりました", ticket.system, ticket.title),
     `（${ticket.ticketId}）これ、自動で直せず詰まりました。`,
     `必要なこと：${truncateForLine(reason || "詳しい状況を教えてください", 60)}`,
@@ -132,6 +134,8 @@ export async function notifyStuckOnce(
 /** Merge待ち連絡の本文（社長のアクション＝Mergeボタン1タップを求める形・素人語）。 */
 export function buildReviewText(ticket: TicketRow, prUrl: string, detail: string): string {
   return [
+    actionBanner("tap", "Mergeボタンを1回タップ"),
+    ``,
     msgHead("✋", "Merge待ちです", ticket.system, ticket.title),
     `（${ticket.ticketId}）直すコードはできました。自動反映の条件を満たさなかったため、`,
     `社長のMerge1タップで本番に反映されます。`,
@@ -175,6 +179,8 @@ export async function notifyReviewOnce(
 /** 完了連絡の本文（GO案件が本番反映まで完走したことを短く報告）。 */
 export function buildMergedText(ticket: TicketRow, prUrl: string): string {
   return [
+    actionBanner("fyi", "済みのご報告・操作は要りません"),
+    ``,
     msgHead("✅", "直して反映しました", ticket.system, ticket.title),
     `（${ticket.ticketId}）自動改修→検証→本番反映まで完了しました。`,
     ``,

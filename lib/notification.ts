@@ -24,7 +24,7 @@
  *    （cron ハンドラだけは結果を JSON で可視化する）。
  */
 
-import { pushText, truncateForLine, lineEnabled, BOARD_URL } from "@/lib/line";
+import { pushText, truncateForLine, lineEnabled, BOARD_URL, actionBanner } from "@/lib/line";
 
 export interface QueuedNotification {
   id: string; // uuid
@@ -166,7 +166,12 @@ export function buildDigestText(items: QueuedNotification[]): string {
     groups.set(n.ticketId, arr);
   }
 
-  const header = ["🌅 カイゼン 昨日のうごき（まとめ）", ""];
+  const header = [
+    actionBanner("fyi", "昨日のまとめ・操作は要りません"),
+    "",
+    "🌅 カイゼン 昨日のうごき（まとめ）",
+    "",
+  ];
   const bodyLines: string[] = [];
   let used = header.join("\n").length;
   let omitted = 0; // 予算超過で載せられなかった通知件数
