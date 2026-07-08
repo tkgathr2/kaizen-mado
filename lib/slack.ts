@@ -20,6 +20,9 @@ import { channelsForSystem } from "./slackChannels";
 
 const SLACK_HISTORY_URL = "https://slack.com/api/conversations.history";
 const SLACK_POST_URL = "https://slack.com/api/chat.postMessage";
+const SLACK_USERS_INFO_URL = "https://slack.com/api/users.info";
+/** users.info のタイムアウト（GO伺い送信を長く待たせない）。 */
+const SLACK_USER_INFO_TIMEOUT_MS = 4000;
 /** 1チャンネルあたりの最大取得件数（コスト・情報量の上限）。 */
 const MAX_MESSAGES = 15;
 /** 1メッセージあたりの最大文字数（マスク後にさらに切り詰める）。 */
@@ -139,6 +142,42 @@ export async function readSlackForSystem(
     })
   );
   return { channels };
+}
+
+/**
+ * 起票者フィールド（例: "Slack:<@U0AR8F63YBA>"）を人間が読める表示名へ解決する。
+ * 社長要望「誰から来たか分かるようにしてほしい」対応（2026-07-08）。
+ * - 既にメール/氏名等の読める形式ならそのまま返す（Slackメンション形式のときだけAPIを叩く）。
+ * - トークン未設定・API失敗・タイムアウトは元の文字列にフォールバック
+ *   （GO伺い送信をユーザー名解決の失敗で止めない・fail-safe）。
+ */
+export async function resolveReporterDisplay(
+  reporter: string | null | undefined
+): Promise<string> {
+  const raw = (reporter || "").trim();
+  if (!raw) return "不明";
+  const m = raw.match(/^Slack:<@([A-Z0-9]+)>$/i);
+  if (!m) return raw;
+
+  const token = process.env.SLACK_BOT_TOKEN?.trim();
+  if (!token) return raw;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SLACK_USER_INFO_TIMEOUT_MS);
+  try {
+    const res = await fetch(
+      `${SLACK_USERS_INFO_URL}?user=${encodeURIComponent(m[1])}`,
+      { headers: { authorization: `Bearer ${token}` }, signal: controller.signal }
+    );
+    const data = await res.json().catch(() => null);
+    if (!data?.ok || !data.user) return raw;
+    const name = data.user.profile?.real_name || data.user.real_name || data.user.name;
+    return name ? String(name) : raw;
+  } catch {
+    return raw;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**

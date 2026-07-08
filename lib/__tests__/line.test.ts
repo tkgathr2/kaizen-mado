@@ -192,6 +192,8 @@ describe("line（純関数）", () => {
     expect(text).not.toContain("…ほか");
     // セクション間に空行（余白）がある
     expect(text).toContain("\n\n❓ こまりごと");
+    // 社長要望「誰から来たか分かるようにしてほしい」対応（2026-07-08）
+    expect(text).toContain("👤 誰から：現場");
   });
 
   // plain が空なら houshin/steps/risks へフォールバックして破綻しない
