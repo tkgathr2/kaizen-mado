@@ -400,6 +400,23 @@ export function stageBar(current: StageIndex): string {
   );
 }
 
+// ── 冒頭バナー（社長要望2026-07-08「趣旨がわかりにくい」対応） ──
+// どの通知も最初に「自分が何かするのか？するなら何を?」を1行で判断できるようにする。
+// これを全通知の"最上段"に置くことで、社長は本文を読む前に対応要否を掴める。
+//   reply … 返信（GO/修正/却下 や 情報提供）を待っている
+//   tap   … ボタンを1回タップ（Merge等）してほしい
+//   fyi   … お知らせ・操作は要らない（真田が進める/済み）
+export type ActionKind = "reply" | "tap" | "fyi";
+
+/** 通知冒頭の「あなた待ち／お知らせ」バナー。action=具体的にしてほしいこと（1行・短く）。 */
+export function actionBanner(kind: ActionKind, action?: string): string {
+  if (kind === "fyi") {
+    return `⚪ お知らせ（${action || "操作は要りません"}）`;
+  }
+  const verb = kind === "tap" ? "ボタンを1回タップ" : "LINEで返信";
+  return `🟢 あなた待ち → ${truncateForLine(action || verb, 30)}`;
+}
+
 // 各システムのやさしい説明（社長が「何のシステムか」を一目で分かるように）。
 const SYSTEM_LABELS: Record<string, string> = {
   カイゼンくん本体: "カイゼンくん（みんなの改善の声を受ける窓口アプリ）",
@@ -475,6 +492,8 @@ export function buildProposalText(ticket: TicketRow, d: DiscussResult): string {
     : truncateForLine(ticket.reporter || "不明", 30);
 
   return [
+    actionBanner("reply", "直していい？を決めてください"),
+    ``,
     `🖥 ${sysLabel}`,
     `💡 カイゼンの提案`,
     `👤 誰から：${reporterLine}`,
@@ -583,6 +602,8 @@ export function buildInfraNoticeText(
   ticket: { ticketId?: string | null; system?: string | null; title?: string | null }
 ): string {
   return [
+    actionBanner("fyi", "真田が対応中・操作は要りません"),
+    ``,
     msgHead("⚙️", "仕組み側の不調です", ticket.system, ticket.title),
     `（${ticket.ticketId || "KZ-?"}）この件は、いまカイゼンくんの仕組み側（連携/権限/設定）が`,
     `一時的に不調で自動改修まで進めませんでした。`,

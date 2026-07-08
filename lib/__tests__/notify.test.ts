@@ -16,6 +16,7 @@ vi.mock("@/lib/line", () => ({
   BOARD_URL: "https://kaizen.takagi.bz/board",
   msgHead: () => "HEAD",
   stageBar: () => "STAGE",
+  actionBanner: (kind: string, action?: string) => `BANNER(${kind}:${action ?? ""})`,
 }));
 
 // 印の追記（appendDiscussionBlocks）も差し替えて、呼ばれた回数・引数を検証。

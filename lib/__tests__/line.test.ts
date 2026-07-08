@@ -311,19 +311,42 @@ describe("工程ステッパー stageBar", () => {
     };
     const text = buildProposalText(t, d);
     const lines = text.split("\n");
-    // 1行目=やさしいシステム名（最上段）、2行目=「カイゼンの提案」
-    expect(lines[0]).toContain("プロレポ");
-    expect(lines[1]).toContain("提案");
+    // 1行目=「あなた待ち」バナー（対応要否を最上段で示す・社長要望2026-07-08）
+    expect(lines[0]).toContain("あなた待ち");
+    // その直後にやさしいシステム名と「カイゼンの提案」が続く
+    expect(lines[2]).toContain("プロレポ");
+    expect(lines[3]).toContain("提案");
     // こまりごとに plain が出る
     expect(text).toContain("一覧を新着順にしたい");
     // 工程バーとリンクは存在しつつ、主題より後ろ
     expect(text).toContain("🔵提案");
     expect(text).toContain("/board");
     expect(text.indexOf("プロレポ")).toBeLessThan(text.indexOf("📍"));
+    // バナーが主題より前にある
+    expect(text.indexOf("あなた待ち")).toBeLessThan(text.indexOf("プロレポ"));
   });
 });
 
-import { msgHead, systemLabel } from "../line";
+import { msgHead, systemLabel, actionBanner } from "../line";
+
+describe("actionBanner（対応要否バナー）", () => {
+  it("reply/tap は『あなた待ち』＋具体アクション、fyi は『お知らせ』", () => {
+    expect(actionBanner("reply", "直していい？を決めてください")).toBe(
+      "🟢 あなた待ち → 直していい？を決めてください"
+    );
+    expect(actionBanner("tap", "Mergeボタンを1回タップ")).toBe(
+      "🟢 あなた待ち → Mergeボタンを1回タップ"
+    );
+    expect(actionBanner("fyi", "真田が対応中・操作は要りません")).toBe(
+      "⚪ お知らせ（真田が対応中・操作は要りません）"
+    );
+  });
+  it("action 未指定でも既定の文言でフォールバックする", () => {
+    expect(actionBanner("reply")).toContain("LINEで返信");
+    expect(actionBanner("tap")).toContain("ボタンを1回タップ");
+    expect(actionBanner("fyi")).toContain("操作は要りません");
+  });
+});
 
 describe("systemLabel（やさしいシステム名）", () => {
   it("既知システムはやさしい説明つき、未知はそのまま", () => {
