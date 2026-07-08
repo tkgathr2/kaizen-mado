@@ -5,6 +5,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { TicketRow } from "./tickets";
 import type { DiscussResult } from "./discuss";
+import { resolveReporterDisplay } from "./slack";
 
 const LINE_PUSH_ENDPOINT = "https://api.line.me/v2/bot/message/push";
 const LINE_REPLY_ENDPOINT = "https://api.line.me/v2/bot/message/reply";
@@ -469,9 +470,14 @@ export function buildProposalText(ticket: TicketRow, d: DiscussResult): string {
     : truncateForLine(systemLabel(ticket.system), 40);
   const kousuu = looksGarbled(d.kousuu) ? "未記載" : truncateForLine(d.kousuu, 16);
 
+  const reporterLine = looksGarbled(ticket.reporter)
+    ? "不明"
+    : truncateForLine(ticket.reporter || "不明", 30);
+
   return [
     `🖥 ${sysLabel}`,
     `💡 カイゼンの提案`,
+    `👤 誰から：${reporterLine}`,
     ``,
     `❓ こまりごと`,
     `　${problemPlain}`,
@@ -592,12 +598,15 @@ export function buildInfraNoticeText(
  * （社長がこの提案を引用返信で操作できるように）。 */
 export async function pushProposal(ticket: TicketRow, d: DiscussResult): Promise<boolean> {
   if (!lineEnabled()) return false;
+  // Slackメンション形式の起票者は表示名へ解決してから文面を組む（社長要望2026-07-08）。
+  // 解決に失敗しても buildProposalText 側で元の文字列にフォールバックされる（fail-safe）。
+  const reporterDisplay = await resolveReporterDisplay(ticket.reporter);
   const res = await postLine(LINE_PUSH_ENDPOINT, {
     to: targetUserId(),
     messages: [
       {
         type: "text",
-        text: buildProposalText(ticket, d),
+        text: buildProposalText({ ...ticket, reporter: reporterDisplay }, d),
         quickReply: goQuickReply(ticket.pageId),
       },
     ],
