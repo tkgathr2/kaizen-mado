@@ -5,6 +5,7 @@ import { Suspense, useEffect, useRef, useState } from "react";
 // ref は同期更新なので「実行中」を確実にブロックでき、重複起票/重複送信を防ぐ。
 import { useSearchParams } from "next/navigation";
 import { resolveSystem } from "@/lib/systems";
+import { findTarget } from "@/lib/targets";
 import { isEmbed } from "@/lib/embed";
 import type { ChatMessage, Ticket } from "@/lib/types";
 
@@ -32,6 +33,7 @@ function KaizenMado() {
   const [phase, setPhase] = useState<"clarify" | "confirm">("clarify");
   const [ticket, setTicket] = useState<Ticket | null>(null);
   const [reporter, setReporter] = useState(reporterParam);
+  const [manualRepo, setManualRepo] = useState(""); // target.repo が未確定なシステムのみ入力必須
   const [status, setStatus] = useState<"chatting" | "submitting" | "done">("chatting");
   const [doneId, setDoneId] = useState<string>("");
   const [error, setError] = useState("");
@@ -94,6 +96,11 @@ function KaizenMado() {
 
   async function submit() {
     if (!ticket || status !== "chatting" || inFlightRef.current) return;
+    const repo = findTarget(ticket.system)?.repo || manualRepo.trim();
+    if (!repo) {
+      setError("対象システムのリポを指定してください");
+      return;
+    }
     inFlightRef.current = true;
     setStatus("submitting");
     setError("");
@@ -101,7 +108,7 @@ function KaizenMado() {
       const res = await fetch("/api/submit", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ticket, reporter: reporter.trim() || null }),
+        body: JSON.stringify({ ticket, reporter: reporter.trim() || null, repo }),
       });
       const data = await res.json();
       if (!res.ok || !data?.ok) throw new Error(data?.error || "起票に失敗しました");
@@ -127,6 +134,7 @@ function KaizenMado() {
   }
 
   const showConfirm = phase === "confirm" && ticket && status !== "done";
+  const targetRepo = ticket ? findTarget(ticket.system)?.repo ?? null : null;
 
   return (
     <div className={embed ? "app embed" : "app"}>
@@ -164,6 +172,19 @@ function KaizenMado() {
               <dd>{ticket.title}</dd>
               <dt>内容</dt>
               <dd>{ticket.detail}</dd>
+              <dt>リポジトリ</dt>
+              <dd>
+                {targetRepo ? (
+                  targetRepo
+                ) : (
+                  <input
+                    value={manualRepo}
+                    onChange={(e) => setManualRepo(e.target.value)}
+                    placeholder="例：tkgathr2/xxx"
+                    maxLength={80}
+                  />
+                )}
+              </dd>
             </dl>
           </div>
         )}

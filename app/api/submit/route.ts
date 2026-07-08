@@ -5,6 +5,7 @@ import { auth } from "@/auth";
 import { createTicket } from "@/lib/notion";
 import { memorizeToKnowhow } from "@/lib/knowhow";
 import { normalizeSystemForTicket } from "@/lib/systems";
+import { findTarget } from "@/lib/targets";
 import { isAuthEnabled } from "@/lib/authz";
 import { kickEndpoint } from "@/lib/trigger";
 import type { Ticket, TicketType, Importance } from "@/lib/types";
@@ -41,6 +42,12 @@ export async function POST(req: NextRequest) {
   const ticket = coerceTicket(body?.ticket);
   if (!ticket) {
     return NextResponse.json({ error: "ticket is required" }, { status: 400 });
+  }
+  // 対象システムに確定リポがあれば自動採用、無ければクライアント入力（手動リポ）を必須とする。
+  // 新規提案にのみ適用（既存チケットの再検証はしない）。
+  const repo = findTarget(ticket.system)?.repo || (typeof body?.repo === "string" ? body.repo.trim() : "");
+  if (!repo) {
+    return NextResponse.json({ error: "対象システムのリポを指定してください" }, { status: 400 });
   }
   // 起票者はサーバ側でセッションから確定（クライアント入力より優先・なりすまし防止）。
   // fail-safe：鍵未投入（認証OFF）時は auth() を呼ばず従来どおり body.reporter or null。
