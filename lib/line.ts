@@ -437,6 +437,27 @@ export function systemLabel(system: string | null | undefined): string {
   return SYSTEM_LABELS[system] || system;
 }
 
+/** LINE Message API でメッセージ本文を取得（引用メッセージ context 用）。
+ * messageId が引用元を指す場合、過去メッセージを取得して本文を返す（失敗時は null）。*/
+export async function getQuotedMessageContent(messageId: string): Promise<string | null> {
+  try {
+    const token = accessToken();
+    if (!token) return null;
+    const res = await fetch(`https://api.line.me/v2/bot/message/${messageId}/content`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    if (!res.ok) return null;
+    // メッセージ本体がテキストメッセージの場合、Content-Type: text/plain で本文が返される
+    const text = await res.text();
+    return text ? text.trim().slice(0, 500) : null; // 500字制限
+  } catch {
+    return null;
+  }
+}
+
 /** メッセージ先頭の「何の件か」ヘッダー（3行）。社長が最初に
  * ①どのシステムか（やさしい説明・最上段） ②種別 ③ざっくり何をするか を一目で掴めるように。
  * 例：🖥 カイゼンくん（…窓口アプリ）/ 💡【カイゼンの提案】/ ✏️ 窓口に説明を1行足す */

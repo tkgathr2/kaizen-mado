@@ -13,6 +13,7 @@ import {
   isAuthorizedUser,
   replyText,
   getQuotedMap,
+  getQuotedMessageContent,
 } from "@/lib/line";
 import {
   fetchTicketByPageId,
@@ -376,11 +377,19 @@ async function handleConversation(
       const ctx = await loadResolveContext();
       const statusNote = summarizeStatus(ctx);
       const hint = "社長が情報質問をしている。簡潔に説明・回答する。";
+
+      // 引用メッセージ本文を取得・context に追加（古いメッセージも参照可能に）
+      let quotedContext = "";
+      if (quotedMessageId) {
+        const quotedText = await getQuotedMessageContent(quotedMessageId).catch(() => null);
+        if (quotedText) quotedContext = `\n【引用元メッセージ】\n${quotedText}`;
+      }
+
       let reply: string | null = null;
       if (converseEnabled()) {
-        const hits = await recallForReply(text, 3);
+        const hits = await recallForReply(text + quotedContext, 3);
         const learningNote = formatLearningContext(hits);
-        reply = await generateReply(text, statusNote, hint, learningNote, [...convHistory]);
+        reply = await generateReply(text + quotedContext, statusNote, hint, learningNote, [...convHistory]);
       }
       if (!reply) {
         reply = "すみません、それについては詳しく説明できません。もし改善のご要望でしたら、具体的にお聞きします。";
