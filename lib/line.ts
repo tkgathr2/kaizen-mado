@@ -331,9 +331,9 @@ export async function replyText(
 
 // ── 文面ヘルパ（スマホのLINEは1行が短く折り返されるため、短文・要点先頭で組む） ──
 
-/** LINE向けに1行へ整形して切り詰める（改行・連続空白は1スペースに）。 */
+/** LINE向けに切り詰める（改行は保持・連続空白は1スペースに）。 */
 export function truncateForLine(s: string | null | undefined, max: number): string {
-  const t = (s || "").trim().replace(/\s+/g, " ");
+  const t = (s || "").trim().replace(/ +/g, " ");
   if (t.length <= max) return t;
   return t.slice(0, Math.max(0, max - 1)) + "…";
 }
