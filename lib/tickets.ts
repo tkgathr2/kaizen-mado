@@ -321,6 +321,61 @@ export async function findGoMachiByTicketId(ticketId: string): Promise<TicketRow
   return rows.find((r) => r.ticketId.toUpperCase().replace(/\s/g, "") === norm) ?? null;
 }
 
+/** Slack thread_ts で既存チケットを探す（Slack引用返信時の重複防止）。
+ * 同じスレッド内の複数メンションが複数の app_mention イベント生成・重複起票を防ぐため、
+ * 直近に同じ slackThreadTs を持つ「受付」「GO待ち」「議論中」チケットを検索。
+ * ヒットしたら既存チケットを返し、新規起票をスキップする。失敗時は null を返す（fail-safe）。 */
+export async function findExistingBySlackThreadTs(
+  threadTs: string,
+  channelId: string
+): Promise<TicketRow | null> {
+  if (!threadTs || !channelId) return null;
+  try {
+    const { token, databaseId } = getAuth();
+    const res = await fetch(`https://api.notion.com/v1/databases/${databaseId}/query`, {
+      method: "POST",
+      headers: headers(token),
+      body: JSON.stringify({
+        filter: {
+          and: [
+            { property: "Slack Thread TS", rich_text: { contains: threadTs } },
+            { property: "Slack Channel ID", rich_text: { contains: channelId } },
+            {
+              or: [
+                { property: "状態", select: { equals: "受付" } },
+                { property: "状態", select: { equals: "GO待ち" } },
+                { property: "状態", select: { equals: "議論中" } },
+              ],
+            },
+          ],
+        },
+        sorts: [{ timestamp: "created_time", direction: "descending" }],
+        page_size: 1,
+      }),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      console.warn(
+        "[tickets] findExistingBySlackThreadTs API error:",
+        res.status,
+        errText.slice(0, 200)
+      );
+      return null;
+    }
+    const data = await res.json();
+    const results = Array.isArray(data?.results) ? data.results : [];
+    if (results.length === 0) return null;
+    return parseRow(results[0]);
+  } catch (err) {
+    console.error(
+      "[tickets] findExistingBySlackThreadTs failed:",
+      (err as Error).message
+    );
+    return null;
+  }
+}
+
 /** 「実装中」が一定時間以上滞留したチケット（=stuck）の判定しきい値（分）。
  * implement ジョブ（GitHub Actions）が失敗/タイムアウト/中断で callback に到達しないと、
  * チケットが「実装中」のまま永久滞留する。閾値は env KAIZEN_STUCK_MINUTES（既定30分）。 */

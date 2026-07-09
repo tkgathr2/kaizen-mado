@@ -11,7 +11,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { createTicket } from "@/lib/notion";
-import { findRecentDuplicate } from "@/lib/tickets";
+import { findRecentDuplicate, findExistingBySlackThreadTs } from "@/lib/tickets";
 import type { Ticket, TicketType } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -190,6 +190,20 @@ export async function POST(req: NextRequest) {
       slackUserId: userId,
     };
     const reporter = `Slack:<@${userId}>`;
+
+    // ── Slack thread_ts による既存チケット検索（Slack引用返信の重複防止） ──
+    // 同じスレッド内の複数メンション→複数の app_mention イベント→重複起票を防ぐため、
+    // 直近に同じ thread_ts を持つ「受付」「GO待ち」「議論中」チケットを探す。
+    // ヒットしたら新規起票をスキップしてそれを使う。
+    const existingByThread = await findExistingBySlackThreadTs(threadTs, channelId).catch(() => null);
+    if (existingByThread) {
+      console.log(
+        "[slack/events] found existing ticket in thread:",
+        existingByThread.ticketId,
+        "skipping duplicate creation"
+      );
+      return NextResponse.json({ ok: true });
+    }
 
     // 重複チェック（15秒窓・fail-safe）
     const dup = await findRecentDuplicate(ticket, reporter).catch(() => null);
