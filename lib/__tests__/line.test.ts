@@ -196,6 +196,39 @@ describe("line（純関数）", () => {
     expect(text).toContain("👤 誰から：現場");
   });
 
+  // 社長指示 2026-07-09「SlackのIDではなくて名前にして」：生の <@U…> を出さない
+  it("buildProposalText：起票者が生のSlackメンションでもIDを表示しない", () => {
+    const savedNames = process.env.KAIZEN_SLACK_USER_NAMES;
+    process.env.KAIZEN_SLACK_USER_NAMES = "U0AR8F63YBA:西村克人";
+    try {
+    const base = {
+      pageId: "p2", ticketId: "KZ-72", system: "ほうこちゃん", type: "新機能",
+      importance: "中", title: "御中欄を手入力に", detail: "d", state: "GO待ち", fgsUrl: null,
+    };
+    const d: DiscussResult = {
+      houshin: "御中欄を入力式にする", steps: ["①入力欄化"], kousuu: "1〜2日",
+      risks: [], importance: "中", urgency: "中", recommendation: "GO推奨",
+      goDraft: "...", problemPlain: "御中が固定", fixPlain: ["手入力にする"],
+      riskPlain: "空欄印刷の崩れ", source: "claude",
+    };
+    // 既知ユーザー → 名前で表示
+    const known = buildProposalText(
+      { ...base, reporter: "Slack:<@U0AR8F63YBA>" } as TicketRow, d
+    );
+    expect(known).toContain("👤 誰から：西村克人");
+    expect(known).not.toContain("U0AR8F63YBA");
+    // 未知ユーザー → 生IDを出さず読める表記
+    const unknown = buildProposalText(
+      { ...base, reporter: "Slack:<@UZZ9NOTINMAP>" } as TicketRow, d
+    );
+    expect(unknown).toContain("👤 誰から：Slackの方（お名前未登録）");
+    expect(unknown).not.toContain("UZZ9NOTINMAP");
+    } finally {
+      if (savedNames === undefined) delete process.env.KAIZEN_SLACK_USER_NAMES;
+      else process.env.KAIZEN_SLACK_USER_NAMES = savedNames;
+    }
+  });
+
   // plain が空なら houshin/steps/risks へフォールバックして破綻しない
   it("buildProposalText：plain無しは houshin/steps/risks にフォールバック", () => {
     const ticket = {
@@ -265,9 +298,10 @@ describe("buildNextStepLines（社長案件の具体的な次の一手・W5）",
 import { truncateForLine, notionPageUrl } from "../line";
 
 describe("文面ヘルパ", () => {
-  it("truncateForLine は改行を潰して max 文字に丸める", () => {
+  it("truncateForLine は改行を保持し連続空白を1つに潰して max 文字に丸める", () => {
     expect(truncateForLine("あいうえお", 10)).toBe("あいうえお");
-    expect(truncateForLine("あい\nうえ  お", 10)).toBe("あい うえ お");
+    // 実装は「改行は保持・連続空白は1スペース」（lib/line.ts の意図コメント準拠）
+    expect(truncateForLine("あい\nうえ  お", 10)).toBe("あい\nうえ お");
     expect(truncateForLine("あいうえおかきくけこさ", 10)).toBe("あいうえおかきくけ…");
     expect(truncateForLine(null, 5)).toBe("");
   });

@@ -12,6 +12,8 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { createTicket } from "@/lib/notion";
 import { findRecentDuplicate, findExistingBySlackThreadTs } from "@/lib/tickets";
+import { guessSystem } from "@/lib/converse";
+import { normalizeSystemForTicket } from "@/lib/systems";
 import type { Ticket, TicketType } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -70,9 +72,16 @@ function verifySlackSignature(
   return false;
 }
 
-/** メンション（<@UXXX>）を除去して本文だけ取り出す。 */
+/** メンション（<@UXXX>）を除去して本文だけ取り出す。
+ * 「@カイゼンくん さん ほうこちゃんの…」のようにメンション直後の敬称が残ると
+ * 件名・提案文の先頭に「さん」が紛れ込むため、先頭の敬称も一緒に落とす。 */
 function stripMentions(text: string): string {
-  return text.replace(/<@[A-Z0-9]+>/g, "").replace(/\s+/g, " ").trim();
+  return text
+    .replace(/<@[A-Z0-9]+>/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^(さん|さま|様|くん|ちゃん|殿)[、。,．.\s]*/, "")
+    .trim();
 }
 
 /**
@@ -179,8 +188,13 @@ export async function POST(req: NextRequest) {
     // type自動判定（全メンションを受付・内容から bug/改善/新機能 に振り分け）
     const ticketType = inferTicketType(text);
 
+    // 対象システムは本文から推定する（「ほうこちゃんの御中が…」→ ほうこちゃん）。
+    // 推定できないときだけ「その他」（旧実装は常に「その他」固定で、KZ-72 が
+    // リポ未設定扱いになり自動改修へ進めなかった・2026-07-09 社長指摘）。
+    const system = normalizeSystemForTicket(guessSystem(text));
+
     const ticket: Ticket = {
-      system: "その他",
+      system,
       type: ticketType,
       title: text.slice(0, 100) || "Slackからの問い合わせ",
       detail: text,

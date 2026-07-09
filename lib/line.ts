@@ -5,7 +5,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { TicketRow } from "./tickets";
 import type { DiscussResult } from "./discuss";
-import { resolveReporterDisplay } from "./slack";
+import { resolveReporterDisplay, readableReporter } from "./slack";
 
 const LINE_PUSH_ENDPOINT = "https://api.line.me/v2/bot/message/push";
 const LINE_REPLY_ENDPOINT = "https://api.line.me/v2/bot/message/reply";
@@ -487,9 +487,10 @@ export function buildProposalText(ticket: TicketRow, d: DiscussResult): string {
     : truncateForLine(systemLabel(ticket.system), 40);
   const kousuu = looksGarbled(d.kousuu) ? "未記載" : truncateForLine(d.kousuu, 16);
 
+  // 生のSlackメンション（<@U…>）が残っていてもIDを見せない（社長指示 2026-07-09）。
   const reporterLine = looksGarbled(ticket.reporter)
     ? "不明"
-    : truncateForLine(ticket.reporter || "不明", 30);
+    : truncateForLine(readableReporter(ticket.reporter), 30);
 
   return [
     actionBanner("reply", "直していい？を決めてください"),

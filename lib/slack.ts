@@ -17,6 +17,7 @@
 //  （別 project_key の孤立サイロを作らない・PIIマスクとKNOWHOW_ENABLEDゲートを継承する）。
 import { maskPII } from "./pii";
 import { channelsForSystem } from "./slackChannels";
+import { knownSlackUserName } from "./slackUsers";
 
 const SLACK_HISTORY_URL = "https://slack.com/api/conversations.history";
 const SLACK_POST_URL = "https://slack.com/api/chat.postMessage";
@@ -144,40 +145,62 @@ export async function readSlackForSystem(
   return { channels };
 }
 
+/** 起票者文字列からSlackユーザーIDを抜く（Notion往復で付きうる \ エスケープも許容）。 */
+function slackMentionUserId(reporter: string | null | undefined): string | null {
+  const raw = (reporter || "").trim().replace(/\\/g, "");
+  const m = raw.match(/^Slack:<@([A-Z0-9]+)>$/i);
+  return m ? m[1] : null;
+}
+
 /**
  * 起票者フィールド（例: "Slack:<@U0AR8F63YBA>"）を人間が読める表示名へ解決する。
  * 社長要望「誰から来たか分かるようにしてほしい」対応（2026-07-08）。
  * - 既にメール/氏名等の読める形式ならそのまま返す（Slackメンション形式のときだけAPIを叩く）。
- * - トークン未設定・API失敗・タイムアウトは元の文字列にフォールバック
- *   （GO伺い送信をユーザー名解決の失敗で止めない・fail-safe）。
+ * - APIが使えない（トークン未設定・users:read不足・失敗・タイムアウト）ときは
+ *   既知ユーザー対応表（lib/slackUsers.ts）で解決する。それでも不明なら元の文字列に
+ *   フォールバック（GO伺い送信をユーザー名解決の失敗で止めない・fail-safe）。
  */
 export async function resolveReporterDisplay(
   reporter: string | null | undefined
 ): Promise<string> {
   const raw = (reporter || "").trim();
   if (!raw) return "不明";
-  const m = raw.match(/^Slack:<@([A-Z0-9]+)>$/i);
-  if (!m) return raw;
+  const userId = slackMentionUserId(raw);
+  if (!userId) return raw;
 
+  const fallback = knownSlackUserName(userId) ?? raw;
   const token = process.env.SLACK_BOT_TOKEN?.trim();
-  if (!token) return raw;
+  if (!token) return fallback;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), SLACK_USER_INFO_TIMEOUT_MS);
   try {
     const res = await fetch(
-      `${SLACK_USERS_INFO_URL}?user=${encodeURIComponent(m[1])}`,
+      `${SLACK_USERS_INFO_URL}?user=${encodeURIComponent(userId)}`,
       { headers: { authorization: `Bearer ${token}` }, signal: controller.signal }
     );
     const data = await res.json().catch(() => null);
-    if (!data?.ok || !data.user) return raw;
+    if (!data?.ok || !data.user) return fallback;
     const name = data.user.profile?.real_name || data.user.real_name || data.user.name;
-    return name ? String(name) : raw;
+    return name ? String(name) : fallback;
   } catch {
-    return raw;
+    return fallback;
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * 表示直前の最終ガード（同期・API不要）：解決しきれなかった生のSlackメンションを、
+ * IDのまま社長に見せず「読める表記」へ置き換える（社長指示 2026-07-09「SlackのIDではなくて」）。
+ * 既知ユーザーなら名前、未知なら「Slackの方（お名前未登録）」。通常の氏名等はそのまま。
+ */
+export function readableReporter(reporter: string | null | undefined): string {
+  const raw = (reporter || "").trim();
+  if (!raw) return "不明";
+  const userId = slackMentionUserId(raw);
+  if (!userId) return raw;
+  return knownSlackUserName(userId) ?? "Slackの方（お名前未登録）";
 }
 
 /**
