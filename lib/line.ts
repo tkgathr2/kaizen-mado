@@ -479,7 +479,11 @@ export function msgHead(
  * 読みやすさ最優先：結論（おすすめ）を先頭に、方針・リスクは要約だけ、詳細はNotionリンクへ。
  * 複数提案が連続で届いてもquick replyボタンは"最新メッセージ"にしか付かないため、
  * 「ID付きテキスト返信（GO KZ-3 等）」で前の提案にも答えられる形は維持する。 */
-export function buildProposalText(ticket: TicketRow, d: DiscussResult): string {
+export function buildProposalText(
+  ticket: TicketRow,
+  d: DiscussResult,
+  opts?: { isSlackOrigin?: boolean }
+): string {
   const id = ticket.ticketId;
 
   // ── 素人語の短いフィールドを使う（モデルが短文を作る前提）。
@@ -514,9 +518,13 @@ export function buildProposalText(ticket: TicketRow, d: DiscussResult): string {
     : truncateForLine(readableReporter(ticket.reporter), 30);
 
   // 起票経路（Slack / サイト）を本文に出す。Slack経由もサイト経由も同じ人名に解決されると
-  // 社長がどちらから来たか判別できないため（2026-07-10 社長指摘）。reporter が "Slack:" 始まり
-  // ＝Slackメンション由来＝Slack経由。それ以外はカイゼン窓口（サイト）経由とみなす。
-  const isSlackOrigin = /^\s*Slack:/i.test(ticket.reporter || "");
+  // 社長がどちらから来たか判別できないため（2026-07-10 社長指摘）。
+  // ★重要：pushProposal は reporter を人名（例「高木豊大」）に解決してから ticket を渡すため、
+  //   ここで ticket.reporter を見ると "Slack:" 接頭辞が既に消えていて必ずサイト扱いになる
+  //   （KZ-82 がSlack起票なのに「サイトから」と誤表示されたバグ）。呼び出し側が解決前の生
+  //   reporter で判定した結果を opts.isSlackOrigin で渡す。opts 未指定時のみ ticket から判定。
+  const isSlackOrigin =
+    opts?.isSlackOrigin ?? /^\s*Slack:/i.test(ticket.reporter || "");
   const routeLabel = isSlackOrigin ? "Slack から" : "カイゼン窓口（サイト）から";
 
   return [
@@ -648,6 +656,10 @@ export function buildInfraNoticeText(
  * （社長がこの提案を引用返信で操作できるように）。 */
 export async function pushProposal(ticket: TicketRow, d: DiscussResult): Promise<boolean> {
   if (!lineEnabled()) return false;
+  // 経路（Slack/サイト）は人名解決の"前"の生reporterで判定する。resolveReporterDisplay 後は
+  // "高木豊大" 等に解決され "Slack:" 接頭辞が消えるため、解決後に判定すると常にサイト扱いになる
+  // （2026-07-10 バグ修正：KZ-82 がSlack起票なのに「サイトから」と誤表示された）。
+  const isSlackOrigin = /^\s*Slack:/i.test(ticket.reporter || "");
   // Slackメンション形式の起票者は表示名へ解決してから文面を組む（社長要望2026-07-08）。
   // 解決に失敗しても buildProposalText 側で元の文字列にフォールバックされる（fail-safe）。
   const reporterDisplay = await resolveReporterDisplay(ticket.reporter);
@@ -656,7 +668,11 @@ export async function pushProposal(ticket: TicketRow, d: DiscussResult): Promise
     messages: [
       {
         type: "text",
-        text: buildProposalText({ ...ticket, reporter: reporterDisplay }, d),
+        text: buildProposalText(
+          { ...ticket, reporter: reporterDisplay },
+          d,
+          { isSlackOrigin }
+        ),
         quickReply: goQuickReply(ticket.pageId),
       },
     ],
