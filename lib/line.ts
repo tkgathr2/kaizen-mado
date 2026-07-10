@@ -513,12 +513,19 @@ export function buildProposalText(ticket: TicketRow, d: DiscussResult): string {
     ? "不明"
     : truncateForLine(readableReporter(ticket.reporter), 30);
 
+  // 起票経路（Slack / サイト）を本文に出す。Slack経由もサイト経由も同じ人名に解決されると
+  // 社長がどちらから来たか判別できないため（2026-07-10 社長指摘）。reporter が "Slack:" 始まり
+  // ＝Slackメンション由来＝Slack経由。それ以外はカイゼン窓口（サイト）経由とみなす。
+  const isSlackOrigin = /^\s*Slack:/i.test(ticket.reporter || "");
+  const routeLabel = isSlackOrigin ? "Slack から" : "カイゼン窓口（サイト）から";
+
   return [
     actionBanner("reply", "直していい？を決めてください"),
     ``,
     `🖥 ${sysLabel}`,
     `💡 カイゼンの提案`,
     `👤 誰から：${reporterLine}`,
+    `📮 経路：${routeLabel}`,
     ``,
     `❓ こまりごと`,
     `　${problemPlain}`,
