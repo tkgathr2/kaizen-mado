@@ -124,6 +124,9 @@ export const TARGETS: TargetMeta[] = [
   // つなぐん＝~/.claude/ ファイル同期システム（Claude Code設定・スキルの3台PC間同期）。
   { system: "つなぐん", repo: "tkgathr2/tsunagun", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
   { system: "smartkyuyo（給与計算）", repo: "tkgathr2/smartkyuyo", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
+  // 履歴書メーカー＝ログイン→フォーム→PDF出力の履歴書作成Web（Next.js+FastAPI/Railway Postgres）。
+  // 2026-07-05 新規作成。autoEligible:false スタート（段階解放）。healthUrlはVercel本番確定後に更新。
+  { system: "履歴書メーカー", repo: "tkgathr2/rirekimeka", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: false },
   { system: "その他", repo: null, healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
 ];
 
