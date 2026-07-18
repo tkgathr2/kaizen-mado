@@ -124,6 +124,9 @@ export const TARGETS: TargetMeta[] = [
   // つなぐん＝~/.claude/ ファイル同期システム（Claude Code設定・スキルの3台PC間同期）。
   { system: "つなぐん", repo: "tkgathr2/tsunagun", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
   { system: "smartkyuyo（給与計算）", repo: "tkgathr2/smartkyuyo", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
+  // 聖子ちゃん＝Gmail請求書の自動仕分け（pnpmモノレポ・Next.js+Bot）。取引先情報・Gmailトークンを扱うため PII_HEAVY。
+  // healthUrl は Vercel 本番URL確定後に /api/health を設定する（2026-07-19 時点で構築中）。
+  { system: "聖子ちゃん（請求書仕分け）", repo: "tkgathr2/seiko-chan", healthUrl: null, forbiddenPaths: PII_HEAVY_FORBIDDEN, autoEligible: true },
   { system: "その他", repo: null, healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
 ];
 
