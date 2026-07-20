@@ -2,7 +2,7 @@
 // slug（URLの ?sys= で使う短い識別子）→ 正式名（Notionの「対象システム」selectの値）
 
 export const SYSTEMS: { slug: string; name: string }[] = [
-  { slug: "rirekisyo", name: "履歴書メーカー" },
+  { slug: "rirekimeka", name: "履歴書メーカー" },
   { slug: "prorepo", name: "プロレポ" },
   { slug: "sterepo", name: "ステレポ" },
   { slug: "houko", name: "ほうこちゃん" },

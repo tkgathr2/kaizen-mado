@@ -81,6 +81,11 @@ npm run dev                  # http://localhost:3000/?sys=prorepo
 | `LINE_CHANNEL_SECRET` | LINE webhook 署名検証用シークレット | なし | webhook の署名検証が有効 |
 | `LINE_TARGET_USER_ID` | 提案の送信先ユーザーID | なし | そのユーザーへ通知 |
 
+#### GO待ち24時間超過アラート（Slack #カイゼンくん・開発チーム向け）
+| 変数 | 役割 | 既定 | 設定すると |
+|---|---|---|---|
+| `SLACK_CH_KAIZEN_ALERT` | 通知先SlackチャンネルID | なし | `SLACK_BOT_TOKEN`（chat:write）と両方設定で毎朝8時JSTに `/api/cron/go-wait-alert` が投稿。片方でも未設定ならno-op |
+
 #### ノウハウキング(knowhow) 連動
 | 変数 | 役割 | 既定 | 設定すると |
 |---|---|---|---|
