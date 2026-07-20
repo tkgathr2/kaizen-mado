@@ -124,6 +124,7 @@ export const TARGETS: TargetMeta[] = [
   // つなぐん＝~/.claude/ ファイル同期システム（Claude Code設定・スキルの3台PC間同期）。
   { system: "つなぐん", repo: "tkgathr2/tsunagun", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
   { system: "smartkyuyo（給与計算）", repo: "tkgathr2/smartkyuyo", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
+  { system: "会議ハブ", repo: "tkgathr2/meeting-hub", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
   { system: "その他", repo: null, healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
 ];
 

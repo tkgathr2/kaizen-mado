@@ -33,6 +33,7 @@ export const SYSTEMS: { slug: string; name: string }[] = [
   { slug: "brainos", name: "BrainOS" },
   { slug: "tsunagun", name: "つなぐん" },
   { slug: "smartkyuyo", name: "smartkyuyo（給与計算）" },
+  { slug: "meeting-hub", name: "会議ハブ" },
   { slug: "other", name: "その他" },
 ];
 
