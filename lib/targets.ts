@@ -133,9 +133,10 @@ export const TARGETS: TargetMeta[] = [
   // AI・DXラボ CSチーム（HO-224）＝顧問先CSリレーションズのLINEグループに常駐し、@メンションで
   // 11人のAI専門家チームが技術質問に回答するBot＋管制盤（会話ログ・エスカレ・ナレッジ管理）。
   // 顧問先スタッフのLINE発言・氏名を恒常保有するため PII_HEAVY_FORBIDDEN。
-  // 本番= https://ai-dx-cs-team-production.up.railway.app だが全パスがログイン必須で 401 を返す
-  // （2026-07-26 curl実測：/、/api/health、/kanseiban いずれも 401）。200 を返す先が無いため healthUrl は null。
-  { system: "AI・DXラボ CSチーム", repo: "tkgathr2/ai-dx-cs-team", healthUrl: null, forbiddenPaths: PII_HEAVY_FORBIDDEN, autoEligible: true },
+  // 本番= https://ai-dx-cs-team-production.up.railway.app 。画面とAPIはログイン必須（/→302 /login、/api/*→401）だが、
+  // /healthz だけは死活監視用に認証対象外で 200 を返す（2026-07-26 curl実測：200 / application/json）。
+  // 業務データは含まず {"status":"ok",...} のみ返すため healthUrl として安全に使える。
+  { system: "AI・DXラボ CSチーム", repo: "tkgathr2/ai-dx-cs-team", healthUrl: "https://ai-dx-cs-team-production.up.railway.app/healthz", forbiddenPaths: PII_HEAVY_FORBIDDEN, autoEligible: true },
   { system: "その他", repo: null, healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
 ];
 
