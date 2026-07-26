@@ -34,6 +34,7 @@ export const SYSTEMS: { slug: string; name: string }[] = [
   { slug: "brainos", name: "BrainOS" },
   { slug: "tsunagun", name: "つなぐん" },
   { slug: "smartkyuyo", name: "smartkyuyo（給与計算）" },
+  { slug: "rakuraku-shiwake", name: "ラクラク仕訳くん" },  // tkgathr2/rakuraku-shiwake（MF ME自動仕訳・周栄システム）
   { slug: "other", name: "その他" },
 ];
 

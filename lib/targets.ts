@@ -124,6 +124,9 @@ export const TARGETS: TargetMeta[] = [
   // つなぐん＝~/.claude/ ファイル同期システム（Claude Code設定・スキルの3台PC間同期）。
   { system: "つなぐん", repo: "tkgathr2/tsunagun", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
   { system: "smartkyuyo（給与計算）", repo: "tkgathr2/smartkyuyo", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
+  // ラクラク仕訳くん＝MF ME（マネーフォワード クラウド経費/明細）自動仕訳・周栄システム（Node.js+admin管理画面Next.js）。
+  // 2026-07-26時点デプロイ未実施（Railway/Vercel設定は別タスク）のため healthUrl は null。本番化後に更新要。
+  { system: "ラクラク仕訳くん", repo: "tkgathr2/rakuraku-shiwake", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
   // 聖子ちゃん＝Gmail請求書の自動仕分け（pnpmモノレポ・Next.js+Bot）。取引先情報・Gmailトークンを扱うため PII_HEAVY。
   // 本番= https://seiko-chan.takagi.bz （Vercel。DNS反映済み・2026-07-19設定）。
   { system: "聖子ちゃん（請求書仕分け）", repo: "tkgathr2/seiko-chan", healthUrl: "https://seiko-chan.takagi.bz/api/health", forbiddenPaths: PII_HEAVY_FORBIDDEN, autoEligible: true },
