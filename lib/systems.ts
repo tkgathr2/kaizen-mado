@@ -35,6 +35,7 @@ export const SYSTEMS: { slug: string; name: string }[] = [
   { slug: "tsunagun", name: "つなぐん" },
   { slug: "smartkyuyo", name: "smartkyuyo（給与計算）" },
   { slug: "rakuraku-shiwake", name: "ラクラク仕訳くん" },  // tkgathr2/rakuraku-shiwake（MF ME自動仕訳・周栄システム）
+  { slug: "ai-dx-cs-team", name: "AI・DXラボ CSチーム" },  // tkgathr2/ai-dx-cs-team（HO-224・顧問先CSリレーションズのLINEグループ常駐Bot＋管制盤）
   { slug: "other", name: "その他" },
 ];
 

@@ -130,6 +130,12 @@ export const TARGETS: TargetMeta[] = [
   // 聖子ちゃん＝Gmail請求書の自動仕分け（pnpmモノレポ・Next.js+Bot）。取引先情報・Gmailトークンを扱うため PII_HEAVY。
   // 本番= https://seiko-chan.takagi.bz （Vercel。DNS反映済み・2026-07-19設定）。
   { system: "聖子ちゃん（請求書仕分け）", repo: "tkgathr2/seiko-chan", healthUrl: "https://seiko-chan.takagi.bz/api/health", forbiddenPaths: PII_HEAVY_FORBIDDEN, autoEligible: true },
+  // AI・DXラボ CSチーム（HO-224）＝顧問先CSリレーションズのLINEグループに常駐し、@メンションで
+  // 11人のAI専門家チームが技術質問に回答するBot＋管制盤（会話ログ・エスカレ・ナレッジ管理）。
+  // 顧問先スタッフのLINE発言・氏名を恒常保有するため PII_HEAVY_FORBIDDEN。
+  // 本番= https://ai-dx-cs-team-production.up.railway.app だが全パスがログイン必須で 401 を返す
+  // （2026-07-26 curl実測：/、/api/health、/kanseiban いずれも 401）。200 を返す先が無いため healthUrl は null。
+  { system: "AI・DXラボ CSチーム", repo: "tkgathr2/ai-dx-cs-team", healthUrl: null, forbiddenPaths: PII_HEAVY_FORBIDDEN, autoEligible: true },
   { system: "その他", repo: null, healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
 ];
 
