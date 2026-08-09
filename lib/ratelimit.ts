@@ -29,6 +29,8 @@ export interface RateLimitResult {
 
 const DEFAULT_PER_MIN = 20;
 const DEFAULT_PER_HOUR = 100;
+const DEFAULT_SUBMIT_PER_MIN = 10;
+const DEFAULT_SUBMIT_PER_HOUR = 30;
 
 /** env から制限値を読む（正の整数のみ採用・不正/未設定は既定）。
  *  KAIZEN_CHAT_RATE_PER_MIN … 1分あたり上限（既定 20）
@@ -36,6 +38,18 @@ const DEFAULT_PER_HOUR = 100;
 export function rateLimitConfigs(env: NodeJS.ProcessEnv = process.env): RateLimitConfig[] {
   const perMin = positiveIntOr(env.KAIZEN_CHAT_RATE_PER_MIN, DEFAULT_PER_MIN);
   const perHour = positiveIntOr(env.KAIZEN_CHAT_RATE_PER_HOUR, DEFAULT_PER_HOUR);
+  return [
+    { windowMs: 60_000, max: perMin },
+    { windowMs: 3_600_000, max: perHour },
+  ];
+}
+
+/** /api/submit 用の制限値。起票は Notion 書き込み＋LINE通知まで連鎖するため chat より厳しめの既定。
+ *  KAIZEN_SUBMIT_RATE_PER_MIN … 1分あたり上限（既定 10）
+ *  KAIZEN_SUBMIT_RATE_PER_HOUR … 1時間あたり上限（既定 30） */
+export function submitRateLimitConfigs(env: NodeJS.ProcessEnv = process.env): RateLimitConfig[] {
+  const perMin = positiveIntOr(env.KAIZEN_SUBMIT_RATE_PER_MIN, DEFAULT_SUBMIT_PER_MIN);
+  const perHour = positiveIntOr(env.KAIZEN_SUBMIT_RATE_PER_HOUR, DEFAULT_SUBMIT_PER_HOUR);
   return [
     { windowMs: 60_000, max: perMin },
     { windowMs: 3_600_000, max: perHour },

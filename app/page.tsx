@@ -152,10 +152,13 @@ function KaizenMado() {
   // 鍵未投入・未ログインでも安全に動く（status は "unauthenticated"、session は null）。
   const { data: session, status: authStatus } = useSession();
   const sessionName = (session?.user?.name ?? "").trim();
-  const isAuthed = authStatus === "authenticated" && !!sessionName;
-  // 「Googleでログイン（任意）」ボタンを出すかどうか。
+  // 表示名（name）を持たないGoogleアカウントでも、サーバ側 /api/submit と同じ解決順
+  // （name || email）に合わせて email を救済に使う。ここが name だけだと、ログイン済みなのに
+  // 「Googleでログインしてください」の案内が消えない無限ループになる。
+  const sessionEmail = (session?.user?.email ?? "").trim();
+  const isAuthed = authStatus === "authenticated" && !!(sessionName || sessionEmail);
+  // 「Googleでログイン」ボタンを出すかどうか。
   // OAuth鍵が本番に入った時だけ NEXT_PUBLIC_AUTH_ENABLED=1 を立てる運用。
-  // 未設定（＝現状・鍵未投入）ではボタンを出さず、従来どおり手入力だけで送れる（fail-safe）。
   const authUiEnabled = process.env.NEXT_PUBLIC_AUTH_ENABLED === "1";
 
   // ── ログインゲート（直接アクセス時のみ）の SSR/ハイドレーション安全判定 ──
@@ -514,9 +517,10 @@ function KaizenMado() {
   async function submit() {
     if (!ticket || status !== "chatting" || inFlightRef.current) return;
     // 起票者名：reporterParam（widget＝埋め込み元の認証済みユーザー）> session.user.name
-    // （このサイトでGoogleログイン）のみ。手入力による自称は廃止（社長指示＝適当な名前で送れない
-    // ようにする）。認証ON時はサーバ側(/api/submit)もセッションから本人を確定する。
-    const effectiveReporter = resolveReporter({ reporterParam, sessionName });
+    // > session.user.email（このサイトでGoogleログイン）のみ。手入力による自称は廃止
+    // （社長指示＝適当な名前で送れないようにする）。認証ON時はサーバ側(/api/submit)も
+    // セッションから本人を確定する。
+    const effectiveReporter = resolveReporter({ reporterParam, sessionName, sessionEmail });
     // Googleログイン（またはwidget埋め込みの本人確定）が無ければ送信させない。
     if (!effectiveReporter) {
       setError("Googleでログインしてから送信してください。");
@@ -804,17 +808,18 @@ function KaizenMado() {
           {!reporterParam && isAuthed && (
             <div className="reporter">
               <span>
-                <strong>{sessionName}</strong> さんとして送信します
+                <strong>{sessionName || sessionEmail}</strong> さんとして送信します
               </span>
             </div>
           )}
           {!reporterParam && !isAuthed && (
             <div className="reporter">
-              {embed ? (
+              {embed || inIframe ? (
                 // 埋め込み(iframe)では Google ログインが技術的に不可能（kaizen の Cookie が
                 // サードパーティ扱いで遮断され signIn は MissingCSRF で失敗／Google 自身も
                 // OAuth 画面の iframe 表示を拒否する）。埋め込み元が reporter を渡していない
                 // 設定不備なので、ここでは送信をブロックし管理者向けの案内だけ出す。
+                // ?embed=1 が付いていない素のiframe埋め込みも inIframe で拾う（多重防御）。
                 <span className="reporter-required-hint">
                   埋め込み元でログイン情報が渡されていません。管理者にご連絡ください。
                 </span>
@@ -849,7 +854,7 @@ function KaizenMado() {
             >
               {status === "submitting" ? "送信中…" : "この内容で送る"}
             </button>
-            {reporterMissing && !embed && (
+            {reporterMissing && !(embed || inIframe) && (
               <span className="reporter-required-hint">Googleでログインしてから送信してください</span>
             )}
             {/* 優先度を1段下げる（高→中→低・§4.14）。本人算出が既定で、利用者が手で微調整できる。
