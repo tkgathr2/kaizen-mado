@@ -209,6 +209,7 @@ button.ghost:hover:not(:disabled) { background: #f5f3ec; }
 /* optional auth：「Googleでログイン（任意）」ボタンは控えめに（手入力の補助なので主張しすぎない）。 */
 .reporter .reporter-login { padding: 8px 14px; font-size: 13px; white-space: nowrap; }
 .reporter strong { color: var(--ink); }
+.reporter-required-hint { font-size: 12px; color: #b4452b; }
 
 /* ───── ログインゲート（直接アクセス時のみ。iframe 埋め込みでは出ない） ───── */
 .app.login-gate { justify-content: center; align-items: center; }
