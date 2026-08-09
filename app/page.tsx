@@ -193,9 +193,6 @@ function KaizenMado() {
   const [busy, setBusy] = useState(false);
   const [phase, setPhase] = useState<"clarify" | "confirm">("clarify");
   const [ticket, setTicket] = useState<Ticket | null>(null);
-  // reporter state は「お名前（任意）」手入力欄の値のみを持つ。
-  // 最終的な起票者名は resolveReporter(reporterParam > sessionName > 手入力) で決める。
-  const [reporter, setReporter] = useState("");
   const [status, setStatus] = useState<"chatting" | "submitting" | "done">("chatting");
   const [doneId, setDoneId] = useState<string>("");
   const [error, setError] = useState("");
@@ -516,17 +513,13 @@ function KaizenMado() {
 
   async function submit() {
     if (!ticket || status !== "chatting" || inFlightRef.current) return;
-    // 起票者名：reporterParam（widget）> session.user.name（このサイトでログイン）> 手入力。
-    // 認証ON時はサーバ側(/api/submit)もセッションから本人を確定するが、未ログイン手入力時のために送る。
-    const effectiveReporter = resolveReporter({
-      reporterParam,
-      sessionName,
-      manualInput: reporter,
-    });
-    // 名無し送信は不可（社長指示)。手入力欄が必要な文脈（widget埋め込みでもログイン済みでもない）で
-    // 空のまま押された場合はここで止め、サーバへ問い合わせない。
+    // 起票者名：reporterParam（widget＝埋め込み元の認証済みユーザー）> session.user.name
+    // （このサイトでGoogleログイン）のみ。手入力による自称は廃止（社長指示＝適当な名前で送れない
+    // ようにする）。認証ON時はサーバ側(/api/submit)もセッションから本人を確定する。
+    const effectiveReporter = resolveReporter({ reporterParam, sessionName });
+    // Googleログイン（またはwidget埋め込みの本人確定）が無ければ送信させない。
     if (!effectiveReporter) {
-      setError("お名前を入力するか、Googleでログインしてください。");
+      setError("Googleでログインしてから送信してください。");
       return;
     }
     inFlightRef.current = true;
@@ -568,9 +561,9 @@ function KaizenMado() {
   }
 
   const showConfirm = phase === "confirm" && ticket && status !== "done";
-  // 名無し送信ガード：widget埋め込み(reporterParam)でもログイン済みでもない文脈では、
-  // 手入力欄が空のあいだ送信ボタンを押せなくする（サーバ側 /api/submit の 400 と二重防御）。
-  const nameMissing = !reporterParam && !isAuthed && !reporter.trim();
+  // 起票者未確定ガード：widget埋め込み(reporterParam)でもGoogleログイン済みでもない文脈では
+  // 送信ボタンを押せなくする（手入力による自称は廃止・サーバ側 /api/submit の 400 と二重防御）。
+  const reporterMissing = !reporterParam && !isAuthed;
 
   // 認証ON・非埋め込みで status 確定待ちの間はチラつき防止のため空＋スピナーだけ。
   if (showAuthLoading) {
@@ -804,11 +797,10 @@ function KaizenMado() {
 
       {showConfirm && (
         <>
-          {/* 起票者の出し分け（名無し送信は不可・社長指示）：
-              ① widget（reporterParam）… 埋め込み元の本人。入力欄は出さない（従来どおり）。
-              ② このサイトでログイン済み … 名前を自動引き継ぎ。「○○さんとして送信」と表示。
-              ③ 未ログイン … 手入力欄（必須）＋「Googleでログインして名前を引き継ぐ」ボタン。
-                 手入力かGoogleログインのどちらかで本人名が埋まるまで送信不可にする。 */}
+          {/* 起票者の出し分け（手入力による自称は廃止・社長指示＝Google認証必須）：
+              ① widget（reporterParam）… 埋め込み元の本人。ここでは何も出さない（従来どおり）。
+              ② このサイトでGoogleログイン済み … 名前を自動引き継ぎ。「○○さんとして送信」と表示。
+              ③ 未ログイン … Googleログインを促す。ログインするまで送信不可。 */}
           {!reporterParam && isAuthed && (
             <div className="reporter">
               <span>
@@ -818,42 +810,33 @@ function KaizenMado() {
           )}
           {!reporterParam && !isAuthed && (
             <div className="reporter">
-              <label htmlFor="reporter">お名前（必須）</label>
-              <input
-                id="reporter"
-                value={reporter}
-                onChange={(e) => setReporter(e.target.value)}
-                placeholder="例：高木"
-                maxLength={40}
-                required
-              />
-              {/* 埋め込み(iframe)では Google ログインを出さない。
-                  理由：①widget は別サイトに iframe 埋め込みされ、kaizen の Cookie が
-                  サードパーティ扱いで遮断/分割される→ iframe 内 signIn は MissingCSRF で
-                  「Unable to sign in.」のNextAuth画面に落ちる。②Google は OAuth 画面の
-                  iframe 表示自体を拒否する。よって埋め込みでは原理的にログイン不可。
-                  埋め込みでは手入力（お名前・任意）だけで送れる設計に倒す。 */}
-              {authUiEnabled && !embed && (
+              {embed ? (
+                // 埋め込み(iframe)では Google ログインが技術的に不可能（kaizen の Cookie が
+                // サードパーティ扱いで遮断され signIn は MissingCSRF で失敗／Google 自身も
+                // OAuth 画面の iframe 表示を拒否する）。埋め込み元が reporter を渡していない
+                // 設定不備なので、ここでは送信をブロックし管理者向けの案内だけ出す。
+                <span className="reporter-required-hint">
+                  埋め込み元でログイン情報が渡されていません。管理者にご連絡ください。
+                </span>
+              ) : inWebView ? (
                 // WebView内ではGoogleログインができないため、Safari誘導ボタンに切り替える。
-                inWebView ? (
-                  <button
-                    type="button"
-                    className="ghost reporter-login"
-                    onClick={() => window.open(location.href, "_blank")}
-                    title="Safariで開くとGoogleでログインできます"
-                  >
-                    Safariで開いてログイン（任意）
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className="ghost reporter-login"
-                    onClick={() => signIn("google")}
-                    title="Googleでログインすると、お名前を自動で引き継ぎます"
-                  >
-                    Googleでログイン（任意）
-                  </button>
-                )
+                <button
+                  type="button"
+                  className="ghost reporter-login"
+                  onClick={() => window.open(location.href, "_blank")}
+                  title="Safariで開くとGoogleでログインできます"
+                >
+                  Safariで開いてログイン
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="ghost reporter-login"
+                  onClick={() => signIn("google")}
+                  title="送信にはGoogleログインが必要です"
+                >
+                  Googleでログイン
+                </button>
               )}
             </div>
           )}
@@ -861,13 +844,13 @@ function KaizenMado() {
             <button
               className="primary"
               onClick={submit}
-              disabled={status === "submitting" || nameMissing}
-              title={nameMissing ? "お名前を入力するか、Googleでログインしてください" : undefined}
+              disabled={status === "submitting" || reporterMissing}
+              title={reporterMissing ? "Googleでログインしてから送信してください" : undefined}
             >
               {status === "submitting" ? "送信中…" : "この内容で送る"}
             </button>
-            {nameMissing && (
-              <span className="reporter-required-hint">お名前を入力するか、Googleでログインしてください</span>
+            {reporterMissing && !embed && (
+              <span className="reporter-required-hint">Googleでログインしてから送信してください</span>
             )}
             {/* 優先度を1段下げる（高→中→低・§4.14）。本人算出が既定で、利用者が手で微調整できる。
                 既に「低」のときや優先度が無いとき（旧チケット相当）は出さない。 */}
