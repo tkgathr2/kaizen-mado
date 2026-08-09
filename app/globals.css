@@ -200,13 +200,6 @@ button.ghost:hover:not(:disabled) { background: #f5f3ec; }
 .reporter {
   display: flex; align-items: center; gap: 10px; padding: 6px 0 0; font-size: 13px; color: var(--muted);
 }
-.reporter input {
-  /* font-size は16px以上：iOSが入力時に自動ズームしてレイアウトが崩れるのを防ぐ。 */
-  border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; font-size: 16px;
-  background: var(--field); color: var(--ink);
-}
-.reporter input:focus { outline: none; border-color: var(--brand); }
-/* optional auth：「Googleでログイン（任意）」ボタンは控えめに（手入力の補助なので主張しすぎない）。 */
 .reporter .reporter-login { padding: 8px 14px; font-size: 13px; white-space: nowrap; }
 .reporter strong { color: var(--ink); }
 .reporter-required-hint { font-size: 12px; color: #b4452b; }
