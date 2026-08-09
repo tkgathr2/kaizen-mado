@@ -10,6 +10,8 @@ import { kickEndpoint } from "@/lib/trigger";
 import { acceptSubmit } from "@/lib/dedup";
 import { findRecentDuplicate } from "@/lib/tickets";
 import { clampScore, computePriority, isPriority } from "@/lib/priority";
+import { sanitizeReporter } from "@/lib/reporter";
+import { checkRateLimit, clientKeyFromHeaders, submitRateLimitConfigs } from "@/lib/ratelimit";
 import type { Ticket, TicketType, Importance, Priority } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -60,6 +62,22 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "forbidden origin" }, { status: 403 });
   }
 
+  // レート制限（IP単位・プロセス内メモリ）。起票はNotion書き込み＋LINE通知まで連鎖する
+  // 重い処理なので、/api/chat と同じ方式で連打・スクリプト濫用の第一防衛線を置く。
+  // 例外時はブロックせず通す（degrade-safe・声を止めない）。
+  try {
+    const key = clientKeyFromHeaders(req.headers, "anon");
+    const rl = checkRateLimit(`submit:${key}`, submitRateLimitConfigs());
+    if (!rl.allowed) {
+      return NextResponse.json(
+        { ok: false, error: "アクセスが集中しています。少し時間をおいて、もう一度お試しください。" },
+        { status: 429, headers: { "Retry-After": String(rl.retryAfterSec) } }
+      );
+    }
+  } catch (err) {
+    console.error("[submit] rate-limit check failed (ignored):", (err as Error).message);
+  }
+
   let body: any;
   try {
     body = await req.json();
@@ -79,7 +97,9 @@ export async function POST(req: NextRequest) {
     const session = await auth();
     reporter = session?.user?.name || session?.user?.email || reporter;
   }
-  reporter = reporter?.trim() || null;
+  // 改行・タブ等での文面注入（LINEのGO伺い文への行差し込み等）を防ぎ、長さも上限で切る。
+  reporter = reporter ? sanitizeReporter(reporter) : null;
+  reporter = reporter || null;
 
   // 名無し起票は受け付けない（社長指示）。widget埋め込みはreporterParamで、
   // このサイトの直接アクセスはGoogleログイン or 手入力で、必ず本人を確定させる。
