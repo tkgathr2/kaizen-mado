@@ -79,6 +79,16 @@ export async function POST(req: NextRequest) {
     const session = await auth();
     reporter = session?.user?.name || session?.user?.email || reporter;
   }
+  reporter = reporter?.trim() || null;
+
+  // 名無し起票は受け付けない（社長指示）。widget埋め込みはreporterParamで、
+  // このサイトの直接アクセスはGoogleログイン or 手入力で、必ず本人を確定させる。
+  if (!reporter) {
+    return NextResponse.json(
+      { error: "お名前を入力するか、Googleでログインしてください。" },
+      { status: 400 }
+    );
+  }
 
   // ── 二重起票ガード（二段構え） ──
   // 第1段：プロセス内メモリの高速フィルタ。連打の大半は同一インスタンスに連続到達するので
