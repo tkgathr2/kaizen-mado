@@ -70,11 +70,20 @@ npm run dev                  # http://localhost:3000/?sys=prorepo
 |---|---|---|---|
 | `GITHUB_DISPATCH_TOKEN` | 対象リポへ改修ジョブを発火するトークン | なし | 「GO」で自動改修が走る。未設定なら発火しない（提案で停止＝赤運用） |
 | `KAIZEN_ORCHESTRATOR_REPO` | 改修ジョブを起こすオーケストレータ・リポ | `tkgathr2/kaizen-mado` | 指定リポへディスパッチ |
-| `KAIZEN_AUTOPILOT` | 自動着手の可否 | **未設定＝デフォルトON**（社長GO済の全自動運用） | `off`/`false`/`0` で自動着手を停止 |
+| `KAIZEN_AUTOPILOT` | 旧・自動着手スイッチ（**2026-08-12 以降は無効**） | — | **どんな値を入れても自動着手は起きない**。社長指示（2026-08-12）で「重要度・危険度に関係なく全チケットが必ず社長のLINE確認を経由する」運用へ変更し、`/api/process` のオートパイロット分岐を廃止したため。`lib/gate.ts` の `autopilotEnabled()` は将来の再有効化のため残しているが、本番コードからは呼ばれていない |
 | `KAIZEN_STUCK_MINUTES` | 「実装中」滞留をstuckとみなす分数 | `30` | 指定分で巻き戻し判定 |
 | `KAIZEN_PUBLIC_BASE` | 窓口の公開ベースURL（callback/boardリンク生成用） | `https://kaizen.takagi.bz` | 指定URLでリンクを組み立てる |
 
-#### LINE通知（提案→GO の窓口）
+#### 真田システム（mention-hisho）への受け渡し ★通知の本線
+2026-08-12 社長指示により、カイゼンくんが自前でLINE通知を出すのをやめ、用件は**真田のシステム（mention-hisho）へ受け渡す**。真田側が「真田宛メンションが来た状態」として扱い、既存の真田LINEカード（✅OK / ✏️修正 / 🚫却下 / 🛠ClaudeCodeへ送る）を社長へ出す。着手は社長が「🛠ClaudeCodeへ送る」を押したときに真田側から起きる。
+受け渡しに失敗したときだけ、下の自前LINE（`pushProposal`）へフォールバックする＝社長に何も届かない無音状態を作らない。
+
+| 変数 | 役割 | 既定 | 設定すると |
+|---|---|---|---|
+| `MENTION_HISHO_BASE_URL` | 真田システムの本番ベースURL。受け口は `${BASE}/api/kaizen/handoff` | なし | 設定すると受け渡しが有効。**未設定なら受け渡しは不活性**＝従来の自前LINEへフォールバック |
+| `KAIZEN_HANDOFF_SECRET` | 受け渡しの認証キー（`x-kaizen-handoff-secret` ヘッダで送る） | なし | **真田側（mention-hisho）と同じ値**を両方に入れる。片方だけだと相手が401で弾く |
+
+#### LINE通知（提案→GO の窓口・受け渡し失敗時のフォールバック）
 | 変数 | 役割 | 既定 | 設定すると |
 |---|---|---|---|
 | `LINE_CHANNEL_ACCESS_TOKEN` | LINE Messaging API のアクセストークン | なし | （3つ揃いで）提案をLINEへpush。未設定なら通知しない |
