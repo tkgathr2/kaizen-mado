@@ -34,6 +34,18 @@ export interface HandoffPayload {
   houshin: string;
   /** ラボの議論で出た改善手順。 */
   steps: string[];
+  /**
+   * Slack起点チケット（幹部Botへの app_mention から自動起票）だけが持つ、元の投稿の位置。
+   *
+   * 【バグチェック High-2 修正・2026-08-12】相手側（mention-hisho）は最初から
+   * `slackChannel` / `slackThreadTs` を受け取る設計なのに、こちらが**一度も送っていなかった**。
+   * その結果 mention-hisho 側は threadTs に合成ts（`kaizen:<ticketId>`）を入れるしかなく、
+   * 社長がカードの「✅OK」を押すと chat.postMessage が `invalid_thread_ts` で必ず失敗していた
+   * （2026-08-12 実測）。＝「押せるのに必ず失敗するボタン」。
+   * Slack起点なら元スレッドへ返せるよう、ここで渡す。
+   */
+  slackChannel?: string;
+  slackThreadTs?: string;
 }
 
 /** 受け渡しが有効か（宛先ベースURLが設定されているか）。未設定なら handoff は不活性。 */
@@ -69,6 +81,11 @@ export function buildHandoffPayload(
     steps: Array.isArray(d?.steps) ? d.steps : [],
   };
   if (repo) payload.repo = repo;
+  // Slack起点チケットのときだけ、元スレッドの位置を渡す（両方揃っていないと返信先にならない）。
+  if (ticket.slackChannelId && ticket.slackThreadTs) {
+    payload.slackChannel = ticket.slackChannelId;
+    payload.slackThreadTs = ticket.slackThreadTs;
+  }
   return payload;
 }
 

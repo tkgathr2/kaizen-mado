@@ -4,6 +4,7 @@
 import type { Ticket } from "./types";
 import { normalizeForDedup } from "./dedup";
 import { normalizeSystemForTicket } from "./systems";
+import { KZ_STATUS } from "./kz-state";
 
 const NOTION_VERSION = "2022-06-28";
 
@@ -645,7 +646,10 @@ export async function setStatusChangedAt(
  * 着手/実装中は既存 execute の reaper が担うためここでは除外する。
  */
 export async function fetchNonTerminalTickets(limit = 50): Promise<TicketRow[]> {
-  const states = ["GO待ち", "差し戻し", "レビュー"];
+  // 「真田実装中」は自動改修の対象外（kz-state.ts SANADA_IMPLEMENTING）だが、放置検知の対象には
+  // 入れる。監視対象から外すと、真田側のセッションが落ちたチケットが誰にも気付かれず永久に残る。
+  // 自動クローズはせずリマインドのみ（kz-sweep 側で分岐）。
+  const states = ["GO待ち", "差し戻し", "レビュー", KZ_STATUS.SANADA_IMPLEMENTING];
   const results: TicketRow[] = [];
   for (const state of states) {
     const rows = await fetchTicketsByState(state, Math.ceil(limit / states.length));

@@ -83,6 +83,29 @@ npm run dev                  # http://localhost:3000/?sys=prorepo
 | `MENTION_HISHO_BASE_URL` | 真田システムの本番ベースURL。受け口は `${BASE}/api/kaizen/handoff` | なし | 設定すると受け渡しが有効。**未設定なら受け渡しは不活性**＝従来の自前LINEへフォールバック |
 | `KAIZEN_HANDOFF_SECRET` | 受け渡しの認証キー（`x-kaizen-handoff-secret` ヘッダで送る） | なし | **真田側（mention-hisho）と同じ値**を両方に入れる。片方だけだと相手が401で弾く |
 
+Slack起点チケット（幹部Botへの app_mention から自動起票されたもの）は `slackChannel` / `slackThreadTs` も一緒に渡す。これが無いと真田側は合成ts（`kaizen:<ticketId>`）しか持てず、社長がカードの「✅OK」を押しても `invalid_thread_ts` で必ず失敗する（2026-08-12 実測・バグチェック High-2）。
+
+##### 「真田実装中」状態 — 二重実装の防止（2026-08-12 バグチェック High-1）
+
+社長が「🛠 ClaudeCodeへ送る」を押すと真田側の Claude Code が起動する。その直後に真田が書き戻す GO を
+`{action:"go"}`（＝状態「着手」）にしていたため、**カイゼンくん側の自動改修が同じチケットをもう一度
+Claude Code で実装**していた（2026-08-12 KZ-132 で実測。真田のセッションと同時に `kaizen-execute` が走行し、
+Notion に `自動着手 実行ワークフローを起動` → `実装失敗（差し戻し）[IMPL_FAILED]` が残った。二重課金）。
+
+対策として `POST /api/admin/go` は `executor` を受け取る。
+
+| executor | 遷移先 | 意味 |
+|---|---|---|
+| 省略 / `"kaizen"` | `着手` | 従来どおりカイゼンくん自身が自動改修する（受け渡し失敗時の自前LINE→GOのフォールバック経路） |
+| `"sanada"` | `真田実装中` | 真田側の Claude Code が既に起動済み。カイゼンくんの自動改修は**動かさない** |
+
+**「経路が1本も残っていない」ことの根拠**：カイゼンくん側で自動改修を起こすのは `app/api/execute` だけで、
+そこが対象を引くのは状態リテラルによる Notion クエリだけ（`fetchTicketsByState("着手")` と
+reaper の `fetchStaleImplementing`→`fetchTicketsByState("実装中")`）。`真田実装中` はそのどちらにも現れず、
+`/api/process`（`受付`）・`review-list`（`レビュー`）・`/api/admin/go`（`GO待ち`）にも現れない。
+`lib/__tests__/sanadaExecutor.test.ts` がソースを機械検査して回帰を防ぐ。
+`kz-sweep` だけは監視対象に含めるが**自動クローズはしない**（48hリマインドのみ）。
+
 #### LINE通知（提案→GO の窓口・受け渡し失敗時のフォールバック）
 | 変数 | 役割 | 既定 | 設定すると |
 |---|---|---|---|

@@ -11,6 +11,14 @@ on:
         description: "アクション: go / fix / reject"
         required: false
         default: "go"
+      # 【2026-08-12 バグチェック High-1】GO時に誰が実装するかを選べるようにする。
+      # 空/kaizen … 従来どおり「着手」＝カイゼンくん自身の自動改修が走る
+      # sanada    … 「真田実装中」＝真田側のClaude Codeが実装済みという扱い。自動改修は走らない
+      # 未指定のまま旧仕様で放置すると、このデモだけが二重実装の抜け道として残るため入力を足す。
+      executor:
+        description: "実装者: kaizen（既定・自動改修が走る） / sanada（真田実装中にする）"
+        required: false
+        default: ""
 
 jobs:
   go:
@@ -18,16 +26,25 @@ jobs:
     steps:
       - name: Call /api/admin/go
         env:
+          # 本番は ADMIN_GO_SECRET が設定されていれば x-admin-go-secret しか受け付けない
+          # （lib/cronAuth.ts checkAdminGoAuth。共用CRON_SECRETでのGO奪取を塞ぐため）。
+          # CRON_SECRET だけを送る旧実装は本番で401になる。両方送って非本番のフォールバックも保つ。
+          ADMIN_GO_SECRET: ${{ secrets.ADMIN_GO_SECRET }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           TICKET_ID: ${{ github.event.inputs.ticketId }}
           ACTION: ${{ github.event.inputs.action }}
+          EXECUTOR: ${{ github.event.inputs.executor }}
         run: |
-          BODY="{\"action\":\"${ACTION}\"}"
-          if [ -n "$TICKET_ID" ]; then
-            BODY="{\"action\":\"${ACTION}\",\"ticketId\":\"${TICKET_ID}\"}"
-          fi
+          BODY=$(jq -nc \
+            --arg action "$ACTION" \
+            --arg ticketId "$TICKET_ID" \
+            --arg executor "$EXECUTOR" \
+            '{action: $action}
+             + (if $ticketId == "" then {} else {ticketId: $ticketId} end)
+             + (if $executor == "" then {} else {executor: $executor} end)')
           echo "Request: $BODY"
           RES=$(curl -sS -X POST "https://kaizen.takagi.bz/api/admin/go" \
+            -H "x-admin-go-secret: ${ADMIN_GO_SECRET}" \
             -H "x-cron-secret: ${CRON_SECRET}" \
             -H "content-type: application/json" \
             -d "$BODY")

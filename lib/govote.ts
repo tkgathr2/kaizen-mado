@@ -6,6 +6,7 @@ import type { TicketRow } from "./tickets";
 import { updateTicketState, appendDiscussionBlocks } from "./tickets";
 import type { GoAction } from "./line";
 import { stageBar, BOARD_URL, msgHead } from "./line";
+import { KZ_STATUS } from "./kz-state";
 
 export interface ApplyResult {
   ok: boolean;
@@ -14,12 +15,25 @@ export interface ApplyResult {
   skipped?: boolean;
 }
 
+/**
+ * 誰が実装するか。
+ * - "kaizen"（既定）… カイゼンくん自身の自動改修（/api/execute → GitHub Actions）
+ * - "sanada"        … 真田システム（mention-hisho）側の Claude Code。社長がLINEカードの
+ *                     「🛠 ClaudeCodeへ送る」を押し、真田側が**起動に成功したあと**に書き戻してくる。
+ *                     このときカイゼンくん側の自動改修が同じチケットを掴むと二重実装になるため、
+ *                     状態を「着手」ではなく「真田実装中」にして自動改修の対象から外す
+ *                     （バグチェック High-1・kz-state.ts の SANADA_IMPLEMENTING 参照）。
+ */
+export type GoExecutor = "kaizen" | "sanada";
+
 /** GO/修正/却下 を適用する。GO待ちでなければ何もしない（冪等）。
- * note＝社長が修正(fix)時に添えた本文（「◯◯を直して」）。議論へ反映するため保存する。 */
+ * note＝社長が修正(fix)時に添えた本文（「◯◯を直して」）。議論へ反映するため保存する。
+ * opts.executor＝GO時に誰が実装するか（既定は "kaizen"）。 */
 export async function applyGoAction(
   action: GoAction,
   ticket: TicketRow,
-  note?: string
+  note?: string,
+  opts?: { executor?: GoExecutor }
 ): Promise<ApplyResult> {
   if (ticket.state !== "GO待ち") {
     return {
@@ -32,6 +46,30 @@ export async function applyGoAction(
   }
 
   if (action === "go") {
+    // 真田側の Claude Code が既に起動している場合は、カイゼンくん側の自動改修に拾わせない
+    // （「着手」にすると /api/execute と kaizen-loop.yml が同じチケットを二重実装する）。
+    if (opts?.executor === "sanada") {
+      await updateTicketState(ticket.pageId, KZ_STATUS.SANADA_IMPLEMENTING);
+      await appendDiscussionBlocks(ticket.pageId, [
+        {
+          heading: "GO受領（真田実装）",
+          body:
+            "社長がLINEカードの「🛠 ClaudeCodeへ送る」を押し、真田システム（mention-hisho）側の " +
+            "Claude Code セッションが起動済み。実装は真田側が担うため、カイゼンくん側の自動改修" +
+            "（/api/execute → GitHub Actions）の対象外にする。",
+        },
+      ]);
+      return {
+        ok: true,
+        newState: KZ_STATUS.SANADA_IMPLEMENTING,
+        reply:
+          `${msgHead("🛠", "真田が実装します", ticket.system, ticket.title)}\n` +
+          `（${ticket.ticketId}）真田側のClaude Codeが着手しました。\n` +
+          `カイゼンくん側の自動改修は動かしません（二重実装を防ぐため）。\n\n` +
+          `${stageBar(3)}\n` +
+          `全体像 ▶ ${BOARD_URL}`,
+      };
+    }
     await updateTicketState(ticket.pageId, "着手");
     await appendDiscussionBlocks(ticket.pageId, [
       { heading: "GO受領（着手GO）", body: "社長GO → 状態を「着手」へ。実行オーケストレーター待ち。" },
