@@ -75,6 +75,21 @@ describe("High-1: 真田実装のGOはカイゼン側の自動改修に拾われ
     }
   });
 
+  // 【2026-08-12 本番実測で判明】Notion は未登録の select 選択肢を自動作成せず 400 を返す。
+  // 選択肢が消えた/未登録のとき、握り潰して「着手」へ落ちると二重実装が復活する。
+  // 進まない方（throw）に倒れることを固定する。
+  it("「真田実装中」への遷移が失敗しても「着手」へフォールバックしない（二重実装を復活させない）", async () => {
+    updateTicketState.mockRejectedValueOnce(
+      new Error('Notion patch error 400: Invalid select value for property "状態"')
+    );
+    await expect(
+      applyGoAction("go", ticket(), undefined, { executor: "sanada" })
+    ).rejects.toThrow(/Invalid select value/);
+    for (const call of updateTicketState.mock.calls) {
+      expect(call[1]).not.toBe(KZ_STATUS.IN_PROGRESS);
+    }
+  });
+
   it("executor 未指定のGOは従来どおり「着手」（既存フォールバック経路を壊さない）", async () => {
     const res = await applyGoAction("go", ticket());
     expect(res.newState).toBe(KZ_STATUS.IN_PROGRESS);
