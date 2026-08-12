@@ -1,10 +1,16 @@
 // ── POST /api/process ── 受付 → 議論中 → GO待ち（第2段=内部処理） ──
 // 「受付」状態のチケットを順に処理し、CTO Agent Lab の議論結果をページに追記して
-// 「GO待ち」へ進める。GO待ちにしたら、GO伺いを高木さん本人のLINEへpushする
-// （対外・対人告知ではなく、社長への承認伺い1通。LINE鍵が未設定なら静かにスキップ）。
+// 「GO待ち」へ進める。GO待ちにしたら、用件を真田システム（mention-hisho）へ受け渡し、
+// 真田の既存LINEカード（✅OK/✏️修正/🚫却下/🛠ClaudeCodeへ送る）で社長に確認してもらう。
+// 受け渡しに失敗したときだけ、従来どおり自前のGO伺いLINE（pushProposal）へフォールバックする
+// ＝社長に何も届かない無音状態を作らない。
+//
+// 【2026-08-12 社長指示】重要度・危険度に関係なく**全チケットが必ず社長のLINE確認を経由する**。
+// 旧「真田自走（オートパイロット）＝安全な案件は社長に聞かず自動着手」は廃止した。
+// 着手は社長がLINEカードで「🛠ClaudeCodeへ送る」を押したときに真田側から起きるため、
+// この経路からの /api/execute kick も無くなった。
 // CRON_SECRET が設定されていれば認証を要求（x-cron-secret または Vercel Cron の Bearer）。
 import { NextRequest, NextResponse } from "next/server";
-import { waitUntil } from "@vercel/functions";
 import {
   fetchTicketsByState,
   updateTicketState,
@@ -14,11 +20,9 @@ import {
 } from "@/lib/tickets";
 import { discussTicket } from "@/lib/discuss";
 import { pushProposal } from "@/lib/line";
+import { handoffToSanada } from "@/lib/handoff";
 import { checkCronSecret } from "@/lib/cronAuth";
 import { returnLearningFromCompleted } from "@/lib/learn";
-import { findTarget } from "@/lib/targets";
-import { preGate, autopilotEnabled } from "@/lib/gate";
-import { kickEndpoint } from "@/lib/trigger";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -45,7 +49,15 @@ export async function POST(req: NextRequest) {
 
   try {
     const tickets = await fetchTicketsByState("受付", limit);
-    const processed: { ticketId: string; recommendation: string; source: string; notified: boolean }[] = [];
+    // notifiedVia: どの経路で社長へ届けたか。"handoff"=真田システム経由（本線）／
+    // "line"=自前LINEのGO伺い（handoff失敗時のフォールバック）／"none"=どちらも届かず。
+    const processed: {
+      ticketId: string;
+      recommendation: string;
+      source: string;
+      notified: boolean;
+      notifiedVia: "handoff" | "line" | "none";
+    }[] = [];
     const errors: { ticketId: string; error: string }[] = [];
 
     for (const ticket of tickets) {
@@ -64,50 +76,36 @@ export async function POST(req: NextRequest) {
         ]);
         await setTicketAssignee(ticket.pageId, "CTO Agent Lab");
 
-        // ── 真田自走（オートパイロット） ──
-        // 安全（preGate=auto＝自動許可システム＋機微/新機能を含まない）かつ推奨がGOなら、
-        // 社長にGO伺いせず自動で「着手」へ進める（＝真田の判断でやって事後報告）。
-        // 危険（escalate）や自走OFFなら従来どおり「GO待ち」にしてGO伺いをpush（社長に聞く）。
-        const target = findTarget(ticket.system);
-        const gate = preGate({ ...ticket, state: "GO待ち" }, target);
-        // 推奨は enum（GO推奨/要検討/非推奨）。自走は「GO推奨」だけ。
-        // 要検討・非推奨はラボが慎重判断＝従来どおり社長にGO伺い（聞く）。
-        const recommendGo = d.recommendation === "GO推奨";
+        // ── 全件「GO待ち」＋社長へ確認（2026-08-12 社長指示） ──
+        // 重要度・危険度に関係なく、必ず社長のLINE確認を経由させる。オートパイロット分岐は廃止。
+        const goWaitTicket = { ...ticket, state: "GO待ち" };
+        await updateTicketState(ticket.pageId, "GO待ち");
+        await setStatusChangedAt(ticket.pageId); // Phase 1: 状態変更日時を記録
 
-        if (autopilotEnabled() && gate.mode === "auto" && recommendGo) {
-          // 自動GO：GO待ちを飛ばして着手へ。次のexecuteが実装→PR→（自走なら）マージまで。
-          await updateTicketState(ticket.pageId, "着手");
-          await setStatusChangedAt(ticket.pageId); // Phase 1: 状態変更日時を記録
-          await appendDiscussionBlocks(ticket.pageId, [
-            {
-              heading: "真田自走（自動GO）",
-              body: "安全な改善のため、社長へのGO伺いを省略し真田の判断で着手。危険・対人・課金・本番破壊に該当する場合のみ社長確認（preGate=auto）。",
-            },
-          ]);
-          // 「着手」にしたら即 /api/execute を起こして実改修へ進める（応答はブロックしない）。
-          // line/webhook・admin/go と同じ形。vercel.json の crons は空＝安全網がないため、
-          // ここで kick しないと自動GOチケットが「着手」のまま実装パイプラインに乗らず残置する。
-          waitUntil(kickEndpoint("/api/execute"));
-          // 新仕様：自分から送るLINEは「GO伺い」と「詰まり連絡」だけ。
-          // 着手予告（旧「🤖 真田が直します」FYI）は不要のため送らない（状態遷移・kickは維持）。
-          processed.push({
-            ticketId: ticket.ticketId,
-            recommendation: d.recommendation,
-            source: d.source,
-            notified: false,
-          });
+        // 本線：真田システム（mention-hisho）へ受け渡す。真田側が「真田宛メンション」として
+        // 扱い、既存の真田LINEカード（✅OK/✏️修正/🚫却下/🛠ClaudeCodeへ送る）を社長へ出す。
+        let notifiedVia: "handoff" | "line" | "none" = "none";
+        const handed = await handoffToSanada(goWaitTicket, d);
+        if (handed) {
+          notifiedVia = "handoff";
         } else {
-          // 従来：GO待ち＋GO伺い（社長に聞く）。自走未許可システム・危険案件はここ。
-          await updateTicketState(ticket.pageId, "GO待ち");
-          await setStatusChangedAt(ticket.pageId); // Phase 1: 状態変更日時を記録
-          const pushed = await pushProposal({ ...ticket, state: "GO待ち" }, d);
-          processed.push({
-            ticketId: ticket.ticketId,
-            recommendation: d.recommendation,
-            source: d.source,
-            notified: pushed,
-          });
+          // フォールバック：受け渡しが無効/失敗したときだけ自前のGO伺いLINEを送る
+          // （社長に何も届かない無音状態を作らないため）。
+          const pushed = await pushProposal(goWaitTicket, d);
+          notifiedVia = pushed ? "line" : "none";
         }
+        console.log("[process] 社長へ通知", {
+          ticketId: ticket.ticketId,
+          notifiedVia,
+        });
+
+        processed.push({
+          ticketId: ticket.ticketId,
+          recommendation: d.recommendation,
+          source: d.source,
+          notified: notifiedVia !== "none",
+          notifiedVia,
+        });
       } catch (err) {
         // ── 宙づり対策：先に「議論中」へ進めた後で後続のNotion書込みがthrowすると、
         // catchで状態が戻らず「議論中」のまま残置していた（fetchTicketsByStateは「受付」しか
