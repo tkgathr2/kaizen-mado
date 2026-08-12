@@ -104,6 +104,11 @@ Notion に `自動着手 実行ワークフローを起動` → `実装失敗（
 reaper の `fetchStaleImplementing`→`fetchTicketsByState("実装中")`）。`真田実装中` はそのどちらにも現れず、
 `/api/process`（`受付`）・`review-list`（`レビュー`）・`/api/admin/go`（`GO待ち`）にも現れない。
 `lib/__tests__/sanadaExecutor.test.ts` がソースを機械検査して回帰を防ぐ。
+
+> ⚠️ **前提**：Notion の「🔁 カイゼンくん 改善チケットDB」の `状態`（select）に選択肢 **`真田実装中`** が登録されていること（2026-08-12 登録済み）。
+> Notion API は未登録の選択肢を**自動作成しない**（`Invalid select value for property "状態"` の 400 を返す）。
+> 登録が無いと GO の書き戻しが 500 になり、チケットが「GO待ち」に取り残される（二重実装は起きない＝安全側だが進まない）。
+> DBを作り直す・複製するときは必ず先に選択肢を追加すること。
 `kz-sweep` だけは監視対象に含めるが**自動クローズはしない**（48hリマインドのみ）。
 
 #### LINE通知（提案→GO の窓口・受け渡し失敗時のフォールバック）

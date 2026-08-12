@@ -28,7 +28,14 @@ export const KZ_STATUS = {
    *   - app/api/execute        … mode=review-list: fetchTicketsByState("レビュー")
    *   - app/api/admin/go       … findGoMachiByTicketId / fetchTicketsByState("GO待ち")
    *   - app/api/cron/kz-sweep  … fetchNonTerminalTickets（下記で本状態を「リマインドのみ」で追加）
-   * 「状態」はNotionの select プロパティなので、新しい値は patch 時に自動で選択肢が増える。
+   * ⚠️【2026-08-12 本番実測で判明・重要】「状態」は select プロパティだが、**Notion API は
+   *    未登録の選択肢を自動作成しない**（`Invalid select value for property "状態"` の 400 を返す）。
+   *    当初この定数のコメントは「patch 時に自動で選択肢が増える」と書いていたが誤りで、
+   *    実際に本番DBへ書こうとして 400 を返されて判明した。
+   *    → この値は Notion の「🔁 カイゼンくん 改善チケットDB」の「状態」に**選択肢として登録済み**
+   *      であることが前提（2026-08-12 登録済み）。DBを作り直す・複製する場合は必ず先に追加すること。
+   *      無いと updateTicketState が投げ、GOの書き戻しが 500 になってチケットがGO待ちに取り残される。
+   *      （二重実装は起きない＝安全側に倒れるが、チケットは進まない）
    */
   SANADA_IMPLEMENTING: "真田実装中",
   REVIEW: "レビュー",

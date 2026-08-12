@@ -49,7 +49,19 @@ export async function applyGoAction(
     // 真田側の Claude Code が既に起動している場合は、カイゼンくん側の自動改修に拾わせない
     // （「着手」にすると /api/execute と kaizen-loop.yml が同じチケットを二重実装する）。
     if (opts?.executor === "sanada") {
-      await updateTicketState(ticket.pageId, KZ_STATUS.SANADA_IMPLEMENTING);
+      try {
+        await updateTicketState(ticket.pageId, KZ_STATUS.SANADA_IMPLEMENTING);
+      } catch (e) {
+        // 【2026-08-12 本番実測】Notion は未登録の select 選択肢を自動作成せず 400 を返す。
+        // 原因が一目で分かるようにしてから投げ直す（握り潰して「着手」へ落とすのは絶対にしない。
+        // それをやると二重実装が復活する。ここは進まない方に倒すのが正しい）。
+        console.error(
+          "[govote] 「真田実装中」への遷移に失敗しました。Notionの改善チケットDBの「状態」プロパティに" +
+            "選択肢『真田実装中』が登録されているか確認してください（未登録だと Invalid select value で400）。",
+          { ticketId: ticket.ticketId, error: (e as Error).message }
+        );
+        throw e;
+      }
       await appendDiscussionBlocks(ticket.pageId, [
         {
           heading: "GO受領（真田実装）",
