@@ -39,3 +39,9 @@ next-env.d.ts
 .kaizen-chara/
 .widget-demo/
 .claude/
+.env*
+# 本番envのローカルダンプ（vercel env pull 等の一時ファイル）。
+# `.env*` は "env-prod.tmp" のような env で始まらない名前に当たらないため、明示的に塞ぐ。
+# 2026-08-12：本番シークレット3KBの平文ダンプが untracked のまま放置されていた実例あり。
+*env*.tmp
+env-prod*
