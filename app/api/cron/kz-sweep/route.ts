@@ -185,6 +185,34 @@ async function processTicket(row: TicketRow, now: number): Promise<SweepResult> 
     return { ...base, action: "none" };
   }
 
+  // ── 真田実装中（バグチェック High-1・2026-08-12） ──
+  // 実装しているのは別システム（真田側 Claude Code）。カイゼンくんが勝手に閉じると、
+  // 向こうが完了報告してきたときに突き合わせ先が消えるため**自動クローズはしない**。
+  // ただし放置は検知する（真田側のセッションが落ちたまま誰も気付かない状態を作らない）。
+  if (row.state === KZ_STATUS.SANADA_IMPLEMENTING) {
+    if (elapsedMs >= TIMEOUTS.SANADA_IMPLEMENTING_REMIND_MS) {
+      const alreadyReminded = await hasReminderBlock(row.pageId, "真田実装中リマインド");
+      if (!alreadyReminded) {
+        await appendDiscussionBlocks(row.pageId, [
+          {
+            heading: "真田実装中リマインド",
+            body: `真田側のClaude Codeが着手してから48時間以上、状態が変わっていません。セッションが落ちていないかご確認ください（自動クローズはしません）。`,
+          },
+        ]);
+        await notify(
+          `⏰ ${row.ticketId}「${row.title}」\n真田側の実装に入ってから48時間以上、状態が変わっていません。\n対象: ${row.system}`
+        );
+        await enqueueNotification(
+          row.ticketId,
+          "stalled",
+          `「${row.title}」が真田実装中のまま48時間以上（${row.system}）`
+        ).catch(() => {});
+        return { ...base, action: "reminded", reason: "SANADA_IMPLEMENTING 48h remind" };
+      }
+    }
+    return { ...base, action: "none" };
+  }
+
   return { ...base, action: "none" };
 }
 

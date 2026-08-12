@@ -10,6 +10,27 @@ export const KZ_STATUS = {
   AWAITING_GO: "GO待ち",
   IN_PROGRESS: "着手",
   IMPLEMENTING: "実装中",
+  /**
+   * 真田システム（mention-hisho）側の Claude Code が実装を担っている状態。
+   *
+   * 【バグチェック High-1 修正・2026-08-12】社長がLINEカードの「🛠 ClaudeCodeへ送る」を押すと、
+   * 真田側が Claude Code セッションを実課金で起動する。旧実装はその直後に
+   * `/api/admin/go {action:"go"}` を書き戻して状態を「着手」にしていたため、
+   * カイゼンくん側の自動改修（/api/execute → repository_dispatch → kaizen-execute.yml、および
+   * kaizen-loop.yml の15分ごとのcron）が**同じチケットを二重に実装**していた
+   * （2026-08-12 KZ-132 で実測。Claude Code セッション2本＝二重課金、同一リポへの競合PRリスク）。
+   *
+   * 「着手」以外の**どのクエリにも拾われない状態**を新設して構造的に断つ。
+   * カイゼンくん側で状態名を select で引いているのは以下がすべてであり、
+   * この値はそのいずれにも現れない（＝自動改修に拾われる経路は1本も無い）:
+   *   - app/api/process        … fetchTicketsByState("受付")
+   *   - app/api/execute        … fetchTicketsByState("着手") / fetchStaleImplementing→("実装中")
+   *   - app/api/execute        … mode=review-list: fetchTicketsByState("レビュー")
+   *   - app/api/admin/go       … findGoMachiByTicketId / fetchTicketsByState("GO待ち")
+   *   - app/api/cron/kz-sweep  … fetchNonTerminalTickets（下記で本状態を「リマインドのみ」で追加）
+   * 「状態」はNotionの select プロパティなので、新しい値は patch 時に自動で選択肢が増える。
+   */
+  SANADA_IMPLEMENTING: "真田実装中",
   REVIEW: "レビュー",
   BLOCKED: "差し戻し",
   DONE: "完了",
@@ -47,6 +68,13 @@ export const TIMEOUTS = {
   /** レビュー：7日で社長へリマインド。 */
   REVIEW_REMIND_MS:
     Number(process.env.KZ_REVIEW_REMIND_MS) || 7 * 24 * 60 * 60 * 1000,
+  /**
+   * 真田実装中：48h で社長へリマインド。**自動クローズはしない**。
+   * 実装しているのは別システム（真田側 Claude Code）なので、カイゼンくんが勝手に閉じると
+   * 向こうが完了報告してきたときに突き合わせ先が消える。放置検知だけ行う。
+   */
+  SANADA_IMPLEMENTING_REMIND_MS:
+    Number(process.env.KZ_SANADA_IMPLEMENTING_REMIND_MS) || 48 * 60 * 60 * 1000,
 } as const;
 
 // ── failureClass（callback のフェイル分類）──

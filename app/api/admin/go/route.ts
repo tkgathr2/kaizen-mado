@@ -3,7 +3,7 @@
 // 用途：LINE未設定環境でのデモ・自動化テスト・切り分け検証。
 import { NextRequest, NextResponse } from "next/server";
 import { findGoMachiByTicketId, fetchTicketsByState } from "@/lib/tickets";
-import { applyGoAction } from "@/lib/govote";
+import { applyGoAction, type GoExecutor } from "@/lib/govote";
 import type { GoAction } from "@/lib/line";
 import { kickEndpoint } from "@/lib/trigger";
 import { checkAdminGoAuth } from "@/lib/cronAuth";
@@ -24,7 +24,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  let body: { ticketId?: string; action?: string; note?: string; recentContext?: string } = {};
+  let body: {
+    ticketId?: string;
+    action?: string;
+    note?: string;
+    recentContext?: string;
+    /** 誰が実装するか。"sanada"＝真田側のClaude Codeが起動済み（カイゼンくんの自動改修は動かさない）。 */
+    executor?: string;
+  } = {};
   try {
     body = await req.json();
   } catch {
@@ -86,9 +93,20 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const result = await applyGoAction(action, ticket, body.note);
+  // executor は既知の値だけ通す（未知の文字列で黙って既定へ落ちると、二重実装の防止が
+  // タイポひとつで無効化される）。
+  if (body.executor !== undefined && body.executor !== "kaizen" && body.executor !== "sanada") {
+    return NextResponse.json(
+      { error: 'executor は "kaizen" / "sanada" のいずれかを指定してください' },
+      { status: 400 }
+    );
+  }
+  const executor: GoExecutor = body.executor === "sanada" ? "sanada" : "kaizen";
+  const result = await applyGoAction(action, ticket, body.note, { executor });
 
-  // GO→「着手」になったら即 /api/execute を起こして実改修へ
+  // GO→「着手」になったら即 /api/execute を起こして実改修へ。
+  // executor="sanada" は「真田実装中」になるためここには入らない＝カイゼンくん側の自動改修を起こさない
+  // （バグチェック High-1）。
   if (result.newState === "着手") {
     waitUntil(kickEndpoint("/api/execute"));
   }
