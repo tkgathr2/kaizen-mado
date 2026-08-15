@@ -11,6 +11,12 @@
 # 安全：自動マージは「autoMerge=true（社長GO済み）＋禁止パス非接触＋差分300行未満＋
 # 対象リポ自身の検証（typecheck/test/build）緑」のときだけ。満たさなければPRで止まり、
 # callback が Merge待ちLINE を送る（kaizen-loop.yml implement と同一基準）。
+#
+# 【Medium指摘7・2026-08-15 バグチェック】2026-08-15 社長指示（PR#168）でGO承認後の実装は
+# 真田システム経由のみになり、kaizen-mado側で「着手」状態を新規に作る経路（GO→着手）は
+# 遮断された。よって /api/execute からの repository_dispatch は事実上起きなくなっている
+# （新規流入なし）。このワークフロー自体は未削除のため、Notionに残る既存「着手」チケットの
+# 処理経路としては引き続き機能する（運用判断のため今回はワークフロー削除は行っていない）。
 name: kaizen-execute
 
 on:

@@ -56,11 +56,17 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // 【Low指摘8・2026-08-15 バグチェック】appendDiscussionBlocks（Notionブロック追記）は
+    // 1ブロックの本文上限1900字を超えると無警告で切り詰める。呼び出し元（mention-hisho側）が
+    // 「全文が保存された」と誤認しないよう、切り詰めが起きたかどうかをレスポンスに含める。
+    const REPLY_TEXT_LIMIT = 1900;
+    const truncated = replyText.length > REPLY_TEXT_LIMIT;
+
     await appendDiscussionBlocks(ticket.pageId, [
       { heading: "真田チャネルからの回答", body: replyText },
     ]);
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, ...(truncated ? { truncated: true } : {}) });
   } catch (err) {
     console.error("[kaizen/reply] failed:", (err as Error).message);
     return NextResponse.json(

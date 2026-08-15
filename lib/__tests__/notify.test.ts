@@ -139,19 +139,68 @@ describe("lib/notify 詰まり連絡の de-dup", () => {
     expect(appendDiscussionBlocks).not.toHaveBeenCalled();
   });
 
-  it("真田handoffが失敗したら、カイゼンくん自前LINEへは送らずSlack警告へ倒す", async () => {
+  it("真田handoffが失敗したら、カイゼンくん自前LINEへは送らずSlack警告へ倒す（本文は届いていないので送信失敗扱い・印は記帳しない）", async () => {
+    // 【バグ2修正・2026-08-15】Slack警告はあくまで「届いていないことを知らせる」副作用であり、
+    // 本文（handoffFyiToSanada）が失敗した以上、sendFyi/notifyStuckOnce の戻り値は false でなければ
+    // ならない（true を返すと、本文が届いていないのに「通知済み」マーカーが記帳され、二度と
+    // 再送されなくなる＝バグ本体）。
     handoffFyiToSanada.mockResolvedValue(false);
     notifySlackAlert.mockResolvedValue(true);
     global.fetch = mockFetchReturningBlocks([]);
 
     const sent = await notifyStuckOnce(ticket, "理由");
 
-    expect(sent).toBe(true);
+    expect(sent).toBe(false);
     expect(handoffFyiToSanada).toHaveBeenCalledTimes(1);
+    // Slack警告は副作用として呼ばれるが、その成功は戻り値に影響しない。
     expect(notifySlackAlert).toHaveBeenCalledTimes(1);
     const [detail] = notifySlackAlert.mock.calls[0] as [string];
     expect(detail).toContain("KZ-9");
+    // 本文が届いていないので、印（詰まり通知済み）は記帳しない＝次回再試行できる。
+    expect(appendDiscussionBlocks).not.toHaveBeenCalled();
+  });
+
+  it("【バグ3修正確認・High・bug-check-lab堀内逆検証／西野実走】handoffFyiToSanada失敗時はnotifySlackAlertが成功してもsendFyi/notifyStuckOnceはfalseを返し、印を記帳しない→handoffが直った次回は正しく送信・記帳できる", async () => {
+    // 【修正前の欠陥（記録として残す）】lib/notify.ts の sendFyi は、handoffFyiToSanada
+    // （＝実際に社長のLINEへ本文が届く経路）が失敗したときのフォールバックとして notifySlackAlert
+    // （真田Bot名義の"社内向け"Slack警告＝「届いていません」という管理者通知）を呼んでいたが、
+    // その戻り値（Slack警告の送信成功/失敗）をそのまま sendFyi 自体の成功/失敗として返して
+    // しまっていた。notifyStuckOnce はこの戻り値だけを見て「送れた」と判断し、hasStuckMarker の
+    // 印（STUCK_MARKER_HEADING）をNotionページへ記帳してしまい、社長のLINEには本文が一切
+    // 届いていないのに、以後 notifyStuckOnce は「既に通知済み」として二度と再送を試みなくなる
+    // バグがあった。
+    //
+    // 【修正後】sendFyi の戻り値は handoffFyiToSanada の成否だけに従う（Slack警告は副作用）。
+    // よって本文が届いていない1回目は false を返し印を記帳しない＝次回に再試行できる。
+    handoffFyiToSanada.mockResolvedValue(false);
+    notifySlackAlert.mockResolvedValue(true);
+    global.fetch = mockFetchReturningBlocks([]); // 1回目：まだ印は無い
+
+    const sent = await notifyStuckOnce(ticket, "Notionトークンが必要です");
+
+    // 本文は社長に届いていない（handoffFyiToSanadaは失敗）ので false を返す。
+    expect(sent).toBe(false);
+    expect(handoffFyiToSanada).toHaveBeenCalledTimes(1);
+    // Slack警告は「届いていない」ことを知らせる副作用として呼ばれる（戻り値には影響しない）。
+    expect(notifySlackAlert).toHaveBeenCalledTimes(1);
+    // 印は記帳しない＝次回スキャンで再試行できる。
+    expect(appendDiscussionBlocks).not.toHaveBeenCalled();
+
+    // 2回目：印は記帳されていないため、Notion側にも印は無い状態のまま
+    //（1回目で修正前バグのように誤って印が付いていないことを確認する）。
+    vi.clearAllMocks();
+    handoffEnabled.mockReturnValue(true);
+    handoffFyiToSanada.mockResolvedValue(true); // 今度はhandoffが直った
+    global.fetch = mockFetchReturningBlocks([]); // 印はまだ無い（1回目で記帳されていないため）
+
+    const sentAgain = await notifyStuckOnce(ticket, "Notionトークンが必要です");
+
+    // handoffが直っていれば、印が無いので正しく再試行され、今度こそ本文が届いて印が記帳される。
+    expect(sentAgain).toBe(true);
+    expect(handoffFyiToSanada).toHaveBeenCalledTimes(1);
     expect(appendDiscussionBlocks).toHaveBeenCalledTimes(1);
+    const args = appendDiscussionBlocks.mock.calls[0] as unknown as [string, { heading?: string }[]];
+    expect(args[1][0].heading).toBe(STUCK_MARKER_HEADING);
   });
 
   it("真田handoff・Slack警告の両方が失敗したら印を残さない（次回再試行できるように）", async () => {

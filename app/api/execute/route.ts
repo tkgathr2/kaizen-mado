@@ -8,6 +8,16 @@
 //  - 直せない → 「社長確認」へ。LINEで「リポが未設定」を正直に伝える（実改修はしない）。
 // CRON_SECRET 保護（本番で未設定＝fail-closed）。Vercel Cron等で定期実行する想定。
 // 鍵(GITHUB_DISPATCH_TOKEN/LINE)が無ければ各処理はfail-safeでスキップ（状態は進めない）。
+//
+// 【Medium指摘7・2026-08-15 バグチェック】2026-08-15 社長指示（PR#168）でGO承認後の実装は
+// 真田システム（mention-hisho）経由のみとなり、`lib/govote.ts` の `applyGoAction` はGOで
+// 「着手」を書かなくなった（executor==="sanada"のときだけ「真田実装中」に遷移し、それ以外は
+// 状態を変えないno-op）。つまりこのエンドポイントが対象にする `fetchTicketsByState("着手")` へ
+// **新規に**チケットが積まれる経路はもう存在しない。ただしこのroute自体・reaper（下記の
+// 「実装中」→「着手」への巻き戻し）・GitHub Actions（kaizen-loop.yml/kaizen-execute.yml）は
+// 削除していないため、**Notionに既に「着手」状態として残っている既存チケットがあれば従来どおり
+// 処理され続ける**（PR#168のコミットメッセージ「完全に廃止する」は自動改修の実行経路自体の
+// 削除ではなく、GO経路からの新規流入の遮断を指す＝実態はこちらが正確な表現）。
 import { NextRequest, NextResponse } from "next/server";
 import {
   fetchTicketsByState,
