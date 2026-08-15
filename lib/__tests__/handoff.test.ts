@@ -229,6 +229,35 @@ describe("handoffFyiToSanada（完了報告・詰まり・Merge待ち等のFYI�
     fetchMock.mockRejectedValue(new Error("boom"));
     await expect(handoffFyiToSanada("KZ-127", "text")).resolves.toBe(false);
   });
+
+  it("送信側は1回目がAbortError（タイムアウト相当）で失敗、2回目が成功すると相手へ2回POSTする（無条件リトライの仕様確認）", async () => {
+    // handoffToSanada と同じ ATTEMPTS=2 の無条件リトライ構造を handoffFyiToSanada も持つ。
+    // 【2026-08-15 bug-check-lab西野→神谷が対応】このリトライ自体は変えていないが、相手側
+    // （mention-hisho）の kind="fyi" 分岐に ticketId＋本文ハッシュの冪等化（kaizenFyiTs）を
+    // 追加したため、この2回目のPOSTは相手側で deduped:true として弾かれ、実害（社長への
+    // 重複配信）は防がれている（tkgathr2/mention-hisho#83）。送信側のリトライ挙動そのものの
+    // テストとして残す。
+    const abortError = new Error("The operation was aborted");
+    abortError.name = "AbortError";
+    fetchMock.mockRejectedValueOnce(abortError).mockResolvedValueOnce(okResponse());
+
+    const ok = await handoffFyiToSanada("KZ-127", "詰まっています。Notionトークンが必要です。");
+
+    expect(ok).toBe(true);
+    // 【再現の核心】呼び出し元からは「成功した」としか見えないが、実際には相手のサーバへ
+    // 同一ticketId・同一fyiTextのPOSTが2回届いている。1回目がタイムアウトしただけで
+    // 実際には相手に届いていた（＝相手が既に処理済みだった）場合、これがそのまま重複通知になる。
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [, init1] = fetchMock.mock.calls[0] as [string, any];
+    const [, init2] = fetchMock.mock.calls[1] as [string, any];
+    expect(JSON.parse(init1.body)).toEqual({
+      kind: "fyi",
+      ticketId: "KZ-127",
+      fyiText: "詰まっています。Notionトークンが必要です。",
+    });
+    // 2回目も全く同じbody＝相手側で内容による重複排除の手がかりが無い限り、区別できない。
+    expect(init2.body).toBe(init1.body);
+  });
 });
 
 describe("handoffEnabled", () => {
