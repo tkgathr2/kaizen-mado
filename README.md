@@ -74,14 +74,19 @@ npm run dev                  # http://localhost:3000/?sys=prorepo
 | `KAIZEN_STUCK_MINUTES` | 「実装中」滞留をstuckとみなす分数 | `30` | 指定分で巻き戻し判定 |
 | `KAIZEN_PUBLIC_BASE` | 窓口の公開ベースURL（callback/boardリンク生成用） | `https://kaizen.takagi.bz` | 指定URLでリンクを組み立てる |
 
-#### 真田システム（mention-hisho）への受け渡し ★通知の本線
+#### 真田システム（mention-hisho）への受け渡し ★通知の本線・自前LINEフォールバックは全廃
 2026-08-12 社長指示により、カイゼンくんが自前でLINE通知を出すのをやめ、用件は**真田のシステム（mention-hisho）へ受け渡す**。真田側が「真田宛メンションが来た状態」として扱い、既存の真田LINEカード（✅OK / ✏️修正 / 🚫却下 / 🛠ClaudeCodeへ送る）を社長へ出す。着手は社長が「🛠ClaudeCodeへ送る」を押したときに真田側から起きる。
-受け渡しに失敗したときだけ、下の自前LINE（`pushProposal`）へフォールバックする＝社長に何も届かない無音状態を作らない。
+
+2026-08-15 社長指示「カイゼンくんのLINEチャネルに一切来ない仕組みにして」により、**受け渡しに失敗したときの自前LINE（旧 `pushProposal`/`pushText`）へのフォールバックを全廃**した。失敗時は代わりに `lib/line.ts` の `notifySlackAlert`（真田Bot名義・persona-slack-relay経由・宛先はカイゼン監視チャンネル `C0BD5ESUFMM`＝社長＋幹部Botのみ）で警告するだけにし、社長に何も届かない無音状態は作らない。`pushProposal`/`pushText` 関数自体は緊急手段として `lib/line.ts` に残しているが、通常フローからは呼ばれない。
 
 | 変数 | 役割 | 既定 | 設定すると |
 |---|---|---|---|
-| `MENTION_HISHO_BASE_URL` | 真田システムの本番ベースURL。受け口は `${BASE}/api/kaizen/handoff` | なし | 設定すると受け渡しが有効。**未設定なら受け渡しは不活性**＝従来の自前LINEへフォールバック |
+| `MENTION_HISHO_BASE_URL` | 真田システムの本番ベースURL。受け口は `${BASE}/api/kaizen/handoff` | なし | 設定すると受け渡しが有効。**未設定なら受け渡しは不活性**＝Slack警告のみ |
 | `KAIZEN_HANDOFF_SECRET` | 受け渡しの認証キー（`x-kaizen-handoff-secret` ヘッダで送る） | なし | **真田側（mention-hisho）と同じ値**を両方に入れる。片方だけだと相手が401で弾く |
+| `KAIZEN_REPLY_SECRET` | `POST /api/kaizen/reply`（真田チャネルからの引用返信の書き戻し口）の認証キー（`x-kaizen-reply-secret` ヘッダで送る） | なし | **未設定ならこの口は503で無効化**（fail-closed）。真田側（mention-hisho）と同じ値を両方に入れる |
+
+##### 詰まり連絡と引用返信（`awaitsReply` / `POST /api/kaizen/reply`）
+詰まり連絡（`lib/notify.ts` `notifyStuckOnce`）は「社長の回答を必要とする」FYIのため、`handoffFyiToSanada(ticketId, text, {awaitsReply: true})` で送る。真田専用LINEチャネルのwebhookは自由文の返信を全部 Claude Code Routine 起動に使ってしまうため、社長には「このメッセージを引用返信（長押し→返信）で答えてください」と案内する（`buildStuckText`）。相手側（mention-hisho）は `awaitsReply:true` が付いた通知だけLINE送信後の `messageId` を控え、社長がその通知を引用返信したときに限り `POST /api/kaizen/reply` へ `{ticketId, replyText}` をPOSTしてくる。カイゼンくん側は `x-kaizen-reply-secret` を検証したうえでチケットを探し、議論ブロックへ「真田チャネルからの回答」として `replyText` を追記する（状態遷移や再実行はしない）。
 
 Slack起点チケット（幹部Botへの app_mention から自動起票されたもの）は `slackChannel` / `slackThreadTs` も一緒に渡す。これが無いと真田側は合成ts（`kaizen:<ticketId>`）しか持てず、社長がカードの「✅OK」を押しても `invalid_thread_ts` で必ず失敗する（2026-08-12 実測・バグチェック High-2）。
 

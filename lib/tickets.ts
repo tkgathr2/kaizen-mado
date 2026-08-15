@@ -322,6 +322,23 @@ export async function findGoMachiByTicketId(ticketId: string): Promise<TicketRow
   return rows.find((r) => r.ticketId.toUpperCase().replace(/\s/g, "") === norm) ?? null;
 }
 
+/**
+ * ticketId（例 KZ-12）で状態を問わず1件探す。
+ * 真田チャネル（mention-hisho）からの引用返信の書き戻し（POST /api/kaizen/reply）用。
+ * findGoMachiByTicketId と違い「GO待ち」に絞らない＝差し戻し中の詰まり連絡への回答も拾える。
+ * ticketId は unique_id プロパティ「ID」（prefix + 連番）なので、番号部分だけ取り出して
+ * Notion側フィルタで直接引く（状態別クエリを何度も投げるより確実・高速）。
+ * 形式が不正（数字が取れない）なら null。クエリ失敗時は例外を投げる（呼び出し側でハンドリング）。
+ */
+export async function findTicketByTicketId(ticketId: string): Promise<TicketRow | null> {
+  const m = /^\s*[A-Za-z]+-?(\d+)\s*$/.exec(ticketId || "");
+  if (!m) return null;
+  const num = Number(m[1]);
+  if (!Number.isFinite(num)) return null;
+  const rows = await queryDatabase({ property: "ID", unique_id: { equals: num } }, 1);
+  return rows[0] ?? null;
+}
+
 /** Slack thread_ts で既存チケットを探す（Slack引用返信時の重複防止）。
  * 同じスレッド内の複数メンションが複数の app_mention イベント生成・重複起票を防ぐため、
  * 直近に同じ slackThreadTs を持つ「受付」「GO待ち」「議論中」チケットを検索。

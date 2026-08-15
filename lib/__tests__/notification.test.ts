@@ -17,18 +17,23 @@ import {
   type QueuedNotification,
 } from "@/lib/notification";
 
-// ── LINE をモック（pushText は実送信させない） ──
+// ── LINE/真田handoffをモック（実送信させない） ──
 const pushMock = vi.fn(async (_t: string) => true);
+const alertMock = vi.fn(async (..._a: unknown[]) => true);
 let lineOn = true;
 vi.mock("@/lib/line", () => ({
-  pushText: (t: string) => pushMock(t),
   lineEnabled: () => lineOn,
+  notifySlackAlert: (...a: unknown[]) => alertMock(...a),
   truncateForLine: (s: string | null | undefined, max: number) => {
     const t = (s || "").trim().replace(/\s+/g, " ");
     return t.length <= max ? t : t.slice(0, Math.max(0, max - 1)) + "…";
   },
   BOARD_URL: "https://kaizen.example/board",
   actionBanner: (kind: string, action?: string) => `BANNER(${kind}:${action ?? ""})`,
+}));
+vi.mock("@/lib/handoff", () => ({
+  handoffFyiToSanada: (_id: string, t: string) => pushMock(t),
+  handoffEnabled: () => true,
 }));
 
 // ── テスト用のインメモリストア ──

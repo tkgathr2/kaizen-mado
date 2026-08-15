@@ -24,7 +24,8 @@
  *    （cron ハンドラだけは結果を JSON で可視化する）。
  */
 
-import { pushText, truncateForLine, lineEnabled, BOARD_URL, actionBanner } from "@/lib/line";
+import { truncateForLine, lineEnabled, BOARD_URL, actionBanner, notifySlackAlert } from "@/lib/line";
+import { handoffFyiToSanada } from "@/lib/handoff";
 
 export interface QueuedNotification {
   id: string; // uuid
@@ -364,7 +365,8 @@ export async function enqueueNotification(
   }
 }
 
-/** ダイジェストを LINE で1通送る。LINE 未設定なら false（fail-safe）。 */
+/** ダイジェストを1通送る。真田システム経由が本線、失敗時はSlack警告（社長指示2026-08-15：
+ * カイゼンくん自前LINEチャネルへの送信は全廃）。真田・Slackどちらも未設定なら false（fail-safe）。 */
 export async function sendBatchNotifications(
   items: QueuedNotification[]
 ): Promise<boolean> {
@@ -373,7 +375,20 @@ export async function sendBatchNotifications(
   //（LINE 5000字上限で 400 になるのを絶対に避ける）。
   const body = buildDigestText(items).slice(0, 4900);
   console.log(`[notification] digest送信 (${items.length}件)`);
-  return await pushText(body);
+  // ダイジェストは複数チケットの束ねなので、真田handoffの冪等キー（ticketId単位）には
+  // 「digest:<日付>」という合成IDを使う（同日の再送だけ重複扱いにする）。
+  const digestId = `digest:${new Date().toISOString().slice(0, 10)}`;
+  const handed = await handoffFyiToSanada(digestId, body).catch(() => false);
+  // Slack警告は「届かなかったこと」を知らせる副作用のみ。ダイジェスト本文自体は届いていない
+  // ため、戻り値は handed に従う（呼び出し元がキューを消費してよいかの判定に使うため、
+  // 警告が成功しても true にはしない）。
+  if (!handed) {
+    await notifySlackAlert(
+      `日次ダイジェストを真田チャネルへ送れませんでした。件数：${items.length}`,
+      "⚠️ 日次ダイジェストが真田チャネルへ送れませんでした"
+    ).catch(() => false);
+  }
+  return handed;
 }
 
 export interface BatchResult {

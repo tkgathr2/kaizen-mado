@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { checkCronSecret, checkAdminGoAuth } from "../cronAuth";
+import { checkCronSecret, checkAdminGoAuth, checkKaizenReplyAuth } from "../cronAuth";
 import type { NextRequest } from "next/server";
 
 // headers.get だけ使う最小のリクエストを作る。
@@ -139,5 +139,50 @@ describe("checkAdminGoAuth（GO奪取防止・CRON_SECRETから分離）", () =>
     (process.env as any).NODE_ENV = "development";
     expect(checkAdminGoAuth(reqWith({ "x-cron-secret": "cron-key" }))).toBe("ok");
     expect(checkAdminGoAuth(reqWith({ "x-cron-secret": "wrong" }))).toBe("unauthorized");
+  });
+});
+
+describe("checkKaizenReplyAuth（真田チャネルからの引用返信の書き戻し口・専用シークレット）", () => {
+  let savedSecret: string | undefined;
+  let savedCron: string | undefined;
+  let savedEnv: string | undefined;
+
+  beforeEach(() => {
+    savedSecret = process.env.KAIZEN_REPLY_SECRET;
+    savedCron = process.env.CRON_SECRET;
+    savedEnv = process.env.NODE_ENV;
+  });
+  afterEach(() => {
+    if (savedSecret === undefined) delete process.env.KAIZEN_REPLY_SECRET;
+    else process.env.KAIZEN_REPLY_SECRET = savedSecret;
+    if (savedCron === undefined) delete process.env.CRON_SECRET;
+    else process.env.CRON_SECRET = savedCron;
+    if (savedEnv === undefined) delete (process.env as any).NODE_ENV;
+    else (process.env as any).NODE_ENV = savedEnv;
+  });
+
+  it("KAIZEN_REPLY_SECRET設定時、x-kaizen-reply-secret 一致で ok", () => {
+    process.env.KAIZEN_REPLY_SECRET = "reply-key";
+    expect(checkKaizenReplyAuth(reqWith({ "x-kaizen-reply-secret": "reply-key" }))).toBe("ok");
+    expect(checkKaizenReplyAuth(reqWith({ "x-kaizen-reply-secret": "wrong" }))).toBe(
+      "unauthorized"
+    );
+    expect(checkKaizenReplyAuth(reqWith({}))).toBe("unauthorized");
+  });
+
+  it("CRON_SECRETを知っていても通らない（鍵を分離）", () => {
+    process.env.KAIZEN_REPLY_SECRET = "reply-key";
+    process.env.CRON_SECRET = "cron-key";
+    expect(checkKaizenReplyAuth(reqWith({ "x-cron-secret": "cron-key" }))).toBe("unauthorized");
+  });
+
+  it("KAIZEN_REPLY_SECRET未設定は環境に関わらず disabled（fail-closed）", () => {
+    delete process.env.KAIZEN_REPLY_SECRET;
+    (process.env as any).NODE_ENV = "production";
+    expect(checkKaizenReplyAuth(reqWith({ "x-kaizen-reply-secret": "anything" }))).toBe(
+      "disabled"
+    );
+    (process.env as any).NODE_ENV = "development";
+    expect(checkKaizenReplyAuth(reqWith({}))).toBe("disabled");
   });
 });

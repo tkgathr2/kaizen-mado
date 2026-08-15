@@ -18,7 +18,7 @@ import {
 import { returnLearningFromCompleted } from "@/lib/learn";
 import { notifyStuckOnce, notifyReviewOnce, buildMergedText } from "@/lib/notify";
 import { checkCronSecret } from "@/lib/cronAuth";
-import { isInfraError, buildInfraNoticeText, pushText } from "@/lib/line";
+import { isInfraError, buildInfraNoticeText, notifySlackAlert } from "@/lib/line";
 import { handoffFyiToSanada } from "@/lib/handoff";
 import { isValidFailureClass, type FailureClass } from "@/lib/kz-state";
 import { findTarget } from "@/lib/targets";
@@ -119,11 +119,16 @@ export async function POST(req: NextRequest) {
 
       // 完了報告LINE（社長指示 2026-07-03「GOしたのに完了したか分からない」対策）。
       // GO済み案件の終点なので1回だけ・fail-safe（送信失敗でもループは止めない）。
-      // 真田システム経由を優先し、失敗時だけ自前LINE（pushText・sender偽装）へフォールバック
-      // （社長指示 2026-08-15：カイゼンくんから無記名で届く通知を終わらせる）。
+      // 真田システム経由が本線。失敗時はカイゼンくん自前LINEへは送らず、真田Bot名義の
+      // Slack警告（社長＋幹部Botのみ）で知らせる（社長指示 2026-08-15：自前LINEフォールバック全廃）。
       const mergedText = buildMergedText(current, prUrl);
       const handed = await handoffFyiToSanada(ticketId, mergedText).catch(() => false);
-      if (!handed) await pushText(mergedText).catch(() => false);
+      if (!handed) {
+        await notifySlackAlert(
+          `完了報告（${ticketId}）を真田チャネルへ送れませんでした。text: ${mergedText.slice(0, 100)}`,
+          "⚠️ 完了報告が真田チャネルへ送れませんでした"
+        ).catch(() => false);
+      }
       // 日次ダイジェスト（改善⑤）へ完了を1件積む＝朝8時のふりかえりまとめ用。
       await enqueueNotification(
         ticketId,
@@ -181,11 +186,16 @@ export async function POST(req: NextRequest) {
         },
       ]);
       // 文面分岐：詰まり連絡ではなく「仕組み側の不調・自動で再挑戦」を送る。
-      // 真田システム経由を優先し、失敗時だけ自前LINEへフォールバック（他のFYI通知と同じ方針）。
+      // 真田システム経由が本線。失敗時は自前LINEへは送らず、Slack警告に倒す（他のFYI通知と同じ方針）。
       {
         const infraText = buildInfraNoticeText(current);
         const infraHanded = await handoffFyiToSanada(ticketId, infraText).catch(() => false);
-        if (!infraHanded) await pushText(infraText).catch(() => false);
+        if (!infraHanded) {
+          await notifySlackAlert(
+            `基盤エラー通知（${ticketId}）を真田チャネルへ送れませんでした。text: ${infraText.slice(0, 100)}`,
+            "⚠️ 基盤エラー通知が真田チャネルへ送れませんでした"
+          ).catch(() => false);
+        }
       }
       return NextResponse.json({ ok: true, state: "実装中", infra: true });
     }

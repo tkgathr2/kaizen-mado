@@ -2,8 +2,10 @@
 // 「受付」状態のチケットを順に処理し、CTO Agent Lab の議論結果をページに追記して
 // 「GO待ち」へ進める。GO待ちにしたら、用件を真田システム（mention-hisho）へ受け渡し、
 // 真田の既存LINEカード（✅OK/✏️修正/🚫却下/🛠ClaudeCodeへ送る）で社長に確認してもらう。
-// 受け渡しに失敗したときだけ、従来どおり自前のGO伺いLINE（pushProposal）へフォールバックする
-// ＝社長に何も届かない無音状態を作らない。
+// 受け渡しに失敗したときは、カイゼンくん自前LINE（旧pushProposal）へは一切フォールバック
+// しない（社長指示 2026-08-15「カイゼンくんのLINEチャネルに一切来ない仕組みにして」）。
+// 代わりに真田Bot名義のSlack警告（notifySlackAlert・社長＋幹部Botのみのチャンネル）を送り、
+// 社長に何も届かない無音状態を作らない。
 //
 // 【2026-08-12 社長指示】重要度・危険度に関係なく**全チケットが必ず社長のLINE確認を経由する**。
 // 旧「真田自走（オートパイロット）＝安全な案件は社長に聞かず自動着手」は廃止した。
@@ -19,7 +21,7 @@ import {
   setStatusChangedAt,
 } from "@/lib/tickets";
 import { discussTicket } from "@/lib/discuss";
-import { pushProposal } from "@/lib/line";
+import { notifySlackAlert, BOARD_URL } from "@/lib/line";
 import { handoffToSanada } from "@/lib/handoff";
 import { checkCronSecret } from "@/lib/cronAuth";
 import { returnLearningFromCompleted } from "@/lib/learn";
@@ -56,7 +58,7 @@ export async function POST(req: NextRequest) {
       recommendation: string;
       source: string;
       notified: boolean;
-      notifiedVia: "handoff" | "line" | "none";
+      notifiedVia: "handoff" | "slack-alert" | "none";
     }[] = [];
     const errors: { ticketId: string; error: string }[] = [];
 
@@ -84,15 +86,19 @@ export async function POST(req: NextRequest) {
 
         // 本線：真田システム（mention-hisho）へ受け渡す。真田側が「真田宛メンション」として
         // 扱い、既存の真田LINEカード（✅OK/✏️修正/🚫却下/🛠ClaudeCodeへ送る）を社長へ出す。
-        let notifiedVia: "handoff" | "line" | "none" = "none";
+        let notifiedVia: "handoff" | "slack-alert" | "none" = "none";
         const handed = await handoffToSanada(goWaitTicket, d);
         if (handed) {
           notifiedVia = "handoff";
         } else {
-          // フォールバック：受け渡しが無効/失敗したときだけ自前のGO伺いLINEを送る
-          // （社長に何も届かない無音状態を作らないため）。
-          const pushed = await pushProposal(goWaitTicket, d);
-          notifiedVia = pushed ? "line" : "none";
+          // フォールバック：受け渡しが無効/失敗したときは、カイゼンくん自前LINE（旧pushProposal）
+          // へは送らず、真田Bot名義のSlack警告（社長＋幹部Botのみのチャンネル）で知らせる
+          // （社長に何も届かない無音状態を作らないため。自前LINEフォールバックは廃止）。
+          const alerted = await notifySlackAlert(
+            `GO伺い（${ticket.ticketId}／${ticket.system}）を真田チャネルへ送れませんでした。カイゼンくんの盤面（${BOARD_URL}）から直接ご確認ください。`,
+            "⚠️ GO伺いが真田チャネルへ送れませんでした"
+          );
+          notifiedVia = alerted ? "slack-alert" : "none";
         }
         console.log("[process] 社長へ通知", {
           ticketId: ticket.ticketId,

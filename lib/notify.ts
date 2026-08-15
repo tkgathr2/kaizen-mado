@@ -1,7 +1,9 @@
 // ── 自分から送るLINE通知の絞り込み（社長承認の新仕様） ──
-// カイゼンくんが"自分から"送るLINEは、即時2種だけに絞る：
-//   1) GO伺い（社長が決める案件）… process/route.ts の pushProposal / execute/route.ts の
-//      「🛑社長に相談です（社長案件）」がこれ（＝判断要求）。本モジュールでは扱わない。
+// カイゼンくんが"自分から"送るLINEは無い。全通知は真田システム（mention-hisho）への
+// handoffを経由し、真田専用LINEチャネルから届く（社長指示 2026-08-15「カイゼンくんの
+// LINEチャネルに一切来ない仕組みにして。ここに来ること自体がおかしい」）。
+//   1) GO伺い（社長が決める案件）… process/route.ts が handoffToSanada を呼ぶ（＝判断要求）。
+//      本モジュールでは扱わない。
 //   2) 詰まり/困った連絡（人の助けが本当に要る時だけ・連打しない）… ここで実装する。
 //
 // 着手予告・着手・完了・PR完成 等の「進捗FYI」通知は新仕様で不要のため、各routeから削除済み。
@@ -16,22 +18,29 @@
 //   1回だけ通知する。真田が裏で直せるシステム故障（モデル切れ等の技術障害）の自動切り分けは
 //   将来の死活監視で扱う＝今はスコープ外（ここでは failed をそのまま詰まりとして扱う）。
 //
-// ★ fail-safe：LINE未設定なら送らない。読取/送信/追記で例外が出ても握りつぶす
-//   （カイゼンくんの改善ループを通知の失敗で止めない）。
+// ★ fail-safe：真田handoff・Slack警告のどちらも未設定なら送らない。読取/送信/追記で例外が
+//   出ても握りつぶす（カイゼンくんの改善ループを通知の失敗で止めない）。
 import type { TicketRow } from "./tickets";
 import { appendDiscussionBlocks } from "./tickets";
-import { lineEnabled, pushText, truncateForLine, BOARD_URL, msgHead, stageBar, actionBanner } from "./line";
+import { lineEnabled, notifySlackAlert, truncateForLine, BOARD_URL, msgHead, stageBar, actionBanner } from "./line";
 import { handoffEnabled, handoffFyiToSanada } from "./handoff";
 
 /**
- * 真田システム（真田専用LINEチャネル）経由を優先し、失敗時だけ自前LINE（pushText）へ
- * フォールバックする（社長指示 2026-08-15：カイゼンくんから無記名で届く通知を終わらせ、
- * 真田からの体裁に統一する）。フォールバック時は lib/line.ts の sender 機能により
- * 「真田部長（カイゼンくん）」表示になる（二重の備え）。
+ * 真田システム（真田専用LINEチャネル）経由を優先し、失敗時は自前LINEへは送らず、
+ * 真田Bot名義のSlack警告（persona-slack-relay・社長＋幹部Botのみのチャンネル）で
+ * 「届いていない」ことだけを知らせる（社長指示 2026-08-15：カイゼンくん自前LINEへの
+ * フォールバックを全廃し、届かない通知は無音ではなくSlack警告に倒す）。
  */
-async function sendFyi(ticketId: string, text: string): Promise<boolean> {
-  if (await handoffFyiToSanada(ticketId, text)) return true;
-  return pushText(text);
+async function sendFyi(
+  ticketId: string,
+  text: string,
+  opts?: { awaitsReply?: boolean }
+): Promise<boolean> {
+  if (await handoffFyiToSanada(ticketId, text, opts)) return true;
+  return notifySlackAlert(
+    `真田チャネルへのFYI通知（${ticketId}）が送れませんでした。text: ${text.slice(0, 100)}`,
+    "⚠️ FYI通知が真田チャネルへ送れませんでした"
+  );
 }
 
 const NOTION_VERSION = "2022-06-28";
@@ -104,7 +113,7 @@ export function buildStuckText(ticket: TicketRow, reason: string): string {
     `（${ticket.ticketId}）これ、自動で直せず詰まりました。`,
     `必要なこと：${truncateForLine(reason || "詳しい状況を教えてください", 60)}`,
     ``,
-    `これを教えてください。LINEで返信すれば続けます。`,
+    `これを教えてください。このメッセージを引用返信（長押し→返信）で答えてください。`,
     stageBar(4), // ④着手で詰まり
     `全体像 ▶ ${BOARD_URL}`,
   ].join("\n");
@@ -121,23 +130,24 @@ export async function notifyStuckOnce(
   ticket: TicketRow,
   reason: string
 ): Promise<boolean> {
-  // 【bug-check-lab Critical修正・2026-08-15】詰まり連絡だけは真田システムへのhandoff
-  // （sendFyi→handoffFyiToSanada）を経由させず、常に自前LINE（pushText）で直接送る。
-  // buildStuckText の本文は「これを教えてください。LINEで返信すれば続けます。」と社長に
-  // "LINE返信"を要求するが、真田専用LINEチャネルのwebhook側（mention-hisho-check）は
-  // 受信テキストを案件照合・冪等化なしで無条件にClaude Code Routineへ直行させる設計。
-  // そのため詰まり連絡をhandoff経由にすると、社長が普通に返信した内容が
-  // (a) kaizen-madoへ届かずチケットが差し戻しのまま永久滞留し、かつ
-  // (b) 意図しないRoutineが誤発火する、という重大な不具合になる。
-  // 完了報告・Merge待ち・基盤エラー通知（返信不要のFYI）は引き続きhandoff対象のまま
-  // （sendFyi経由・notifyReviewOnce等）で変更しない。
-  // 自前LINE未設定なら何もしない（印も残さない＝設定後に1回送れるように）。
-  if (!lineEnabled()) return false;
+  // 【再修正・2026-08-15】詰まり連絡を再び真田システムへのhandoff（sendFyi→handoffFyiToSanada）
+  // 経由に戻す。旧修正（bug-check-lab）は「詰まり連絡が社長へ"LINEで返信"を求めるが、真田専用
+  // LINEチャネルのwebhookは受信テキストを案件照合なしで無条件にClaude Code Routineへ直行させる」
+  // という誤爆を避けるため、詰まり連絡だけ自前LINE直送に倒していた。だが社長指示 2026-08-15
+  // 「カイゼンくんのLINEチャネルに一切来ない仕組みにして」により自前LINE送信そのものを廃止した
+  // ため、代わりに sendFyi 呼び出しへ awaitsReply:true を渡す。相手側（mention-hisho）はこの
+  // フラグが立った通知だけLINE送信後のmessageIdを控え、社長がその通知を"引用返信"したときに
+  // 限って `POST /api/kaizen/reply` へ書き戻す（自由文の通常返信は従来どおりRoutine起動に使う）。
+  // これにより「自由文かどうか」ではなく「引用返信かどうか」で区別できるため、誤爆せずhandoff
+  // 経由に統一できる。
+  if (!lineEnabled() && !handoffEnabled()) return false;
 
   // 既に通知済みなら送らない（連打防止）。
   if (await hasStuckMarker(ticket.pageId)) return false;
 
-  const sent = await pushText(buildStuckText(ticket, reason));
+  const sent = await sendFyi(ticket.ticketId, buildStuckText(ticket, reason), {
+    awaitsReply: true,
+  });
   if (!sent) return false;
 
   // 送れたときだけ印を残す（送信失敗なら印を残さず、次回再試行できるようにする）。

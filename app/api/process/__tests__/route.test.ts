@@ -14,10 +14,11 @@ const discussTicket = vi.fn((..._a: unknown[]): Promise<unknown> => Promise.reso
 const returnLearningFromCompleted = vi.fn(
   (..._a: unknown[]): Promise<{ memorized: number }> => Promise.resolve({ memorized: 0 })
 );
-// 新仕様の検証用：LINE送信モックを名前付きで保持し「呼ばれない」ことを検証する。
-const pushProposal = vi.fn(async () => true);
-const pushText = vi.fn(async () => true);
-// 2026-08-12：真田システム（mention-hisho）への受け渡し。成功したら pushProposal は呼ばない。
+// 新仕様の検証用：Slack警告モックを名前付きで保持し「呼ばれない/呼ばれる」ことを検証する。
+// 2026-08-15：受け渡し失敗時は自前LINE（旧pushProposal）へは一切フォールバックせず、
+// notifySlackAlert（真田Bot名義のSlack警告）へ倒す。
+const notifySlackAlert = vi.fn(async (_detail: string) => true);
+// 2026-08-12：真田システム（mention-hisho）への受け渡し。成功したら notifySlackAlert は呼ばない。
 const handoffToSanada = vi.fn(async () => true);
 const kickEndpoint = vi.fn(async () => true);
 
@@ -36,8 +37,7 @@ vi.mock("@/lib/learn", () => ({
 }));
 // LINE送信・トリガ・ターゲット解決・ゲートは名前付きモックで差し替え（呼び出し検証に使う）。
 vi.mock("@/lib/line", () => ({
-  pushProposal: (...a: unknown[]) => pushProposal(...(a as [])),
-  pushText: (...a: unknown[]) => pushText(...(a as [])),
+  notifySlackAlert: (...a: unknown[]) => notifySlackAlert(...(a as [string])),
   msgHead: () => "",
   stageBar: () => "",
   BOARD_URL: "x",
@@ -67,7 +67,7 @@ describe("/api/process 失敗時の状態巻き戻し", () => {
     vi.clearAllMocks();
     // clearAllMocks は実装（mockResolvedValue 等）を消さないため、テスト間で明示的に既定へ戻す。
     handoffToSanada.mockResolvedValue(true);
-    pushProposal.mockResolvedValue(true);
+    notifySlackAlert.mockResolvedValue(true);
     // CRON_SECRET未設定でも、明示フラグ ALLOW_INSECURE_CRON=1 のとき checkCronSecret が通る
     // （cronAuth は未設定時 fail-closed。本番は CRON_SECRET 設定で保護）。
     delete process.env.CRON_SECRET;
@@ -160,7 +160,7 @@ describe("/api/process 全件GO待ち＋真田システムへの受け渡し", (
   beforeEach(() => {
     vi.clearAllMocks();
     handoffToSanada.mockResolvedValue(true);
-    pushProposal.mockResolvedValue(true);
+    notifySlackAlert.mockResolvedValue(true);
     delete process.env.CRON_SECRET;
     process.env.ALLOW_INSECURE_CRON = "1";
     (process.env as any).NODE_ENV = "test";
@@ -188,7 +188,7 @@ describe("/api/process 全件GO待ち＋真田システムへの受け渡し", (
     expect(json.ok).toBe(true);
   });
 
-  it("受け渡し成功時は自前LINE（pushProposal）を送らない", async () => {
+  it("受け渡し成功時はSlack警告（旧pushProposalフォールバック）を送らない", async () => {
     fetchTicketsByState.mockResolvedValueOnce([ticketRow()]);
     discussTicket.mockResolvedValueOnce(goDiscussion());
     handoffToSanada.mockResolvedValue(true);
@@ -197,13 +197,12 @@ describe("/api/process 全件GO待ち＋真田システムへの受け渡し", (
     const json = await res.json();
 
     expect(handoffToSanada).toHaveBeenCalledTimes(1);
-    expect(pushProposal).not.toHaveBeenCalled();
-    expect(pushText).not.toHaveBeenCalled();
+    expect(notifySlackAlert).not.toHaveBeenCalled();
     expect(json.processed?.[0]?.notifiedVia).toBe("handoff");
     expect(json.processed?.[0]?.notified).toBe(true);
   });
 
-  it("受け渡し失敗時は自前LINE（pushProposal）へフォールバックする", async () => {
+  it("受け渡し失敗時は自前LINEへは送らずSlack警告（真田Bot名義）へ倒す", async () => {
     fetchTicketsByState.mockResolvedValueOnce([ticketRow()]);
     discussTicket.mockResolvedValueOnce(goDiscussion());
     handoffToSanada.mockResolvedValue(false);
@@ -212,17 +211,19 @@ describe("/api/process 全件GO待ち＋真田システムへの受け渡し", (
     const json = await res.json();
 
     expect(handoffToSanada).toHaveBeenCalledTimes(1);
-    // 無音状態を作らないため、handoffが落ちたら従来のGO伺いを送る。
-    expect(pushProposal).toHaveBeenCalledTimes(1);
-    expect(json.processed?.[0]?.notifiedVia).toBe("line");
+    // 無音状態を作らないため、handoffが落ちたらSlack警告を送る（自前LINEへは送らない）。
+    expect(notifySlackAlert).toHaveBeenCalledTimes(1);
+    const [detail] = notifySlackAlert.mock.calls[0] as [string];
+    expect(detail).toContain("KZ-2");
+    expect(json.processed?.[0]?.notifiedVia).toBe("slack-alert");
     expect(json.processed?.[0]?.notified).toBe(true);
   });
 
-  it("受け渡しもLINEも失敗したら notifiedVia=none で記録する", async () => {
+  it("受け渡しもSlack警告も失敗したら notifiedVia=none で記録する", async () => {
     fetchTicketsByState.mockResolvedValueOnce([ticketRow()]);
     discussTicket.mockResolvedValueOnce(goDiscussion());
     handoffToSanada.mockResolvedValue(false);
-    pushProposal.mockResolvedValue(false);
+    notifySlackAlert.mockResolvedValue(false);
 
     const res = await POST(makeReq());
     const json = await res.json();

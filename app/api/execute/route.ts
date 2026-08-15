@@ -28,7 +28,8 @@ import {
   buildDispatchPayload,
   type DispatchPayload,
 } from "@/lib/orchestrate";
-import { pushText, truncateForLine, notionPageUrl, stageBar, BOARD_URL, msgHead } from "@/lib/line";
+import { truncateForLine, notionPageUrl, stageBar, BOARD_URL, msgHead, notifySlackAlert } from "@/lib/line";
+import { handoffFyiToSanada } from "@/lib/handoff";
 import { checkCronSecret } from "@/lib/cronAuth";
 import { enqueueNotification } from "@/lib/notification";
 
@@ -124,8 +125,8 @@ export async function POST(req: NextRequest) {
                 body: `自動改修を${maxRetries}回試して失敗したため停止しました。最後の失敗理由: ${lastFailure}`,
               },
             ]);
-            await pushText(
-              [
+            {
+              const stopText = [
                 msgHead("🛑", "自動改修を停止しました", s.system, s.title),
                 `（${s.ticketId}）自動改修を${maxRetries}回試して失敗したため停止しました。`,
                 `最後の失敗理由: ${truncateForLine(lastFailure, 120)}`,
@@ -134,8 +135,15 @@ export async function POST(req: NextRequest) {
                 stageBar(4),
                 `詳細 ▶ ${notionPageUrl(s.pageId)}`,
                 `全体像 ▶ ${BOARD_URL}`,
-              ].join("\n")
-            ).catch(() => false);
+              ].join("\n");
+              const handed = await handoffFyiToSanada(s.ticketId, stopText).catch(() => false);
+              if (!handed) {
+                await notifySlackAlert(
+                  `自動改修停止の通知（${s.ticketId}）を真田チャネルへ送れませんでした。`,
+                  "⚠️ 自動改修停止の通知が真田チャネルへ送れませんでした"
+                ).catch(() => false);
+              }
+            }
             retryCapped.push(s.ticketId);
             reapedPageIds.add(s.pageId);
             continue;
@@ -182,8 +190,8 @@ export async function POST(req: NextRequest) {
               : `「${sys}」は対象システムとして未定義のため自動修正できません。対象マッピングを追加してください（または担当へ）。`,
           },
         ]);
-        await pushText(
-          [
+        {
+          const noRepoText = [
             msgHead("⚠️", "自動修正できません", ticket.system, ticket.title), // まず「何の件か」
             `（${ticket.ticketId}）`,
             ``,
@@ -195,8 +203,15 @@ export async function POST(req: NextRequest) {
             stageBar(3),
             `詳細 ▶ ${notionPageUrl(ticket.pageId)}`,
             `全体像 ▶ ${BOARD_URL}`,
-          ].join("\n")
-        );
+          ].join("\n");
+          const handed = await handoffFyiToSanada(ticket.ticketId, noRepoText).catch(() => false);
+          if (!handed) {
+            await notifySlackAlert(
+              `自動修正不可の通知（${ticket.ticketId}）を真田チャネルへ送れませんでした。`,
+              "⚠️ 自動修正不可の通知が真田チャネルへ送れませんでした"
+            ).catch(() => false);
+          }
+        }
         escalated.push(ticket.ticketId);
         continue;
       }

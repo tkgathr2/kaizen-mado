@@ -13,6 +13,7 @@ import {
   anonSubmitDedupSeconds,
   matchDuplicate,
   findRecentDuplicate,
+  findTicketByTicketId,
   type TicketRow,
 } from "../tickets";
 import type { Ticket } from "../types";
@@ -469,5 +470,80 @@ describe("findRecentDuplicate（Notion段の起票前 冪等チェック）", ()
     delete process.env.NOTION_TOKEN;
     global.fetch = vi.fn();
     expect(await findRecentDuplicate(tk, "高木")).toBeNull();
+  });
+});
+
+describe("findTicketByTicketId（POST /api/kaizen/reply の書き戻し先探索）", () => {
+  let originalToken: string | undefined;
+  let originalDbId: string | undefined;
+  let originalFetch: typeof global.fetch;
+
+  beforeEach(() => {
+    originalToken = process.env.NOTION_TOKEN;
+    originalDbId = process.env.NOTION_DATABASE_ID;
+    originalFetch = global.fetch;
+    process.env.NOTION_TOKEN = "test-token";
+    process.env.NOTION_DATABASE_ID = "test-db";
+  });
+  afterEach(() => {
+    if (originalToken === undefined) delete process.env.NOTION_TOKEN;
+    else process.env.NOTION_TOKEN = originalToken;
+    if (originalDbId === undefined) delete process.env.NOTION_DATABASE_ID;
+    else process.env.NOTION_DATABASE_ID = originalDbId;
+    global.fetch = originalFetch;
+  });
+
+  it("ticketId の番号部分で unique_id フィルタを組み立て、状態を問わず1件返す", async () => {
+    let capturedBody: any = null;
+    global.fetch = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+      capturedBody = JSON.parse(init.body as string);
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          results: [
+            {
+              id: "page-reply-1",
+              properties: {
+                ID: { type: "unique_id", unique_id: { prefix: "KZ", number: 12 } },
+                対象システム: { type: "select", select: { name: "プロレポ" } },
+                種別: { type: "select", select: { name: "改善" } },
+                重要度: { type: "select", select: { name: "中" } },
+                チケット名: { type: "title", title: [{ plain_text: "件名" }] },
+                内容: { type: "rich_text", rich_text: [] },
+                起票者: { type: "rich_text", rich_text: [] },
+                状態: { type: "select", select: { name: "差し戻し" } },
+                FGSリンク: { type: "url", url: null },
+              },
+            },
+          ],
+        }),
+      });
+    });
+
+    const hit = await findTicketByTicketId("KZ-12");
+
+    expect(hit?.pageId).toBe("page-reply-1");
+    expect(hit?.ticketId).toBe("KZ-12");
+    expect(hit?.state).toBe("差し戻し");
+    expect(capturedBody.filter).toEqual({ property: "ID", unique_id: { equals: 12 } });
+  });
+
+  it("該当チケットが無ければ null", async () => {
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ results: [] }) });
+    expect(await findTicketByTicketId("KZ-999")).toBeNull();
+  });
+
+  it("不正な形式（数字が取れない）なら Notion へ問い合わせず null", async () => {
+    const fetchMock = vi.fn();
+    global.fetch = fetchMock;
+    expect(await findTicketByTicketId("not-a-ticket-id")).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("空文字なら null", async () => {
+    const fetchMock = vi.fn();
+    global.fetch = fetchMock;
+    expect(await findTicketByTicketId("")).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

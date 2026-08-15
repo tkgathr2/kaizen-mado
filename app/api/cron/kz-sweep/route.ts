@@ -21,7 +21,8 @@ import {
 import type { TicketRow } from "@/lib/tickets";
 import { checkCronSecret } from "@/lib/cronAuth";
 import { TIMEOUTS, KZ_STATUS } from "@/lib/kz-state";
-import { lineEnabled, pushText } from "@/lib/line";
+import { notifySlackAlert } from "@/lib/line";
+import { handoffFyiToSanada, handoffEnabled } from "@/lib/handoff";
 import { enqueueNotification } from "@/lib/notification";
 
 export const runtime = "nodejs";
@@ -49,11 +50,18 @@ function getAnchor(row: TicketRow): number | null {
   return null; // 計測不能 → タイムアウト判定しない（安全側）
 }
 
-// ── LINE通知（fail-safe: LINE未設定・失敗なら握り潰す）──
-async function notify(text: string): Promise<void> {
-  if (!lineEnabled()) return;
-  await pushText(text).catch((e) => {
-    console.error("[kz-sweep] LINE通知失敗:", (e as Error).message);
+// ── 通知（fail-safe: 未設定・失敗なら握り潰す）──
+// 真田システム経由が本線、失敗時はSlack警告（社長指示2026-08-15：
+// カイゼンくん自前LINEチャネルへの送信は全廃）。
+async function notify(ticketId: string, text: string): Promise<void> {
+  if (!handoffEnabled()) return;
+  const handed = await handoffFyiToSanada(ticketId, text).catch(() => false);
+  if (handed) return;
+  await notifySlackAlert(
+    `kz-sweepの通知（${ticketId}）を真田チャネルへ送れませんでした。`,
+    "⚠️ kz-sweep通知が真田チャネルへ送れませんでした"
+  ).catch((e) => {
+    console.error("[kz-sweep] 通知失敗:", (e as Error).message);
   });
 }
 
@@ -92,6 +100,7 @@ async function processTicket(row: TicketRow, now: number): Promise<SweepResult> 
         },
       ]);
       await notify(
+        row.ticketId,
         `📋 ${row.ticketId}「${row.title}」\nGO待ちのまま7日間経過したため自動クローズしました。\n対象: ${row.system}`
       );
       return { ...base, action: "closed", reason: "AWAITING_GO 7d timeout" };
@@ -107,6 +116,7 @@ async function processTicket(row: TicketRow, now: number): Promise<SweepResult> 
           },
         ]);
         await notify(
+          row.ticketId,
           `⏰ ${row.ticketId}「${row.title}」\nGO待ちになってから48時間以上経過しています。ご確認をお願いします。\n対象: ${row.system}`
         );
         await enqueueNotification(
@@ -133,6 +143,7 @@ async function processTicket(row: TicketRow, now: number): Promise<SweepResult> 
         },
       ]);
       await notify(
+        row.ticketId,
         `📋 ${row.ticketId}「${row.title}」\n差し戻しのまま7日間経過したため自動クローズしました。\n対象: ${row.system}`
       );
       return { ...base, action: "closed", reason: "BLOCKED 7d timeout" };
@@ -147,6 +158,7 @@ async function processTicket(row: TicketRow, now: number): Promise<SweepResult> 
           },
         ]);
         await notify(
+          row.ticketId,
           `⏰ ${row.ticketId}「${row.title}」\n差し戻しになってから48時間以上経過しています。\n対象: ${row.system}`
         );
         await enqueueNotification(
@@ -172,6 +184,7 @@ async function processTicket(row: TicketRow, now: number): Promise<SweepResult> 
           },
         ]);
         await notify(
+          row.ticketId,
           `⏰ ${row.ticketId}「${row.title}」\nレビュー待ちになってから7日以上経過しています。\n対象: ${row.system}`
         );
         await enqueueNotification(
@@ -200,6 +213,7 @@ async function processTicket(row: TicketRow, now: number): Promise<SweepResult> 
           },
         ]);
         await notify(
+          row.ticketId,
           `⏰ ${row.ticketId}「${row.title}」\n真田側の実装に入ってから48時間以上、状態が変わっていません。\n対象: ${row.system}`
         );
         await enqueueNotification(
