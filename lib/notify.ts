@@ -121,13 +121,23 @@ export async function notifyStuckOnce(
   ticket: TicketRow,
   reason: string
 ): Promise<boolean> {
-  // 真田システム経由・自前LINEのどちらも未設定なら何もしない（印も残さない＝設定後に1回送れるように）。
-  if (!lineEnabled() && !handoffEnabled()) return false;
+  // 【bug-check-lab Critical修正・2026-08-15】詰まり連絡だけは真田システムへのhandoff
+  // （sendFyi→handoffFyiToSanada）を経由させず、常に自前LINE（pushText）で直接送る。
+  // buildStuckText の本文は「これを教えてください。LINEで返信すれば続けます。」と社長に
+  // "LINE返信"を要求するが、真田専用LINEチャネルのwebhook側（mention-hisho-check）は
+  // 受信テキストを案件照合・冪等化なしで無条件にClaude Code Routineへ直行させる設計。
+  // そのため詰まり連絡をhandoff経由にすると、社長が普通に返信した内容が
+  // (a) kaizen-madoへ届かずチケットが差し戻しのまま永久滞留し、かつ
+  // (b) 意図しないRoutineが誤発火する、という重大な不具合になる。
+  // 完了報告・Merge待ち・基盤エラー通知（返信不要のFYI）は引き続きhandoff対象のまま
+  // （sendFyi経由・notifyReviewOnce等）で変更しない。
+  // 自前LINE未設定なら何もしない（印も残さない＝設定後に1回送れるように）。
+  if (!lineEnabled()) return false;
 
   // 既に通知済みなら送らない（連打防止）。
   if (await hasStuckMarker(ticket.pageId)) return false;
 
-  const sent = await sendFyi(ticket.ticketId, buildStuckText(ticket, reason));
+  const sent = await pushText(buildStuckText(ticket, reason));
   if (!sent) return false;
 
   // 送れたときだけ印を残す（送信失敗なら印を残さず、次回再試行できるようにする）。
