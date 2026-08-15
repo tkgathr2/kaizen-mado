@@ -138,7 +138,11 @@ export function verifyProposalToken(
 
 export type GoAction = "go" | "fix" | "reject";
 
-/** GO/修正/却下 の quick reply（postback）を組み立てる。dataにチケットpageIdと照合トークンを埋める。 */
+/** GO/修正/却下 の quick reply（postback）を組み立てる。dataにチケットpageIdと照合トークンを埋める。
+ * 【2026-08-15 社長指示】このカードは真田handoffが失敗した時だけ送られるフォールバック。
+ * GO自体は真田専用LINEチャネル（🛠 ClaudeCodeへ送る）に一本化したため、ここに「✅ GO」ボタンを
+ * 残すと押しても状態が変わらず矛盾する（applyGoActionのexecutor未指定パスがno-opになったため）。
+ * 修正・却下はこのカードのままでも意味が変わらないため残す。 */
 function goQuickReply(pageId: string) {
   const tk = proposalToken(pageId);
   const mk = (act: GoAction, label: string, displayText: string) => ({
@@ -152,7 +156,6 @@ function goQuickReply(pageId: string) {
   });
   return {
     items: [
-      mk("go", "✅ GO（着手）", "GO"),
       mk("fix", "✏️ 修正", "修正"),
       mk("reject", "🚫 却下", "却下"),
     ],
@@ -575,9 +578,10 @@ export function buildProposalText(
     `🧭 おすすめ：${truncateForLine(d.recommendation, 24)}（目安 ${kousuu}）`,
     ``,
     `──────────`,
-    `✅ 直していい？ 下のボタン、または返信で`,
-    `　GO ／ 修正 ／ 却下`,
-    `　（前の提案に答えるときは「GO ${id}」のようにID付きで）`,
+    `✅ 直していい？`,
+    `　GOは真田専用LINEチャネルの「🛠 ClaudeCodeへ送る」でお願いします。`,
+    `　修正・却下はこのカードの下のボタン、または返信で`,
+    `　（前の提案に答えるときは「修正 ${id}」のようにID付きで）`,
     ``,
     stageBar(2), // ②提案（GO待ち）
     `🔎 くわしく ▶ ${notionPageUrl(ticket.pageId)}`,

@@ -660,6 +660,10 @@ button.attach-btn.edit-btn { font-size: 20px; }
 .board-action-btn.go-btn:hover {
   background: #2d5a2d; box-shadow: 0 2px 8px rgba(63, 122, 63, 0.3);
 }
+/* GOは真田専用LINEチャネルに一本化（2026-08-15）＝盤面にはボタンでなく案内テキストのみ置く。 */
+.board-action-hint {
+  font-size: 11px; color: #6b6a63; white-space: nowrap; flex: none;
+}
 .board-action-btn.reject-btn {
   background: #c45f3f; color: #fff;
 }

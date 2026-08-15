@@ -90,9 +90,13 @@ describe("High-1: 真田実装のGOはカイゼン側の自動改修に拾われ
     }
   });
 
-  it("executor 未指定のGOは従来どおり「着手」（既存フォールバック経路を壊さない）", async () => {
+  // 【2026-08-15 社長指示】カイゼンくん自身の自動改修（executor未指定）は廃止。状態は変えず
+  // 真田専用LINEチャネルでの操作を案内するだけになる（旧: 「着手」へ遷移していた）。
+  it("executor 未指定のGOはもう自動改修に入らず、状態を変えず真田チャネルを案内する", async () => {
     const res = await applyGoAction("go", ticket());
-    expect(res.newState).toBe(KZ_STATUS.IN_PROGRESS);
+    expect(res.newState).toBeUndefined();
+    expect(res.skipped).toBe(true);
+    expect(res.reply).toContain("真田");
   });
 
   it('executor:"sanada" でも fix / reject の遷移先は変わらない', async () => {

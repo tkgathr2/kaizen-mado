@@ -367,14 +367,12 @@ export default function BoardPage() {
                         </a>
                         {col.state === "GO待ち" && (
                           <div className="board-card-actions">
-                            <button
-                              className="board-action-btn go-btn"
-                              onClick={() => handleBoardAction(c.pageId, "go")}
-                              disabled={actionInFlight === c.pageId}
-                              title="このチケットにGOします"
-                            >
-                              {actionInFlight === c.pageId ? "…" : "✓ GO"}
-                            </button>
+                            {/* 【2026-08-15 社長指示】GOは真田専用LINEチャネル「🛠 ClaudeCodeへ送る」
+                                でのみ受け付ける（カイゼンくん自身の自動改修は廃止）。ここに押しても
+                                状態が変わらないGOボタンを置かないよう、案内テキストに差し替える。 */}
+                            <span className="board-action-hint" title="GOは真田専用LINEチャネルのカードから">
+                              GOは真田チャネルで
+                            </span>
                             <button
                               className="board-action-btn reject-btn"
                               onClick={() => handleBoardAction(c.pageId, "reject")}
