@@ -175,7 +175,9 @@ describe("line（純関数）", () => {
     expect(text).toContain("KZ-12");
     expect(text).toContain("プロレポ");
     expect(text).toContain("GO推奨");
-    expect(text).toContain("GO KZ-12");
+    // 【2026-08-15 社長指示】GOは真田専用LINEチャネル一本化のため「GO KZ-12」テキスト返信の
+    // 案内は無くなり、代わりに真田チャネルへの案内文言になる。
+    expect(text).toContain("真田専用LINEチャネル");
     expect(text).toContain("https://www.notion.so/p1");
     // 読みやすさ改修（2026-06-27）：素人語の見出し＋空行レイアウト
     expect(text).toContain("❓ こまりごと");
@@ -185,9 +187,9 @@ describe("line（純関数）", () => {
     expect(text).toContain("⚠ 気をつけること");
     expect(text).toContain("今の並び順がずれないか確認します");
     expect(text).toContain("📊 重要度 高／緊急度 中");
-    // GO/修正/却下 とID付き返信ガイドを含む
-    expect(text).toContain("GO ／ 修正 ／ 却下");
-    expect(text).toContain("GO KZ-12");
+    // 修正/却下のID付き返信ガイドを含む（GOは真田チャネル一本化のためテキスト返信の対象外）
+    expect(text).toContain("修正・却下はこのカードの下のボタン");
+    expect(text).toContain("修正 KZ-12");
     // mid-word の「…ほか○件」ぶつ切りは出さない
     expect(text).not.toContain("…ほか");
     // セクション間に空行（余白）がある

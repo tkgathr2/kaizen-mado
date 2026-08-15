@@ -17,12 +17,16 @@ export interface ApplyResult {
 
 /**
  * 誰が実装するか。
- * - "kaizen"（既定）… カイゼンくん自身の自動改修（/api/execute → GitHub Actions）
- * - "sanada"        … 真田システム（mention-hisho）側の Claude Code。社長がLINEカードの
+ * - "sanada"（唯一の実装経路） … 真田システム（mention-hisho）側の Claude Code。社長がLINEカードの
  *                     「🛠 ClaudeCodeへ送る」を押し、真田側が**起動に成功したあと**に書き戻してくる。
  *                     このときカイゼンくん側の自動改修が同じチケットを掴むと二重実装になるため、
  *                     状態を「着手」ではなく「真田実装中」にして自動改修の対象から外す
  *                     （バグチェック High-1・kz-state.ts の SANADA_IMPLEMENTING 参照）。
+ * - "kaizen"        … 【廃止・2026-08-15 社長指示】カイゼンくん自身の自動改修（/api/execute →
+ *                     GitHub Actions）は廃止した。真田handoffが失敗した時のフォールバックLINE・
+ *                     盤面（/board）のGOボタンからGOしても、もう自動改修は始まらない
+ *                     （下記 applyGoAction 参照・案内メッセージを返すだけで状態は変えない）。
+ *                     型としては後方互換のため残すが、実質的にこの分岐は到達しても無効化される。
  */
 export type GoExecutor = "kaizen" | "sanada";
 
@@ -82,18 +86,19 @@ export async function applyGoAction(
           `全体像 ▶ ${BOARD_URL}`,
       };
     }
-    await updateTicketState(ticket.pageId, "着手");
-    await appendDiscussionBlocks(ticket.pageId, [
-      { heading: "GO受領（着手GO）", body: "社長GO → 状態を「着手」へ。実行オーケストレーター待ち。" },
-    ]);
+    // 【廃止・2026-08-15 社長指示】カイゼンくん自身の自動改修（executor未指定＝旧"kaizen"）は
+    // ここで止める。状態は「GO待ち」のまま変えず（GitHub Actionsへは繋がない）、真田専用LINE
+    // チャネルでの操作を案内するだけにする。この分岐に来るのは、真田handoffが失敗した時の
+    // フォールバックLINE（app/api/line/webhook/route.ts）と盤面（app/api/board/action/route.ts）
+    // のGOボタン経由のみ（本線の真田チャネル「🛠 ClaudeCodeへ送る」は opts.executor==="sanada" で
+    // 上の分岐に入るため、ここには来ない）。
     return {
       ok: true,
-      newState: "着手",
+      skipped: true,
       reply:
-        `${msgHead("✅", "GO受けました", ticket.system, ticket.title)}\n` + // まず「何の件か」
-        `（${ticket.ticketId}）自動改修を始めます（目安：15分〜3時間）。\n` +
-        `終わったら「反映しました」か「Merge待ち」を必ずお知らせします。\n\n` +
-        `${stageBar(3)}\n` + // ③GO受領（→着手へ）
+        `${msgHead("ℹ️", "GOは真田チャネルからお願いします", ticket.system, ticket.title)}\n` +
+        `（${ticket.ticketId}）カイゼンくん自身の自動改修は廃止しました。\n` +
+        `真田専用LINEチャネルのカードで「🛠 ClaudeCodeへ送る」を押してください。\n\n` +
         `全体像 ▶ ${BOARD_URL}`,
     };
   }

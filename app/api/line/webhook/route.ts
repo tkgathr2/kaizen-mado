@@ -144,7 +144,10 @@ async function handleEvent(ev: any): Promise<void> {
     const r = await applyGoAction(p.action, ticket);
     kickIfStarted(r.newState);
     // 社長の判断（GO/却下/修正）を教師信号として全体学習に記録（非ブロッキング）。
-    if (r.ok) recordInBackground(recordDecisionTurn(p.action, ticket));
+    // 【2026-08-15 レビュー指摘・堀内】r.skipped は「GO自体は無効化された（真田チャネル
+    // 案内のみ）」ケースも ok:true で返るため、skipped を除外しないと「GOしていないのに
+    // GOしたと学習」してしまう。
+    if (r.ok && !r.skipped) recordInBackground(recordDecisionTurn(p.action, ticket));
     if (replyToken) await replyText(replyToken, r.reply);
     // LINE 往復をチケットに記録（非ブロッキング）。
     recordInBackground(
@@ -229,7 +232,8 @@ async function handleEvent(ev: any): Promise<void> {
     const r = await applyGoAction(cmd.action, ticket, cmd.body);
     kickIfStarted(r.newState);
     // 社長の判断（GO/却下/修正）を教師信号として全体学習に記録（非ブロッキング）。
-    if (r.ok) recordInBackground(recordDecisionTurn(cmd.action, ticket, cmd.body));
+    // 【2026-08-15 レビュー指摘・堀内】GO無効化（skipped）は学習に記録しない（上と同じ理由）。
+    if (r.ok && !r.skipped) recordInBackground(recordDecisionTurn(cmd.action, ticket, cmd.body));
     if (replyToken) await replyText(replyToken, r.reply);
     return;
   }
@@ -345,7 +349,8 @@ async function handleConversation(
         const r = await applyGoAction(intent.refAction, res.ticket);
         kickIfStarted(r.newState);
         // 社長の判断（GO/却下/修正）を教師信号として全体学習に記録（非ブロッキング）。
-        if (r.ok) recordInBackground(recordDecisionTurn(intent.refAction, res.ticket, text));
+        // 【2026-08-15 レビュー指摘・堀内】GO無効化（skipped）は学習に記録しない（上と同じ理由）。
+        if (r.ok && !r.skipped) recordInBackground(recordDecisionTurn(intent.refAction, res.ticket, text));
         // LINE 往復をチケットに記録（非ブロッキング）。
         recordInBackground(
           appendLineChat(res.ticket.pageId, `user: ${text}`).then(() =>

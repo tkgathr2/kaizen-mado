@@ -61,8 +61,11 @@ export async function POST(req: NextRequest) {
     // 操作を実行
     const result = await applyGoAction(action, ticket);
 
+    // 【2026-08-15 レビュー指摘・堀内】GOが無効化（skipped）されたケースも ok:true で返るため、
+    // skipped を転送しないと呼び出し元（盤面UI等）が「GOを実行しました」と誤って表示しうる。
     return NextResponse.json({
       ok: result.ok,
+      skipped: result.skipped ?? false,
       message: result.reply,
       newState: result.newState,
     });

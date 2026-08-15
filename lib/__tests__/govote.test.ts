@@ -31,13 +31,17 @@ describe("applyGoAction", () => {
     vi.mocked(appendDiscussionBlocks).mockClear();
   });
 
-  it("GO待ち + go → 着手へ遷移し受領メッセージ", async () => {
+  // 【2026-08-15 社長指示】カイゼンくん自身の自動改修（executor未指定＝旧"kaizen"）は廃止。
+  // 状態は変えず、真田専用LINEチャネルでの操作を案内するだけになる。
+  it("GO待ち + go（executor未指定） → 状態は変えず真田チャネルへの案内を返す", async () => {
     const r = await applyGoAction("go", ticket("GO待ち"));
     expect(r.ok).toBe(true);
-    expect(r.newState).toBe("着手");
-    expect(updateTicketState).toHaveBeenCalledWith("page-1", "着手");
-    expect(appendDiscussionBlocks).toHaveBeenCalled();
+    expect(r.skipped).toBe(true);
+    expect(r.newState).toBeUndefined();
+    expect(updateTicketState).not.toHaveBeenCalled();
+    expect(appendDiscussionBlocks).not.toHaveBeenCalled();
     expect(r.reply).toContain("KZ-12");
+    expect(r.reply).toContain("真田");
   });
 
   it("GO待ち + fix → 差し戻し", async () => {

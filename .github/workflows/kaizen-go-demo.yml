@@ -11,14 +11,14 @@ on:
         description: "アクション: go / fix / reject"
         required: false
         default: "go"
-      # 【2026-08-12 バグチェック High-1】GO時に誰が実装するかを選べるようにする。
-      # 空/kaizen … 従来どおり「着手」＝カイゼンくん自身の自動改修が走る
-      # sanada    … 「真田実装中」＝真田側のClaude Codeが実装済みという扱い。自動改修は走らない
-      # 未指定のまま旧仕様で放置すると、このデモだけが二重実装の抜け道として残るため入力を足す。
+      # 【2026-08-15 社長指示・廃止】カイゼンくん自身の自動改修（executor:"kaizen"）は廃止した。
+      # GOは真田専用LINEチャネル経由（executor:"sanada"）のみ有効。kaizen/空を指定すると
+      # applyGoAction が状態を変えずno-op（案内メッセージのみ）を返す。デフォルトをsanadaにして
+      # この手動デモが誤って何も起きないno-opにならないようにする。
       executor:
-        description: "実装者: kaizen（既定・自動改修が走る） / sanada（真田実装中にする）"
+        description: "実装者: sanada（既定・真田実装中にする） / kaizen（廃止済み・no-opになる）"
         required: false
-        default: ""
+        default: "sanada"
 
 jobs:
   go:
