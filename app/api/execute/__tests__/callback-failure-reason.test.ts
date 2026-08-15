@@ -15,6 +15,7 @@ const buildMergedText = vi.fn(() => "merged-text");
 const pushText = vi.fn(async () => true);
 const enqueueNotification = vi.fn(async (..._a: unknown[]) => {});
 const findTarget = vi.fn((..._a: unknown[]) => null as unknown);
+const handoffFyiToSanada = vi.fn(async (..._a: unknown[]) => false);
 
 vi.mock("@/lib/tickets", () => ({
   updateTicketState: (...a: unknown[]) => updateTicketState(...a),
@@ -41,6 +42,9 @@ vi.mock("@/lib/notification", () => ({
   enqueueNotification: (...a: unknown[]) => enqueueNotification(...a),
 }));
 vi.mock("@/lib/targets", () => ({ findTarget: (...a: unknown[]) => findTarget(...a) }));
+vi.mock("@/lib/handoff", () => ({
+  handoffFyiToSanada: (...a: unknown[]) => handoffFyiToSanada(...a),
+}));
 
 import { POST } from "../callback/route";
 
@@ -178,5 +182,79 @@ describe("/api/execute/callback failed経路の失敗理由（「不明」根絶
     const json = await res.json();
     expect(json.infra).toBe(true);
     expect(updateTicketState).not.toHaveBeenCalled();
+  });
+
+  it("基盤エラー通知：真田handoffが成功したら自前LINE（pushText）は呼ばない", async () => {
+    handoffFyiToSanada.mockResolvedValue(true);
+    await POST(
+      makeReq({
+        pageId: "page-1",
+        ticketId: "KZ-17",
+        system: "カイゼンくん本体",
+        result: "failed",
+        detail: "401 Unauthorized",
+      })
+    );
+    expect(handoffFyiToSanada).toHaveBeenCalledWith("KZ-17", "infra-text");
+    expect(pushText).not.toHaveBeenCalled();
+  });
+
+  it("基盤エラー通知：真田handoffが失敗したら自前LINE（pushText）へフォールバックする", async () => {
+    handoffFyiToSanada.mockResolvedValue(false);
+    await POST(
+      makeReq({
+        pageId: "page-1",
+        ticketId: "KZ-17",
+        system: "カイゼンくん本体",
+        result: "failed",
+        detail: "401 Unauthorized",
+      })
+    );
+    expect(handoffFyiToSanada).toHaveBeenCalledTimes(1);
+    expect(pushText).toHaveBeenCalledWith("infra-text");
+  });
+});
+
+describe("/api/execute/callback merged経路の完了報告", () => {
+  const savedSecret = process.env.CRON_SECRET;
+  const savedInsecure = process.env.ALLOW_INSECURE_CRON;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fetchTicketByPageId.mockResolvedValue({
+      pageId: "page-1",
+      ticketId: "KZ-17",
+      system: "カイゼンくん本体",
+      type: "改善",
+      importance: "中",
+      title: "対応済みの件",
+      detail: "…",
+      reporter: "現場",
+      state: "実装中",
+      fgsUrl: null,
+    });
+    findTarget.mockReturnValue(null);
+    delete process.env.CRON_SECRET;
+    process.env.ALLOW_INSECURE_CRON = "1";
+  });
+  afterEach(() => {
+    if (savedSecret === undefined) delete process.env.CRON_SECRET;
+    else process.env.CRON_SECRET = savedSecret;
+    if (savedInsecure === undefined) delete process.env.ALLOW_INSECURE_CRON;
+    else process.env.ALLOW_INSECURE_CRON = savedInsecure;
+  });
+
+  it("真田handoffが成功したら自前LINE（pushText）は呼ばない", async () => {
+    handoffFyiToSanada.mockResolvedValue(true);
+    await POST(makeReq({ pageId: "page-1", ticketId: "KZ-17", result: "merged", prUrl: "https://x/pr/1" }));
+    expect(handoffFyiToSanada).toHaveBeenCalledWith("KZ-17", "merged-text");
+    expect(pushText).not.toHaveBeenCalled();
+  });
+
+  it("真田handoffが失敗したら自前LINE（pushText）へフォールバックする", async () => {
+    handoffFyiToSanada.mockResolvedValue(false);
+    await POST(makeReq({ pageId: "page-1", ticketId: "KZ-17", result: "merged", prUrl: "https://x/pr/1" }));
+    expect(handoffFyiToSanada).toHaveBeenCalledTimes(1);
+    expect(pushText).toHaveBeenCalledWith("merged-text");
   });
 });

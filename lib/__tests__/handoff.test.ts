@@ -13,7 +13,7 @@ const findTarget = vi.fn((..._a: unknown[]): unknown => ({
 }));
 vi.mock("../targets", () => ({ findTarget: (...a: unknown[]) => findTarget(...a) }));
 
-import { handoffToSanada, buildHandoffPayload, handoffEnabled } from "../handoff";
+import { handoffToSanada, buildHandoffPayload, handoffEnabled, handoffFyiToSanada } from "../handoff";
 
 function ticket(overrides: Record<string, unknown> = {}): any {
   return {
@@ -183,6 +183,51 @@ describe("handoffToSanada（送信）", () => {
     const [, init] = fetchMock.mock.calls[0] as [string, any];
     expect(init.signal).toBeDefined();
     expect(init.signal.aborted).toBe(false);
+  });
+});
+
+describe("handoffFyiToSanada（完了報告・詰まり・Merge待ち等のFYI送信）", () => {
+  const savedBase = process.env.MENTION_HISHO_BASE_URL;
+  const savedSecret = process.env.KAIZEN_HANDOFF_SECRET;
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fetchMock = vi.fn(async () => okResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    process.env.MENTION_HISHO_BASE_URL = "https://mention-hisho.example.com";
+    process.env.KAIZEN_HANDOFF_SECRET = "s3cret";
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    if (savedBase === undefined) delete process.env.MENTION_HISHO_BASE_URL;
+    else process.env.MENTION_HISHO_BASE_URL = savedBase;
+    if (savedSecret === undefined) delete process.env.KAIZEN_HANDOFF_SECRET;
+    else process.env.KAIZEN_HANDOFF_SECRET = savedSecret;
+  });
+
+  it("kind='fyi'でticketId・fyiTextを送る（houshin/steps等の提案専用フィールドは含めない）", async () => {
+    const ok = await handoffFyiToSanada("KZ-127", "直して反映しました。");
+    expect(ok).toBe(true);
+    const [url, init] = fetchMock.mock.calls[0] as [string, any];
+    expect(url).toBe("https://mention-hisho.example.com/api/kaizen/handoff");
+    expect(JSON.parse(init.body)).toEqual({
+      kind: "fyi",
+      ticketId: "KZ-127",
+      fyiText: "直して反映しました。",
+    });
+  });
+
+  it("MENTION_HISHO_BASE_URL未設定なら送らず false（呼び出し側が自前LINEへフォールバックできる）", async () => {
+    delete process.env.MENTION_HISHO_BASE_URL;
+    const ok = await handoffFyiToSanada("KZ-127", "text");
+    expect(ok).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("送信失敗（例外）でも投げず false を返す", async () => {
+    fetchMock.mockRejectedValue(new Error("boom"));
+    await expect(handoffFyiToSanada("KZ-127", "text")).resolves.toBe(false);
   });
 });
 
