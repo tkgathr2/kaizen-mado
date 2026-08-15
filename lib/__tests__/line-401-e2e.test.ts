@@ -141,7 +141,10 @@ describe("KZ-50: LINE 401 → notifySlackAlert → persona-relay(Slack)", () => 
     expect(relayCall).toBeUndefined();
   });
 
-  it("/api/line/push ルート経由でも pushText→postLine→401検知→notifySlackAlert が動く", async () => {
+  // 【2026-08-15 社長指示・全廃】/api/line/push は自前LINE（pushText）を直接呼ばなくなった。
+  // 真田handoff（MENTION_HISHO_BASE_URL）優先・失敗時のみnotifySlackAlertへ倒す新経路になった。
+  it("/api/line/push ルート経由：真田handoff未設定ならnotifySlackAlertへフォールバックする", async () => {
+    delete process.env.MENTION_HISHO_BASE_URL;
     const { POST } = await import("../../app/api/line/push/route");
 
     const req = {
@@ -152,17 +155,21 @@ describe("KZ-50: LINE 401 → notifySlackAlert → persona-relay(Slack)", () => 
     const res = await POST(req);
     const json = await res.json();
 
-    // pushText が false を返すため、ルートは 502（LINE送信失敗）を返す。
-    expect(res.status).toBe(502);
-    expect(json.error).toBe("LINE send failed");
+    // 真田handoff未設定 → notifySlackAlert（persona-relay）が成功すれば ok:true。
+    expect(res.status).toBe(200);
+    expect(json.ok).toBe(true);
 
-    // それでも persona-relay へのアラートは飛んでいる（副作用として独立に検証）。
+    // LINE push endpoint（api.line.me）へは一切送られていない（自前LINE全廃）。
+    const lineCall = fetchMock.mock.calls.find(([u]) => String(u).includes("api.line.me"));
+    expect(lineCall).toBeUndefined();
+
+    // persona-relay へのアラートが飛んでいる。
     const relayCall = fetchMock.mock.calls.find(([u]) =>
       String(u).includes("persona-relay.example.com")
     );
     expect(relayCall).toBeDefined();
     const body = JSON.parse((relayCall![1] as RequestInit).body as string);
     expect(body.channel).toBe(SLACK_ALERT_CHANNEL);
-    expect(body.text).toContain("401");
+    expect(body.text).toContain("外部通知");
   });
 });

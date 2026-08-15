@@ -11,7 +11,8 @@ const appendDiscussionBlocks = vi.fn((..._a: unknown[]): Promise<void> => Promis
 const fetchTicketsByState = vi.fn((..._a: unknown[]): Promise<unknown[]> => Promise.resolve([]));
 const fetchStaleImplementing = vi.fn((..._a: unknown[]): Promise<unknown[]> => Promise.resolve([]));
 const staleImplementingMinutes = vi.fn(() => 30);
-const pushText = vi.fn(async () => true);
+const handoffFyiToSanada = vi.fn(async (..._a: unknown[]) => true);
+const notifySlackAlert = vi.fn(async (..._a: unknown[]) => true);
 const dispatchExecution = vi.fn(async (..._a: unknown[]) => true);
 const dispatchEnabled = vi.fn(() => true);
 const buildDispatchPayload = vi.fn((..._a: unknown[]) => ({ autoMerge: true }));
@@ -37,12 +38,15 @@ vi.mock("@/lib/orchestrate", () => ({
   buildDispatchPayload: (...a: unknown[]) => buildDispatchPayload(...a),
 }));
 vi.mock("@/lib/line", () => ({
-  pushText: (...a: unknown[]) => pushText(...(a as [])),
+  notifySlackAlert: (...a: unknown[]) => notifySlackAlert(...a),
   truncateForLine: (s: string) => s,
   notionPageUrl: () => "u",
   stageBar: () => "",
   BOARD_URL: "x",
   msgHead: () => "",
+}));
+vi.mock("@/lib/handoff", () => ({
+  handoffFyiToSanada: (...a: unknown[]) => handoffFyiToSanada(...a),
 }));
 
 import { POST } from "../route";
@@ -79,6 +83,8 @@ describe("/api/execute GO後は全自動（機微・autoEligibleで止めない�
     vi.clearAllMocks();
     dispatchEnabled.mockReturnValue(true);
     dispatchExecution.mockResolvedValue(true);
+    handoffFyiToSanada.mockResolvedValue(true);
+    notifySlackAlert.mockResolvedValue(true);
     delete process.env.CRON_SECRET;
     process.env.ALLOW_INSECURE_CRON = "1";
   });
@@ -104,8 +110,8 @@ describe("/api/execute GO後は全自動（機微・autoEligibleで止めない�
     expect(dispatchExecution).toHaveBeenCalledWith(
       expect.objectContaining({ autoMerge: true })
     );
-    // 「社長に相談」LINEは送らない。
-    expect(pushText).not.toHaveBeenCalled();
+    // 「社長に相談」通知は送らない。
+    expect(handoffFyiToSanada).not.toHaveBeenCalled();
     expect(json.dispatched).toContain("KZ-22");
     expect(json.escalated ?? []).not.toContain("KZ-22");
   });

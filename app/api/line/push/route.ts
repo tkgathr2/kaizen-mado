@@ -1,10 +1,13 @@
-// ── LINE push エンドポイント（カイゼンくん自身から送る） ──
+// ── LINE push エンドポイント（外部監視系クライアントからの汎用通知） ──
 // checkLinePushAuth で認証：CRON_SECRET (x-cron-secret / Authorization: Bearer) に加え、
 // 監視系クライアント専用の MONITOR_PUSH_SECRET (x-monitor-secret) も受ける（LINE通知のみの最小権限鍵）。
-// mention-hisho への相乗りを廃止し、カイゼンくん固有の LINE チャンネルのみで送る（2026-06-28）。
+// 【社長指示 2026-08-15】カイゼンくん自前LINEチャネルへの送信は全廃。真田システム経由が本線、
+// 失敗時はSlack警告（旧: mention-hishoへの相乗りを廃止しカイゼンくん固有チャンネルのみで送る
+// という2026-06-28の決定を、本件で再度上書きする）。
 import { NextRequest, NextResponse } from "next/server";
 import { checkLinePushAuth } from "@/lib/cronAuth";
-import { pushText } from "@/lib/line";
+import { notifySlackAlert } from "@/lib/line";
+import { handoffFyiToSanada } from "@/lib/handoff";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -41,9 +44,17 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const ok = await pushText(message);
-  if (!ok) {
-    return NextResponse.json({ error: "LINE send failed" }, { status: 502 });
+  // ticketId概念が無い外部通知のため、合成IDで冪等キーを作る（同一内容の連投を弾く）。
+  const pushId = `external-push:${title || "untitled"}`;
+  const handed = await handoffFyiToSanada(pushId, message).catch(() => false);
+  if (!handed) {
+    const alerted = await notifySlackAlert(
+      `外部通知（${title || "無題"}）を真田チャネルへ送れませんでした。text: ${message.slice(0, 100)}`,
+      "⚠️ 外部通知が真田チャネルへ送れませんでした"
+    ).catch(() => false);
+    if (!alerted) {
+      return NextResponse.json({ error: "send failed" }, { status: 502 });
+    }
   }
   return NextResponse.json({ ok: true });
 }

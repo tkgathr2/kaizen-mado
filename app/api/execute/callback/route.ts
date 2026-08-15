@@ -125,7 +125,8 @@ export async function POST(req: NextRequest) {
       const handed = await handoffFyiToSanada(ticketId, mergedText).catch(() => false);
       if (!handed) {
         await notifySlackAlert(
-          `完了報告（${ticketId}）を真田チャネルへ送れませんでした。text: ${mergedText.slice(0, 100)}`
+          `完了報告（${ticketId}）を真田チャネルへ送れませんでした。text: ${mergedText.slice(0, 100)}`,
+          "⚠️ 完了報告が真田チャネルへ送れませんでした"
         ).catch(() => false);
       }
       // 日次ダイジェスト（改善⑤）へ完了を1件積む＝朝8時のふりかえりまとめ用。
@@ -191,7 +192,8 @@ export async function POST(req: NextRequest) {
         const infraHanded = await handoffFyiToSanada(ticketId, infraText).catch(() => false);
         if (!infraHanded) {
           await notifySlackAlert(
-            `基盤エラー通知（${ticketId}）を真田チャネルへ送れませんでした。text: ${infraText.slice(0, 100)}`
+            `基盤エラー通知（${ticketId}）を真田チャネルへ送れませんでした。text: ${infraText.slice(0, 100)}`,
+            "⚠️ 基盤エラー通知が真田チャネルへ送れませんでした"
           ).catch(() => false);
         }
       }

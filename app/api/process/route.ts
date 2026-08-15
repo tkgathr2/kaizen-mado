@@ -21,7 +21,7 @@ import {
   setStatusChangedAt,
 } from "@/lib/tickets";
 import { discussTicket } from "@/lib/discuss";
-import { notifySlackAlert } from "@/lib/line";
+import { notifySlackAlert, BOARD_URL } from "@/lib/line";
 import { handoffToSanada } from "@/lib/handoff";
 import { checkCronSecret } from "@/lib/cronAuth";
 import { returnLearningFromCompleted } from "@/lib/learn";
@@ -95,7 +95,8 @@ export async function POST(req: NextRequest) {
           // へは送らず、真田Bot名義のSlack警告（社長＋幹部Botのみのチャンネル）で知らせる
           // （社長に何も届かない無音状態を作らないため。自前LINEフォールバックは廃止）。
           const alerted = await notifySlackAlert(
-            `GO伺い（${ticket.ticketId}／${ticket.system}）を真田チャネルへ送れませんでした。カイゼンくんの盤面（URLは省略可）から直接ご確認ください。`
+            `GO伺い（${ticket.ticketId}／${ticket.system}）を真田チャネルへ送れませんでした。カイゼンくんの盤面（${BOARD_URL}）から直接ご確認ください。`,
+            "⚠️ GO伺いが真田チャネルへ送れませんでした"
           );
           notifiedVia = alerted ? "slack-alert" : "none";
         }

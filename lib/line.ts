@@ -240,10 +240,15 @@ export function getQuotedMap(): Record<string, string> {
 
 // ── 送信系（失敗してもthrowしない：呼び出し元の改善ループを止めないため fail-safe） ──
 // 返値：失敗時は null、成功時は LINE応答（sentMessages を含む）。旧来の boolean 判定は
-/** LINE失敗時の管理者向け警告を persona-relay（真田Bot名義）で Slack へ送る。
+/** LINE失敗・通知未達時の管理者向け警告を persona-relay（真田Bot名義）で Slack へ送る。
  * 監視パイプライン（Slack→LINE→案文）と混線しないよう「返信不要」を明記する。
- * 通知失敗は false を返すだけで throw しない（本体の改善ループを止めない・fail-safe）。 */
-export async function notifySlackAlert(detail: string): Promise<boolean> {
+ * 通知失敗は false を返すだけで throw しない（本体の改善ループを止めない・fail-safe）。
+ * 【2026-08-15 レビュー指摘・堀内】見出しを固定文言から引数化。GO伺い・完了報告・詰まり連絡
+ * 未達等、原因が違う警告が全部「LINEトークン失効の疑い」と表示されていたのを修正。 */
+export async function notifySlackAlert(
+  detail: string,
+  heading: string = "🚨 LINE トークン失効の疑い"
+): Promise<boolean> {
   const relay = slackAlertRelay();
   if (!relay) return false; // 未設定なら無視（fail-safe）
   try {
@@ -256,7 +261,7 @@ export async function notifySlackAlert(detail: string): Promise<boolean> {
       body: JSON.stringify({
         persona: "sanada",
         channel: relay.channel,
-        text: `🚨 LINE トークン失効の疑い\n${detail}\n(自動警告・このメッセージへの返信は不要です)`,
+        text: `${heading}\n${detail}\n(自動警告・このメッセージへの返信は不要です)`,
       }),
     });
     return res.ok;

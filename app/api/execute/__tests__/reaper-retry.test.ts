@@ -14,7 +14,8 @@ const staleImplementingMinutes = vi.fn(() => 30);
 const getReaperRetryInfo = vi.fn(async (_pageId: string) => ({ count: 0, lastFailure: null as string | null }));
 const maxAutoRetries = vi.fn(() => 3);
 const setStatusChangedAt = vi.fn(async () => {});
-const pushText = vi.fn(async (_t: string) => true);
+const handoffFyiToSanada = vi.fn(async (..._a: unknown[]) => true);
+const notifySlackAlert = vi.fn(async (..._a: unknown[]) => true);
 const dispatchExecution = vi.fn(async (..._a: unknown[]) => true);
 const dispatchEnabled = vi.fn(() => true);
 const buildDispatchPayload = vi.fn((..._a: unknown[]) => ({ autoMerge: true }));
@@ -39,12 +40,15 @@ vi.mock("@/lib/orchestrate", () => ({
   buildDispatchPayload: (...a: unknown[]) => buildDispatchPayload(...a),
 }));
 vi.mock("@/lib/line", () => ({
-  pushText: (...a: unknown[]) => pushText(...(a as [string])),
+  notifySlackAlert: (...a: unknown[]) => notifySlackAlert(...a),
   truncateForLine: (s: string) => s,
   notionPageUrl: (id: string) => `https://www.notion.so/${id}`,
   stageBar: () => "",
   BOARD_URL: "x",
   msgHead: (_e: string, kind: string) => kind,
+}));
+vi.mock("@/lib/handoff", () => ({
+  handoffFyiToSanada: (...a: unknown[]) => handoffFyiToSanada(...a),
 }));
 vi.mock("@/lib/notification", () => ({
   enqueueNotification: async () => {},
@@ -85,6 +89,8 @@ describe("/api/execute reaper リトライ上限（KAIZEN_MAX_RETRIES・既定3�
     maxAutoRetries.mockReturnValue(3);
     getReaperRetryInfo.mockResolvedValue({ count: 0, lastFailure: null });
     fetchTicketsByState.mockResolvedValue([]);
+    handoffFyiToSanada.mockResolvedValue(true);
+    notifySlackAlert.mockResolvedValue(true);
     delete process.env.CRON_SECRET;
     process.env.ALLOW_INSECURE_CRON = "1";
   });
@@ -108,7 +114,7 @@ describe("/api/execute reaper リトライ上限（KAIZEN_MAX_RETRIES・既定3�
 
       expect(updateTicketState).toHaveBeenCalledWith("page-stuck", "着手");
       expect(updateTicketState).not.toHaveBeenCalledWith("page-stuck", "差し戻し");
-      expect(pushText).not.toHaveBeenCalled();
+      expect(handoffFyiToSanada).not.toHaveBeenCalled();
       expect(json.reaped).toContain("KZ-17");
       expect(json.retryCapped ?? []).not.toContain("KZ-17");
       // 印にリトライ回数を明記（何回目/上限）。
@@ -140,8 +146,8 @@ describe("/api/execute reaper リトライ上限（KAIZEN_MAX_RETRIES・既定3�
 
     await POST(makePlanReq());
 
-    expect(pushText).toHaveBeenCalledTimes(1);
-    const text = String(pushText.mock.calls[0][0]);
+    expect(handoffFyiToSanada).toHaveBeenCalledTimes(1);
+    const text = String(handoffFyiToSanada.mock.calls[0][1]);
     expect(text).toContain("KZ-17");
     expect(text).toContain("3回試して失敗したため停止");
     expect(text).toContain("401 Unauthorized");
@@ -166,7 +172,7 @@ describe("/api/execute reaper リトライ上限（KAIZEN_MAX_RETRIES・既定3�
 
     await POST(makePlanReq());
 
-    const text = String(pushText.mock.calls[0]?.[0] ?? "");
+    const text = String(handoffFyiToSanada.mock.calls[0]?.[1] ?? "");
     expect(text).toContain("実装ジョブが完了報告なしで停止");
     expect(text).toContain("https://github.com/tkgathr2/kaizen-mado/actions");
     expect(text).not.toContain("理由：不明");

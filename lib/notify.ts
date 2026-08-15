@@ -38,7 +38,8 @@ async function sendFyi(
 ): Promise<boolean> {
   if (await handoffFyiToSanada(ticketId, text, opts)) return true;
   return notifySlackAlert(
-    `真田チャネルへのFYI通知（${ticketId}）が送れませんでした。text: ${text.slice(0, 100)}`
+    `真田チャネルへのFYI通知（${ticketId}）が送れませんでした。text: ${text.slice(0, 100)}`,
+    "⚠️ FYI通知が真田チャネルへ送れませんでした"
   );
 }
 
