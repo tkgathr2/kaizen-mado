@@ -105,9 +105,8 @@ describe("lib/notify 詰まり連絡の de-dup", () => {
     expect(appendDiscussionBlocks).not.toHaveBeenCalled();
   });
 
-  it("LINE・真田handoffどちらも未設定なら送らない（fail-safe）", async () => {
+  it("LINE未設定なら送らない（fail-safe・真田handoffの有無は無関係）", async () => {
     lineEnabled.mockReturnValue(false);
-    handoffEnabled.mockReturnValue(false);
     global.fetch = mockFetchReturningBlocks([]);
 
     const sent = await notifyStuckOnce(ticket, "理由");
@@ -117,31 +116,10 @@ describe("lib/notify 詰まり連絡の de-dup", () => {
     expect(appendDiscussionBlocks).not.toHaveBeenCalled();
   });
 
-  it("真田handoffが成功したら自前LINE（pushText）は呼ばない", async () => {
-    handoffFyiToSanada.mockResolvedValue(true);
-    global.fetch = mockFetchReturningBlocks([]);
-
-    const sent = await notifyStuckOnce(ticket, "理由");
-
-    expect(sent).toBe(true);
-    expect(handoffFyiToSanada).toHaveBeenCalledWith("KZ-9", expect.any(String));
-    expect(pushText).not.toHaveBeenCalled();
-    expect(appendDiscussionBlocks).toHaveBeenCalledTimes(1);
-  });
-
-  it("真田handoffが失敗したら自前LINE（pushText）へフォールバックする", async () => {
-    handoffFyiToSanada.mockResolvedValue(false);
-    global.fetch = mockFetchReturningBlocks([]);
-
-    const sent = await notifyStuckOnce(ticket, "理由");
-
-    expect(sent).toBe(true);
-    expect(handoffFyiToSanada).toHaveBeenCalledTimes(1);
-    expect(pushText).toHaveBeenCalledTimes(1);
-  });
-
-  it("LINE未設定でも真田handoffが有効なら（LINE未設定を理由に）弾かない", async () => {
-    lineEnabled.mockReturnValue(false);
+  // 【bug-check-lab Critical修正・2026-08-15】詰まり連絡は真田システムへのhandoffを経由しない
+  // （返信要求の本文が真田専用LINEチャネルのwebhookで無条件Routine直行になり誤爆するため）。
+  // 常に自前LINE（pushText）で直接送り、handoffFyiToSanadaは一切呼ばれないことを検証する。
+  it("真田handoffが有効でも呼ばれず、常に自前LINE（pushText）で直接送る", async () => {
     handoffEnabled.mockReturnValue(true);
     handoffFyiToSanada.mockResolvedValue(true);
     global.fetch = mockFetchReturningBlocks([]);
@@ -149,7 +127,22 @@ describe("lib/notify 詰まり連絡の de-dup", () => {
     const sent = await notifyStuckOnce(ticket, "理由");
 
     expect(sent).toBe(true);
-    expect(handoffFyiToSanada).toHaveBeenCalledTimes(1);
+    expect(handoffFyiToSanada).not.toHaveBeenCalled();
+    expect(pushText).toHaveBeenCalledTimes(1);
+    expect(appendDiscussionBlocks).toHaveBeenCalledTimes(1);
+  });
+
+  it("LINE未設定なら、真田handoffが有効でも送らない（lineEnabled()単独判定）", async () => {
+    lineEnabled.mockReturnValue(false);
+    handoffEnabled.mockReturnValue(true);
+    handoffFyiToSanada.mockResolvedValue(true);
+    global.fetch = mockFetchReturningBlocks([]);
+
+    const sent = await notifyStuckOnce(ticket, "理由");
+
+    expect(sent).toBe(false);
+    expect(handoffFyiToSanada).not.toHaveBeenCalled();
+    expect(pushText).not.toHaveBeenCalled();
   });
 
   it("送信に失敗したら印を残さない（次回再試行できるように）", async () => {
