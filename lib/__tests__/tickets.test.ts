@@ -5,6 +5,7 @@ import {
   fetchCompletedUnlearned,
   updateTicketState,
   setTicketUrlField,
+  setPrUrl,
   appendDiscussionBlocks,
   isStaleImplementing,
   staleImplementingMinutes,
@@ -159,6 +160,65 @@ describe("tickets", () => {
     expect(capturedInit.method).toBe("PATCH");
     const body = JSON.parse(capturedInit.body as string);
     expect(body.properties.FGSリンク).toEqual({ url: "knowhow://memorized" });
+  });
+
+  it("setPrUrl は PR URL プロパティを PATCH する（stallカードの prUrl 紐付け用）", async () => {
+    let capturedUrl = "";
+    let capturedInit: RequestInit = {};
+    global.fetch = vi.fn().mockImplementation((url: string, init: RequestInit) => {
+      capturedUrl = url;
+      capturedInit = init;
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    await setPrUrl("page-xyz", "https://github.com/tkgathr2/kaizen-mado/pull/12");
+    expect(capturedUrl).toBe("https://api.notion.com/v1/pages/page-xyz");
+    expect(capturedInit.method).toBe("PATCH");
+    const body = JSON.parse(capturedInit.body as string);
+    expect(body.properties["PR URL"]).toEqual({
+      url: "https://github.com/tkgathr2/kaizen-mado/pull/12",
+    });
+  });
+
+  it("setPrUrl はプロパティ未登録DB（Notionが400を返す）でthrowする（呼び出し側でcatchする前提）", async () => {
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue({ ok: false, status: 400, text: async () => "Invalid property" });
+    await expect(setPrUrl("page-xyz", "https://x/pr/1")).rejects.toThrow(/Notion update error/);
+  });
+
+  it("parseRow: 「PR URL」プロパティがあれば prUrl に反映する", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        results: [
+          {
+            id: "page-with-pr",
+            properties: {
+              ID: { type: "unique_id", unique_id: { prefix: "KZ", number: 131 } },
+              対象システム: { type: "select", select: { name: "カイゼンくん本体" } },
+              種別: { type: "select", select: { name: "改善" } },
+              重要度: { type: "select", select: { name: "中" } },
+              チケット名: { type: "title", title: [{ plain_text: "レビュー中の件" }] },
+              内容: { type: "rich_text", rich_text: [] },
+              起票者: { type: "rich_text", rich_text: [] },
+              状態: { type: "select", select: { name: "レビュー" } },
+              FGSリンク: { type: "url", url: null },
+              "PR URL": { type: "url", url: "https://github.com/tkgathr2/kaizen-mado/pull/12" },
+            },
+          },
+        ],
+      }),
+    });
+
+    const rows = await fetchTicketsByState("レビュー", 1);
+    expect(rows[0].prUrl).toBe("https://github.com/tkgathr2/kaizen-mado/pull/12");
+  });
+
+  it("parseRow: 「PR URL」プロパティが無い旧DB・未作成PRは prUrl が undefined", async () => {
+    global.fetch = vi.fn().mockResolvedValue(queryResponse());
+    const rows = await fetchTicketsByState("受付", 1);
+    expect(rows[0].prUrl).toBeUndefined();
   });
 
   it("appendDiscussionBlocks は blocks/children へ heading_3 と paragraph を PATCH する", async () => {

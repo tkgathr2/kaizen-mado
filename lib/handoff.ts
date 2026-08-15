@@ -117,9 +117,86 @@ export async function handoffFyiToSanada(
   return false;
 }
 
-/** NotionチケットページのURL（lib/line.ts の notionPageUrl と同じ組み立て）。 */
-function ticketUrlOf(pageId: string): string {
+/** NotionチケットページのURL（lib/line.ts の notionPageUrl と同じ組み立て）。
+ * kz-sweep（stallペイロード組み立て）からも参照するため export する。 */
+export function ticketUrlOf(pageId: string): string {
   return `https://www.notion.so/${(pageId || "").replace(/-/g, "")}`;
+}
+
+/**
+ * kz-sweep（状態タイムアウト監視）が送る「停滞（stall）」通知の固定形式（相手側と合意済み・2026-08-15）。
+ * handoffToSanada（GO伺い）・handoffFyiToSanada（返信不要のFYI）とは別の kind="stall" 分岐で、
+ * 相手側（mention-hisho）が種別ごとにFlexカードを出し分ける。
+ */
+export interface HandoffStallPayload {
+  kind: "stall";
+  ticketId: string;
+  title: string;
+  system: string;
+  /** どの停滞状態か。Notion「状態」のGO待ち/差し戻し/レビュー/真田実装中に対応。 */
+  stallKind: "awaiting_go" | "blocked" | "review" | "sanada_implementing";
+  /** リマインド（未クローズ）か、7日超過による自動クローズの事後通知か。 */
+  stallPhase: "remind" | "closed";
+  /** その状態になってからの経過時間（時間単位・切り捨て）。 */
+  elapsedHours: number;
+  ticketUrl: string;
+  /** 自動クローズまでの残り時間（時間単位）。stallPhase="remind" かつ awaiting_go/blocked のときのみ。 */
+  autoCloseInHours?: number;
+  /** レビュー中で判明しているPRのURL。stallKind="review" のときのみ。 */
+  prUrl?: string;
+}
+
+/**
+ * kz-sweep のタイムアウト監視通知（stall）を真田システムへ渡す。
+ * handoffFyiToSanada と同型：10秒タイムアウト・2試行・例外を投げず boolean を返す。
+ * env `MENTION_HISHO_BASE_URL` 未設定なら送らず false（呼び出し側が Slack警告へフォールバックする）。
+ *
+ * 【後方互換】mention-hisho 側がこの kind="stall" 分岐を未デプロイの間は 400 を返すため、
+ * この関数は false を返し、呼び出し側（kz-sweep）は既存の Slack警告フォールバックへ落ちる
+ * （無音状態にはならない）。
+ */
+export async function handoffStallToSanada(
+  payload: HandoffStallPayload
+): Promise<boolean> {
+  const base = (process.env.MENTION_HISHO_BASE_URL || "").trim().replace(/\/$/, "");
+  if (!base) return false;
+
+  const url = `${base}${HANDOFF_PATH}`;
+  const headers: Record<string, string> = {
+    "content-type": "application/json; charset=utf-8",
+  };
+  const secret = (process.env.KAIZEN_HANDOFF_SECRET || "").trim();
+  if (secret) headers["x-kaizen-handoff-secret"] = secret;
+
+  const body = JSON.stringify(payload);
+
+  for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers,
+        body,
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.ok === true) return true;
+      console.warn(
+        `[handoff-stall] failed (attempt ${attempt}/${ATTEMPTS}):`,
+        data?.error ?? `http ${res.status}`
+      );
+    } catch (err) {
+      console.warn(
+        `[handoff-stall] error (attempt ${attempt}/${ATTEMPTS}):`,
+        (err as Error).message
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return false;
 }
 
 /**
