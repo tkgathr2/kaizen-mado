@@ -25,6 +25,15 @@ vi.mock("@/lib/tickets", () => ({
   appendDiscussionBlocks: (...a: unknown[]) => appendDiscussionBlocks(...(a as [])),
 }));
 
+// 真田システムへの受け渡し（handoffFyiToSanada）も差し替える。既定は false（未設定扱い）で、
+// 個別テストで true にして「handoff優先・失敗時だけ自前LINEへフォールバック」を検証する。
+const handoffEnabled = vi.fn(() => false);
+const handoffFyiToSanada = vi.fn(async () => false);
+vi.mock("@/lib/handoff", () => ({
+  handoffEnabled: () => handoffEnabled(),
+  handoffFyiToSanada: (...a: unknown[]) => handoffFyiToSanada(...(a as [])),
+}));
+
 import { notifyStuckOnce, hasStuckMarker, STUCK_MARKER_HEADING } from "../notify";
 import type { TicketRow } from "../tickets";
 
@@ -58,6 +67,8 @@ describe("lib/notify 詰まり連絡の de-dup", () => {
     vi.clearAllMocks();
     lineEnabled.mockReturnValue(true);
     pushText.mockResolvedValue(true);
+    handoffEnabled.mockReturnValue(false);
+    handoffFyiToSanada.mockResolvedValue(false);
     process.env.NOTION_TOKEN = "tok";
   });
   afterEach(() => {
@@ -94,8 +105,9 @@ describe("lib/notify 詰まり連絡の de-dup", () => {
     expect(appendDiscussionBlocks).not.toHaveBeenCalled();
   });
 
-  it("LINE未設定なら送らない（fail-safe）", async () => {
+  it("LINE・真田handoffどちらも未設定なら送らない（fail-safe）", async () => {
     lineEnabled.mockReturnValue(false);
+    handoffEnabled.mockReturnValue(false);
     global.fetch = mockFetchReturningBlocks([]);
 
     const sent = await notifyStuckOnce(ticket, "理由");
@@ -103,6 +115,41 @@ describe("lib/notify 詰まり連絡の de-dup", () => {
     expect(sent).toBe(false);
     expect(pushText).not.toHaveBeenCalled();
     expect(appendDiscussionBlocks).not.toHaveBeenCalled();
+  });
+
+  it("真田handoffが成功したら自前LINE（pushText）は呼ばない", async () => {
+    handoffFyiToSanada.mockResolvedValue(true);
+    global.fetch = mockFetchReturningBlocks([]);
+
+    const sent = await notifyStuckOnce(ticket, "理由");
+
+    expect(sent).toBe(true);
+    expect(handoffFyiToSanada).toHaveBeenCalledWith("KZ-9", expect.any(String));
+    expect(pushText).not.toHaveBeenCalled();
+    expect(appendDiscussionBlocks).toHaveBeenCalledTimes(1);
+  });
+
+  it("真田handoffが失敗したら自前LINE（pushText）へフォールバックする", async () => {
+    handoffFyiToSanada.mockResolvedValue(false);
+    global.fetch = mockFetchReturningBlocks([]);
+
+    const sent = await notifyStuckOnce(ticket, "理由");
+
+    expect(sent).toBe(true);
+    expect(handoffFyiToSanada).toHaveBeenCalledTimes(1);
+    expect(pushText).toHaveBeenCalledTimes(1);
+  });
+
+  it("LINE未設定でも真田handoffが有効なら（LINE未設定を理由に）弾かない", async () => {
+    lineEnabled.mockReturnValue(false);
+    handoffEnabled.mockReturnValue(true);
+    handoffFyiToSanada.mockResolvedValue(true);
+    global.fetch = mockFetchReturningBlocks([]);
+
+    const sent = await notifyStuckOnce(ticket, "理由");
+
+    expect(sent).toBe(true);
+    expect(handoffFyiToSanada).toHaveBeenCalledTimes(1);
   });
 
   it("送信に失敗したら印を残さない（次回再試行できるように）", async () => {

@@ -21,6 +21,18 @@
 import type { TicketRow } from "./tickets";
 import { appendDiscussionBlocks } from "./tickets";
 import { lineEnabled, pushText, truncateForLine, BOARD_URL, msgHead, stageBar, actionBanner } from "./line";
+import { handoffEnabled, handoffFyiToSanada } from "./handoff";
+
+/**
+ * 真田システム（真田専用LINEチャネル）経由を優先し、失敗時だけ自前LINE（pushText）へ
+ * フォールバックする（社長指示 2026-08-15：カイゼンくんから無記名で届く通知を終わらせ、
+ * 真田からの体裁に統一する）。フォールバック時は lib/line.ts の sender 機能により
+ * 「真田部長（カイゼンくん）」表示になる（二重の備え）。
+ */
+async function sendFyi(ticketId: string, text: string): Promise<boolean> {
+  if (await handoffFyiToSanada(ticketId, text)) return true;
+  return pushText(text);
+}
 
 const NOTION_VERSION = "2022-06-28";
 
@@ -109,13 +121,13 @@ export async function notifyStuckOnce(
   ticket: TicketRow,
   reason: string
 ): Promise<boolean> {
-  // LINE未設定なら何もしない（印も残さない＝設定後に1回送れるように）。
-  if (!lineEnabled()) return false;
+  // 真田システム経由・自前LINEのどちらも未設定なら何もしない（印も残さない＝設定後に1回送れるように）。
+  if (!lineEnabled() && !handoffEnabled()) return false;
 
   // 既に通知済みなら送らない（連打防止）。
   if (await hasStuckMarker(ticket.pageId)) return false;
 
-  const sent = await pushText(buildStuckText(ticket, reason));
+  const sent = await sendFyi(ticket.ticketId, buildStuckText(ticket, reason));
   if (!sent) return false;
 
   // 送れたときだけ印を残す（送信失敗なら印を残さず、次回再試行できるようにする）。
@@ -158,10 +170,10 @@ export async function notifyReviewOnce(
   prUrl: string,
   detail: string
 ): Promise<boolean> {
-  if (!lineEnabled()) return false;
+  if (!lineEnabled() && !handoffEnabled()) return false;
   if (await hasMarker(ticket.pageId, REVIEW_MARKER_HEADING)) return false;
 
-  const sent = await pushText(buildReviewText(ticket, prUrl, detail));
+  const sent = await sendFyi(ticket.ticketId, buildReviewText(ticket, prUrl, detail));
   if (!sent) return false;
 
   await appendDiscussionBlocks(ticket.pageId, [

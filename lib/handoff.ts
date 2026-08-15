@@ -53,6 +53,53 @@ export function handoffEnabled(): boolean {
   return Boolean((process.env.MENTION_HISHO_BASE_URL || "").trim());
 }
 
+/**
+ * 完了報告・詰まり連絡・Merge待ち等の「返信不要のFYI」を真田システムへ渡す（社長指示 2026-08-15）。
+ * GO伺い（handoffToSanada）と違い3案生成・ボタンカードは経由しない（相手側 kind="fyi" 分岐）。
+ * env未設定・送信失敗時は例外を投げず false を返す（呼び出し側が自前LINEへフォールバックする）。
+ */
+export async function handoffFyiToSanada(ticketId: string, text: string): Promise<boolean> {
+  const base = (process.env.MENTION_HISHO_BASE_URL || "").trim().replace(/\/$/, "");
+  if (!base) return false;
+
+  const url = `${base}${HANDOFF_PATH}`;
+  const headers: Record<string, string> = {
+    "content-type": "application/json; charset=utf-8",
+  };
+  const secret = (process.env.KAIZEN_HANDOFF_SECRET || "").trim();
+  if (secret) headers["x-kaizen-handoff-secret"] = secret;
+
+  const body = JSON.stringify({ kind: "fyi", ticketId, fyiText: text });
+
+  for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers,
+        body,
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.ok === true) return true;
+      console.warn(
+        `[handoff-fyi] failed (attempt ${attempt}/${ATTEMPTS}):`,
+        data?.error ?? `http ${res.status}`
+      );
+    } catch (err) {
+      console.warn(
+        `[handoff-fyi] error (attempt ${attempt}/${ATTEMPTS}):`,
+        (err as Error).message
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return false;
+}
+
 /** NotionチケットページのURL（lib/line.ts の notionPageUrl と同じ組み立て）。 */
 function ticketUrlOf(pageId: string): string {
   return `https://www.notion.so/${(pageId || "").replace(/-/g, "")}`;
