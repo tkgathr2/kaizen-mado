@@ -47,6 +47,20 @@ export function lineEnabled(): boolean {
   );
 }
 
+// ── 差出人（sender）── 真田部長名義で統一表示する ──
+// LINE Messaging API は本文に「真田より」と書くだけでは差出人表示が変わらない（要 sender フィールド）。
+// mention-hisho-check（lib/line.ts buildLineSender）の実装パターンを踏襲。
+// iconUrl は環境変数で上書き可能（Railway側の実配置URLに追随できるように）。HTTPS以外は付けない
+// （LINE API 側が sender を拒否してメッセージ全体が失敗するのを防ぐ・fail-safe）。
+const SANADA_SENDER_NAME = "真田部長（カイゼンくん）";
+const SANADA_ICON_FALLBACK = "https://mention.takagi.bz/avatars/sanada.jpg?v=f9e7145440fc5375";
+
+function sanadaSender(): { name: string; iconUrl: string } | undefined {
+  const iconUrl = (process.env.LINE_SANADA_ICON_URL || SANADA_ICON_FALLBACK).trim();
+  if (!/^https:\/\//.test(iconUrl)) return undefined; // HTTPS必須（不正値ならsender自体を付けない）
+  return { name: SANADA_SENDER_NAME, iconUrl };
+}
+
 /** 送信元userIdが通知先（高木さん本人）か。webhookで他人の操作を弾く。 */
 export function isAuthorizedUser(userId: string | undefined | null): boolean {
   if (!userId) return false;
@@ -248,6 +262,19 @@ export async function notifySlackAlert(detail: string): Promise<boolean> {
   }
 }
 
+/** payload.messages の各要素に真田sender（未設定時のみ）を注入する。
+ * push/replyの両方が同じ {messages: [...]} 形状を持つため、ここで一括適用する。 */
+function withSanadaSender(payload: unknown): unknown {
+  const sender = sanadaSender();
+  if (!sender) return payload; // iconUrl不正時はsenderなしで送る（fail-safe・通知自体は止めない）
+  const p = payload as { messages?: Array<Record<string, unknown>> };
+  if (!Array.isArray(p?.messages)) return payload;
+  return {
+    ...p,
+    messages: p.messages.map((m) => (m.sender ? m : { ...m, sender })),
+  };
+}
+
 // `!!await postLine(...)` で互換。
 async function postLine(endpoint: string, payload: unknown): Promise<any | null> {
   try {
@@ -257,7 +284,7 @@ async function postLine(endpoint: string, payload: unknown): Promise<any | null>
         "Content-Type": "application/json",
         Authorization: `Bearer ${accessToken()}`,
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(withSanadaSender(payload)),
     });
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
