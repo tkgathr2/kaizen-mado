@@ -62,6 +62,18 @@ export function checkAdminGoAuth(req: NextRequest): "ok" | "unauthorized" | "dis
   return checkCronSecret(req) ? "ok" : "unauthorized";
 }
 
+// ── kaizen/reply 専用認証 ──
+// /api/kaizen/reply は「真田チャネル（mention-hisho）で社長が詰まり連絡へ引用返信した内容を
+// チケットへ書き戻す」口。共用CRON_SECRETと分離し、専用シークレット KAIZEN_REPLY_SECRET を
+// x-kaizen-reply-secret ヘッダで必須にする。第三者が任意のチケットへ書き込める荒らし口に
+// ならないよう、未設定なら本番/非本番を問わず無効化する（fail-closed。呼び出し側で503）。
+export function checkKaizenReplyAuth(req: NextRequest): "ok" | "unauthorized" | "disabled" {
+  const secret = process.env.KAIZEN_REPLY_SECRET;
+  if (!secret || !secret.trim()) return "disabled";
+  const x = req.headers.get("x-kaizen-reply-secret");
+  return x && safeEqual(x, secret) ? "ok" : "unauthorized";
+}
+
 // 長さに依存しない定数時間比較。
 // 入力長そのものがタイミング/例外で漏れないよう、まず両者を HMAC で固定長(32byte)に畳んでから
 // crypto.timingSafeEqual で比較する（timingSafeEqual は長さ不一致で throw するため、HMAC化で

@@ -12,7 +12,7 @@ const setStatusChangedAt = vi.fn(async () => {});
 const notifyStuckOnce = vi.fn(async (..._a: unknown[]) => true);
 const notifyReviewOnce = vi.fn(async (..._a: unknown[]) => true);
 const buildMergedText = vi.fn(() => "merged-text");
-const pushText = vi.fn(async () => true);
+const notifySlackAlert = vi.fn(async (_detail: string) => true);
 const enqueueNotification = vi.fn(async (..._a: unknown[]) => {});
 const findTarget = vi.fn((..._a: unknown[]) => null as unknown);
 const handoffFyiToSanada = vi.fn(async (..._a: unknown[]) => false);
@@ -35,7 +35,7 @@ vi.mock("@/lib/line", () => ({
   // isInfraError は実装同等の空文字判定だけ再現（空detailは基盤エラーにならない）。
   isInfraError: (d: string | null | undefined) => Boolean((d || "").includes("401")),
   buildInfraNoticeText: () => "infra-text",
-  pushText: (...a: unknown[]) => pushText(...(a as [])),
+  notifySlackAlert: (...a: unknown[]) => notifySlackAlert(...(a as [string])),
 }));
 vi.mock("@/lib/slack", () => ({ postToSlack: async () => true }));
 vi.mock("@/lib/notification", () => ({
@@ -184,7 +184,7 @@ describe("/api/execute/callback failed経路の失敗理由（「不明」根絶
     expect(updateTicketState).not.toHaveBeenCalled();
   });
 
-  it("基盤エラー通知：真田handoffが成功したら自前LINE（pushText）は呼ばない", async () => {
+  it("基盤エラー通知：真田handoffが成功したらSlack警告（旧pushTextフォールバック）は呼ばない", async () => {
     handoffFyiToSanada.mockResolvedValue(true);
     await POST(
       makeReq({
@@ -196,10 +196,10 @@ describe("/api/execute/callback failed経路の失敗理由（「不明」根絶
       })
     );
     expect(handoffFyiToSanada).toHaveBeenCalledWith("KZ-17", "infra-text");
-    expect(pushText).not.toHaveBeenCalled();
+    expect(notifySlackAlert).not.toHaveBeenCalled();
   });
 
-  it("基盤エラー通知：真田handoffが失敗したら自前LINE（pushText）へフォールバックする", async () => {
+  it("基盤エラー通知：真田handoffが失敗したら自前LINEへは送らずSlack警告へフォールバックする", async () => {
     handoffFyiToSanada.mockResolvedValue(false);
     await POST(
       makeReq({
@@ -211,7 +211,10 @@ describe("/api/execute/callback failed経路の失敗理由（「不明」根絶
       })
     );
     expect(handoffFyiToSanada).toHaveBeenCalledTimes(1);
-    expect(pushText).toHaveBeenCalledWith("infra-text");
+    expect(notifySlackAlert).toHaveBeenCalledTimes(1);
+    const [detail] = notifySlackAlert.mock.calls[0] as [string];
+    expect(detail).toContain("KZ-17");
+    expect(detail).toContain("infra-text");
   });
 });
 
@@ -244,17 +247,20 @@ describe("/api/execute/callback merged経路の完了報告", () => {
     else process.env.ALLOW_INSECURE_CRON = savedInsecure;
   });
 
-  it("真田handoffが成功したら自前LINE（pushText）は呼ばない", async () => {
+  it("真田handoffが成功したらSlack警告（旧pushTextフォールバック）は呼ばない", async () => {
     handoffFyiToSanada.mockResolvedValue(true);
     await POST(makeReq({ pageId: "page-1", ticketId: "KZ-17", result: "merged", prUrl: "https://x/pr/1" }));
     expect(handoffFyiToSanada).toHaveBeenCalledWith("KZ-17", "merged-text");
-    expect(pushText).not.toHaveBeenCalled();
+    expect(notifySlackAlert).not.toHaveBeenCalled();
   });
 
-  it("真田handoffが失敗したら自前LINE（pushText）へフォールバックする", async () => {
+  it("真田handoffが失敗したら自前LINEへは送らずSlack警告へフォールバックする", async () => {
     handoffFyiToSanada.mockResolvedValue(false);
     await POST(makeReq({ pageId: "page-1", ticketId: "KZ-17", result: "merged", prUrl: "https://x/pr/1" }));
     expect(handoffFyiToSanada).toHaveBeenCalledTimes(1);
-    expect(pushText).toHaveBeenCalledWith("merged-text");
+    expect(notifySlackAlert).toHaveBeenCalledTimes(1);
+    const [detail] = notifySlackAlert.mock.calls[0] as [string];
+    expect(detail).toContain("KZ-17");
+    expect(detail).toContain("merged-text");
   });
 });

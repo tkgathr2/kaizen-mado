@@ -56,9 +56,20 @@ export function handoffEnabled(): boolean {
 /**
  * 完了報告・詰まり連絡・Merge待ち等の「返信不要のFYI」を真田システムへ渡す（社長指示 2026-08-15）。
  * GO伺い（handoffToSanada）と違い3案生成・ボタンカードは経由しない（相手側 kind="fyi" 分岐）。
- * env未設定・送信失敗時は例外を投げず false を返す（呼び出し側が自前LINEへフォールバックする）。
+ * env未設定・送信失敗時は例外を投げず false を返す（呼び出し側が真田Bot経由のSlack警告へフォールバックする。
+ * カイゼンくん自前LINEへは一切フォールバックしない＝社長指示 2026-08-15「カイゼンくんのLINEチャネルに
+ * 一切来ない仕組みにして」に合わせ、自前LINE送信経路をゼロにした）。
+ *
+ * opts.awaitsReply … このFYIが「社長の返信を必要とする」性質のとき true を渡す（詰まり連絡等）。
+ * 相手側（mention-hisho）はこのフラグが立った通知だけ、LINE送信後の messageId を控えておき、
+ * 社長がその通知を"引用返信"したときに `POST /api/kaizen/reply` へ書き戻す（自由文の通常返信は
+ * 真田チャネルのwebhookで全部Claude Code Routine起動に使われるため、引用返信でだけ区別する）。
  */
-export async function handoffFyiToSanada(ticketId: string, text: string): Promise<boolean> {
+export async function handoffFyiToSanada(
+  ticketId: string,
+  text: string,
+  opts?: { awaitsReply?: boolean }
+): Promise<boolean> {
   const base = (process.env.MENTION_HISHO_BASE_URL || "").trim().replace(/\/$/, "");
   if (!base) return false;
 
@@ -69,7 +80,13 @@ export async function handoffFyiToSanada(ticketId: string, text: string): Promis
   const secret = (process.env.KAIZEN_HANDOFF_SECRET || "").trim();
   if (secret) headers["x-kaizen-handoff-secret"] = secret;
 
-  const body = JSON.stringify({ kind: "fyi", ticketId, fyiText: text });
+  const payload: { kind: "fyi"; ticketId: string; fyiText: string; awaitsReply?: true } = {
+    kind: "fyi",
+    ticketId,
+    fyiText: text,
+  };
+  if (opts?.awaitsReply === true) payload.awaitsReply = true;
+  const body = JSON.stringify(payload);
 
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
     const controller = new AbortController();

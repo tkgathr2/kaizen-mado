@@ -230,6 +230,30 @@ describe("handoffFyiToSanada（完了報告・詰まり・Merge待ち等のFYI�
     await expect(handoffFyiToSanada("KZ-127", "text")).resolves.toBe(false);
   });
 
+  it("opts.awaitsReply=true のときだけ body に awaitsReply:true を含める", async () => {
+    const ok = await handoffFyiToSanada("KZ-127", "これを教えてください。", {
+      awaitsReply: true,
+    });
+    expect(ok).toBe(true);
+    const [, init] = fetchMock.mock.calls[0] as [string, any];
+    expect(JSON.parse(init.body)).toEqual({
+      kind: "fyi",
+      ticketId: "KZ-127",
+      fyiText: "これを教えてください。",
+      awaitsReply: true,
+    });
+  });
+
+  it("opts省略・awaitsReply=false のときは body にキー自体を含めない（後方互換）", async () => {
+    await handoffFyiToSanada("KZ-127", "直して反映しました。");
+    const [, init1] = fetchMock.mock.calls[0] as [string, any];
+    expect("awaitsReply" in JSON.parse(init1.body)).toBe(false);
+
+    await handoffFyiToSanada("KZ-127", "直して反映しました。", { awaitsReply: false });
+    const [, init2] = fetchMock.mock.calls[1] as [string, any];
+    expect("awaitsReply" in JSON.parse(init2.body)).toBe(false);
+  });
+
   it("送信側は1回目がAbortError（タイムアウト相当）で失敗、2回目が成功すると相手へ2回POSTする（無条件リトライの仕様確認）", async () => {
     // handoffToSanada と同じ ATTEMPTS=2 の無条件リトライ構造を handoffFyiToSanada も持つ。
     // 【2026-08-15 bug-check-lab西野→神谷が対応】このリトライ自体は変えていないが、相手側

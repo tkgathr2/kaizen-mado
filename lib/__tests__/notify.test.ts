@@ -3,15 +3,18 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // lib/notify.ts の検証：
 //  - 詰まり連絡は「同じチケットで1回だけ」送る（de-dup）。
 //    判定は Notion ページ直下に heading_3「詰まり通知済み」があるか。
-//  - LINE未設定なら送らない（fail-safe）。
+//  - 真田システム（mention-hisho）への handoff が本線。lineEnabled/handoffEnabled どちらかが
+//    有効なら試みる（自前LINEは全廃したため lineEnabled 単独では何も送らない）。
+//  - handoffが失敗したら、カイゼンくん自前LINEへは一切フォールバックせず、真田Bot名義の
+//    Slack警告（notifySlackAlert）へ倒す（社長指示 2026-08-15）。
 //  - 送れたときだけ印（heading_3 + 理由）をページへ追記する。
 
-// LINE 送信は名前付きモックで差し替え（呼ばれた/呼ばれてないを検証）。
+// LINE/Slack警告は名前付きモックで差し替え（呼ばれた/呼ばれてないを検証）。
 const lineEnabled = vi.fn(() => true);
-const pushText = vi.fn(async () => true);
+const notifySlackAlert = vi.fn(async (_detail: string) => true);
 vi.mock("@/lib/line", () => ({
   lineEnabled: () => lineEnabled(),
-  pushText: (...a: unknown[]) => pushText(...(a as [])),
+  notifySlackAlert: (...a: unknown[]) => notifySlackAlert(...(a as [string])),
   truncateForLine: (s: string, max: number) => (s || "").slice(0, max),
   BOARD_URL: "https://kaizen.takagi.bz/board",
   msgHead: () => "HEAD",
@@ -25,8 +28,7 @@ vi.mock("@/lib/tickets", () => ({
   appendDiscussionBlocks: (...a: unknown[]) => appendDiscussionBlocks(...(a as [])),
 }));
 
-// 真田システムへの受け渡し（handoffFyiToSanada）も差し替える。既定は false（未設定扱い）で、
-// 個別テストで true にして「handoff優先・失敗時だけ自前LINEへフォールバック」を検証する。
+// 真田システムへの受け渡し（handoffFyiToSanada）も差し替える。
 const handoffEnabled = vi.fn(() => false);
 const handoffFyiToSanada = vi.fn(async () => false);
 vi.mock("@/lib/handoff", () => ({
@@ -34,7 +36,7 @@ vi.mock("@/lib/handoff", () => ({
   handoffFyiToSanada: (...a: unknown[]) => handoffFyiToSanada(...(a as [])),
 }));
 
-import { notifyStuckOnce, hasStuckMarker, STUCK_MARKER_HEADING } from "../notify";
+import { notifyStuckOnce, hasStuckMarker, STUCK_MARKER_HEADING, buildStuckText } from "../notify";
 import type { TicketRow } from "../tickets";
 
 const ticket: TicketRow = {
@@ -66,9 +68,9 @@ describe("lib/notify 詰まり連絡の de-dup", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     lineEnabled.mockReturnValue(true);
-    pushText.mockResolvedValue(true);
-    handoffEnabled.mockReturnValue(false);
-    handoffFyiToSanada.mockResolvedValue(false);
+    notifySlackAlert.mockResolvedValue(true);
+    handoffEnabled.mockReturnValue(true);
+    handoffFyiToSanada.mockResolvedValue(true);
     process.env.NOTION_TOKEN = "tok";
   });
   afterEach(() => {
@@ -77,7 +79,7 @@ describe("lib/notify 詰まり連絡の de-dup", () => {
     else process.env.NOTION_TOKEN = savedToken;
   });
 
-  it("印が無ければ送信し、印（詰まり通知済み）を追記する", async () => {
+  it("印が無ければ真田handoffで送信し、印（詰まり通知済み）を追記する", async () => {
     global.fetch = mockFetchReturningBlocks([
       { type: "heading_3", heading_3: { rich_text: [{ plain_text: "実装失敗（差し戻し）" }] } },
     ]);
@@ -85,7 +87,14 @@ describe("lib/notify 詰まり連絡の de-dup", () => {
     const sent = await notifyStuckOnce(ticket, "Notionトークンが必要です");
 
     expect(sent).toBe(true);
-    expect(pushText).toHaveBeenCalledTimes(1);
+    expect(handoffFyiToSanada).toHaveBeenCalledTimes(1);
+    // awaitsReply:true を渡す（相手側が引用返信の照合に使うフラグ）。
+    expect(handoffFyiToSanada).toHaveBeenCalledWith(
+      "KZ-9",
+      expect.stringContaining("引用返信"),
+      { awaitsReply: true }
+    );
+    expect(notifySlackAlert).not.toHaveBeenCalled();
     // 送れたら印を残す。
     expect(appendDiscussionBlocks).toHaveBeenCalledTimes(1);
     const args = appendDiscussionBlocks.mock.calls[0] as unknown as [string, { heading?: string }[]];
@@ -93,7 +102,7 @@ describe("lib/notify 詰まり連絡の de-dup", () => {
     expect(args[1][0].heading).toBe(STUCK_MARKER_HEADING);
   });
 
-  it("既に印があれば送らない（連打防止）", async () => {
+  it("既に印があれば送らない（連打防止・handoff/Slackどちらも呼ばれない）", async () => {
     global.fetch = mockFetchReturningBlocks([
       { type: "heading_3", heading_3: { rich_text: [{ plain_text: STUCK_MARKER_HEADING }] } },
     ]);
@@ -101,58 +110,58 @@ describe("lib/notify 詰まり連絡の de-dup", () => {
     const sent = await notifyStuckOnce(ticket, "理由");
 
     expect(sent).toBe(false);
-    expect(pushText).not.toHaveBeenCalled();
+    expect(handoffFyiToSanada).not.toHaveBeenCalled();
+    expect(notifySlackAlert).not.toHaveBeenCalled();
     expect(appendDiscussionBlocks).not.toHaveBeenCalled();
   });
 
-  it("LINE未設定なら送らない（fail-safe・真田handoffの有無は無関係）", async () => {
+  it("LINE未設定でも真田handoffが有効なら試みる（自前LINEへは依存しない）", async () => {
     lineEnabled.mockReturnValue(false);
-    global.fetch = mockFetchReturningBlocks([]);
-
-    const sent = await notifyStuckOnce(ticket, "理由");
-
-    expect(sent).toBe(false);
-    expect(pushText).not.toHaveBeenCalled();
-    expect(appendDiscussionBlocks).not.toHaveBeenCalled();
-  });
-
-  // 【bug-check-lab Critical修正・2026-08-15】詰まり連絡は真田システムへのhandoffを経由しない
-  // （返信要求の本文が真田専用LINEチャネルのwebhookで無条件Routine直行になり誤爆するため）。
-  // 常に自前LINE（pushText）で直接送り、handoffFyiToSanadaは一切呼ばれないことを検証する。
-  it("真田handoffが有効でも呼ばれず、常に自前LINE（pushText）で直接送る", async () => {
     handoffEnabled.mockReturnValue(true);
-    handoffFyiToSanada.mockResolvedValue(true);
     global.fetch = mockFetchReturningBlocks([]);
 
     const sent = await notifyStuckOnce(ticket, "理由");
 
     expect(sent).toBe(true);
+    expect(handoffFyiToSanada).toHaveBeenCalledTimes(1);
+  });
+
+  it("LINE・真田handoffの両方が無効なら送らない（fail-safe）", async () => {
+    lineEnabled.mockReturnValue(false);
+    handoffEnabled.mockReturnValue(false);
+    global.fetch = mockFetchReturningBlocks([]);
+
+    const sent = await notifyStuckOnce(ticket, "理由");
+
+    expect(sent).toBe(false);
     expect(handoffFyiToSanada).not.toHaveBeenCalled();
-    expect(pushText).toHaveBeenCalledTimes(1);
+    expect(notifySlackAlert).not.toHaveBeenCalled();
+    expect(appendDiscussionBlocks).not.toHaveBeenCalled();
+  });
+
+  it("真田handoffが失敗したら、カイゼンくん自前LINEへは送らずSlack警告へ倒す", async () => {
+    handoffFyiToSanada.mockResolvedValue(false);
+    notifySlackAlert.mockResolvedValue(true);
+    global.fetch = mockFetchReturningBlocks([]);
+
+    const sent = await notifyStuckOnce(ticket, "理由");
+
+    expect(sent).toBe(true);
+    expect(handoffFyiToSanada).toHaveBeenCalledTimes(1);
+    expect(notifySlackAlert).toHaveBeenCalledTimes(1);
+    const [detail] = notifySlackAlert.mock.calls[0] as [string];
+    expect(detail).toContain("KZ-9");
     expect(appendDiscussionBlocks).toHaveBeenCalledTimes(1);
   });
 
-  it("LINE未設定なら、真田handoffが有効でも送らない（lineEnabled()単独判定）", async () => {
-    lineEnabled.mockReturnValue(false);
-    handoffEnabled.mockReturnValue(true);
-    handoffFyiToSanada.mockResolvedValue(true);
+  it("真田handoff・Slack警告の両方が失敗したら印を残さない（次回再試行できるように）", async () => {
+    handoffFyiToSanada.mockResolvedValue(false);
+    notifySlackAlert.mockResolvedValue(false);
     global.fetch = mockFetchReturningBlocks([]);
 
     const sent = await notifyStuckOnce(ticket, "理由");
 
     expect(sent).toBe(false);
-    expect(handoffFyiToSanada).not.toHaveBeenCalled();
-    expect(pushText).not.toHaveBeenCalled();
-  });
-
-  it("送信に失敗したら印を残さない（次回再試行できるように）", async () => {
-    global.fetch = mockFetchReturningBlocks([]);
-    pushText.mockResolvedValue(false);
-
-    const sent = await notifyStuckOnce(ticket, "理由");
-
-    expect(sent).toBe(false);
-    expect(pushText).toHaveBeenCalledTimes(1);
     expect(appendDiscussionBlocks).not.toHaveBeenCalled();
   });
 
@@ -169,5 +178,13 @@ describe("lib/notify 詰まり連絡の de-dup", () => {
   it("hasStuckMarker：NOTION_TOKEN未設定なら false（印無し扱い）", async () => {
     delete process.env.NOTION_TOKEN;
     expect(await hasStuckMarker("page-x")).toBe(false);
+  });
+});
+
+describe("buildStuckText", () => {
+  it("引用返信を案内する文言を含む（自由文の返信ではなく引用返信を明示的に求める）", () => {
+    const text = buildStuckText(ticket, "理由");
+    expect(text).toContain("引用返信（長押し→返信）");
+    expect(text).not.toContain("LINEで返信すれば続けます");
   });
 });
