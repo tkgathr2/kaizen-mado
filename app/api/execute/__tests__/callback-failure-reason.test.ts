@@ -9,6 +9,7 @@ const updateTicketState = vi.fn(async (..._a: unknown[]) => {});
 const appendDiscussionBlocks = vi.fn(async (..._a: unknown[]) => {});
 const fetchTicketByPageId = vi.fn(async (_id: string): Promise<unknown> => null);
 const setStatusChangedAt = vi.fn(async () => {});
+const setPrUrl = vi.fn(async (..._a: unknown[]) => {});
 const notifyStuckOnce = vi.fn(async (..._a: unknown[]) => true);
 const notifyReviewOnce = vi.fn(async (..._a: unknown[]) => true);
 const buildMergedText = vi.fn(() => "merged-text");
@@ -22,6 +23,7 @@ vi.mock("@/lib/tickets", () => ({
   appendDiscussionBlocks: (...a: unknown[]) => appendDiscussionBlocks(...a),
   fetchTicketByPageId: (...a: unknown[]) => fetchTicketByPageId(...(a as [string])),
   setStatusChangedAt: (...a: unknown[]) => setStatusChangedAt(...(a as [])),
+  setPrUrl: (...a: unknown[]) => setPrUrl(...a),
 }));
 vi.mock("@/lib/learn", () => ({
   returnLearningFromCompleted: async () => ({ memorized: 0 }),
@@ -262,5 +264,75 @@ describe("/api/execute/callback merged経路の完了報告", () => {
     const [detail] = notifySlackAlert.mock.calls[0] as [string];
     expect(detail).toContain("KZ-17");
     expect(detail).toContain("merged-text");
+  });
+});
+
+describe("/api/execute/callback review経路のPR URL記録（stallカード対応・2026-08-15）", () => {
+  const savedSecret = process.env.CRON_SECRET;
+  const savedInsecure = process.env.ALLOW_INSECURE_CRON;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fetchTicketByPageId.mockResolvedValue({
+      pageId: "page-1",
+      ticketId: "KZ-17",
+      system: "カイゼンくん本体",
+      type: "改善",
+      importance: "中",
+      title: "PRができた件",
+      detail: "…",
+      reporter: "現場",
+      state: "実装中",
+      fgsUrl: null,
+    });
+    notifyReviewOnce.mockResolvedValue(true);
+    delete process.env.CRON_SECRET;
+    process.env.ALLOW_INSECURE_CRON = "1";
+  });
+  afterEach(() => {
+    if (savedSecret === undefined) delete process.env.CRON_SECRET;
+    else process.env.CRON_SECRET = savedSecret;
+    if (savedInsecure === undefined) delete process.env.ALLOW_INSECURE_CRON;
+    else process.env.ALLOW_INSECURE_CRON = savedInsecure;
+  });
+
+  it("prUrlがあれば setPrUrl(pageId, prUrl) を呼ぶ", async () => {
+    await POST(
+      makeReq({
+        pageId: "page-1",
+        ticketId: "KZ-17",
+        result: "review",
+        prUrl: "https://github.com/tkgathr2/kaizen-mado/pull/12",
+        detail: "PR作成",
+      })
+    );
+    expect(setPrUrl).toHaveBeenCalledWith(
+      "page-1",
+      "https://github.com/tkgathr2/kaizen-mado/pull/12"
+    );
+  });
+
+  it("prUrlが空なら setPrUrl は呼ばない", async () => {
+    await POST(
+      makeReq({ pageId: "page-1", ticketId: "KZ-17", result: "review", detail: "PR作成" })
+    );
+    expect(setPrUrl).not.toHaveBeenCalled();
+  });
+
+  it("setPrUrl が失敗（例外）しても review 処理自体は止めない", async () => {
+    setPrUrl.mockRejectedValue(new Error("Notion update error 400: Invalid property"));
+    const res = await POST(
+      makeReq({
+        pageId: "page-1",
+        ticketId: "KZ-17",
+        result: "review",
+        prUrl: "https://github.com/tkgathr2/kaizen-mado/pull/12",
+        detail: "PR作成",
+      })
+    );
+    const json = await res.json();
+    expect(json.ok).toBe(true);
+    expect(json.state).toBe("レビュー");
+    expect(updateTicketState).toHaveBeenCalledWith("page-1", "レビュー");
   });
 });

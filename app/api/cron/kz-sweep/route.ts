@@ -22,7 +22,7 @@ import type { TicketRow } from "@/lib/tickets";
 import { checkCronSecret } from "@/lib/cronAuth";
 import { TIMEOUTS, KZ_STATUS } from "@/lib/kz-state";
 import { notifySlackAlert } from "@/lib/line";
-import { handoffFyiToSanada } from "@/lib/handoff";
+import { handoffStallToSanada, ticketUrlOf, type HandoffStallPayload } from "@/lib/handoff";
 import { enqueueNotification } from "@/lib/notification";
 
 export const runtime = "nodejs";
@@ -58,16 +58,50 @@ function getAnchor(row: TicketRow): number | null {
 // 早期returnしてSlack警告すら送らず完全に無音になっていた。他8箇所（lib/notify.ts /
 // app/api/execute/route.ts 等）は handoffFyiToSanada の失敗判定だけでnotifySlackAlertへ
 // 倒しており、この関数だけ挙動が違っていた。handoffEnabled()のガードを外し、他箇所と
-// 同じパターン（handoffFyiToSanadaの失敗判定だけでSlack警告へ倒す）に統一する。
-async function notify(ticketId: string, text: string): Promise<void> {
-  const handed = await handoffFyiToSanada(ticketId, text).catch(() => false);
+// 同じパターン（handoffの失敗判定だけでSlack警告へ倒す）に統一する。
+//
+// 【構造化stallペイロード化・2026-08-15 社長形式承認（案A種別別Flexカード）】
+// 旧実装は自然文テキストを組み立てて handoffFyiToSanada（kind="fyi"）で送っていたが、
+// 相手側（mention-hisho）が種別ごとにFlexカードを出し分けられるよう、kind="stall" の
+// 構造化ペイロード（stallKind/stallPhase/elapsedHours等）へ置き換える。
+// 【後方互換】mention-hisho 側が kind="stall" 未デプロイの間は 400 を返す → handed=false
+// → 既存のSlack警告フォールバックに落ちる（無音状態にはならない）。
+async function notifyStall(
+  row: TicketRow,
+  opts: {
+    stallKind: HandoffStallPayload["stallKind"];
+    stallPhase: HandoffStallPayload["stallPhase"];
+    elapsedMs: number;
+    autoCloseInHours?: number;
+    prUrl?: string;
+  }
+): Promise<void> {
+  const payload: HandoffStallPayload = {
+    kind: "stall",
+    ticketId: row.ticketId,
+    title: row.title,
+    system: row.system,
+    stallKind: opts.stallKind,
+    stallPhase: opts.stallPhase,
+    elapsedHours: Math.floor(opts.elapsedMs / 3_600_000),
+    ticketUrl: ticketUrlOf(row.pageId),
+  };
+  if (opts.autoCloseInHours !== undefined) payload.autoCloseInHours = opts.autoCloseInHours;
+  if (opts.prUrl) payload.prUrl = opts.prUrl;
+
+  const handed = await handoffStallToSanada(payload).catch(() => false);
   if (handed) return;
   await notifySlackAlert(
-    `kz-sweepの通知（${ticketId}）を真田チャネルへ送れませんでした。`,
+    `kz-sweepの通知（${row.ticketId}）を真田チャネルへ送れませんでした。`,
     "⚠️ kz-sweep通知が真田チャネルへ送れませんでした"
   ).catch((e) => {
     console.error("[kz-sweep] 通知失敗:", (e as Error).message);
   });
+}
+
+/** 自動クローズ閾値までの残り時間（時間単位・切り上げ・マイナスは0にクランプ）。 */
+function remainingHoursUntil(autoCloseMs: number, elapsedMs: number): number {
+  return Math.max(0, Math.ceil((autoCloseMs - elapsedMs) / 3_600_000));
 }
 
 // ── 1チケットの処理 ──
@@ -104,10 +138,7 @@ async function processTicket(row: TicketRow, now: number): Promise<SweepResult> 
           body: `GO待ちのまま7日間経過したため自動クローズしました。再検討の際は新しくカイゼン要望を送ってください。`,
         },
       ]);
-      await notify(
-        row.ticketId,
-        `📋 ${row.ticketId}「${row.title}」\nGO待ちのまま7日間経過したため自動クローズしました。\n対象: ${row.system}`
-      );
+      await notifyStall(row, { stallKind: "awaiting_go", stallPhase: "closed", elapsedMs });
       return { ...base, action: "closed", reason: "AWAITING_GO 7d timeout" };
     }
     if (elapsedMs >= TIMEOUTS.AWAITING_GO_REMIND_MS) {
@@ -120,10 +151,12 @@ async function processTicket(row: TicketRow, now: number): Promise<SweepResult> 
             body: `GO待ちになってから48時間以上経過しています。ご確認をお願いします。`,
           },
         ]);
-        await notify(
-          row.ticketId,
-          `⏰ ${row.ticketId}「${row.title}」\nGO待ちになってから48時間以上経過しています。ご確認をお願いします。\n対象: ${row.system}`
-        );
+        await notifyStall(row, {
+          stallKind: "awaiting_go",
+          stallPhase: "remind",
+          elapsedMs,
+          autoCloseInHours: remainingHoursUntil(TIMEOUTS.AWAITING_GO_AUTO_CLOSE_MS, elapsedMs),
+        });
         await enqueueNotification(
           row.ticketId,
           "stalled",
@@ -147,10 +180,7 @@ async function processTicket(row: TicketRow, now: number): Promise<SweepResult> 
           body: `差し戻しのまま7日間経過したため自動クローズしました。対応される場合は新しくカイゼン要望を送ってください。`,
         },
       ]);
-      await notify(
-        row.ticketId,
-        `📋 ${row.ticketId}「${row.title}」\n差し戻しのまま7日間経過したため自動クローズしました。\n対象: ${row.system}`
-      );
+      await notifyStall(row, { stallKind: "blocked", stallPhase: "closed", elapsedMs });
       return { ...base, action: "closed", reason: "BLOCKED 7d timeout" };
     }
     if (elapsedMs >= TIMEOUTS.BLOCKED_REMIND_MS) {
@@ -162,10 +192,12 @@ async function processTicket(row: TicketRow, now: number): Promise<SweepResult> 
             body: `差し戻しになってから48時間以上経過しています。対応をお願いします。`,
           },
         ]);
-        await notify(
-          row.ticketId,
-          `⏰ ${row.ticketId}「${row.title}」\n差し戻しになってから48時間以上経過しています。\n対象: ${row.system}`
-        );
+        await notifyStall(row, {
+          stallKind: "blocked",
+          stallPhase: "remind",
+          elapsedMs,
+          autoCloseInHours: remainingHoursUntil(TIMEOUTS.BLOCKED_AUTO_CLOSE_MS, elapsedMs),
+        });
         await enqueueNotification(
           row.ticketId,
           "stalled",
@@ -188,10 +220,12 @@ async function processTicket(row: TicketRow, now: number): Promise<SweepResult> 
             body: `レビュー待ちになってから7日以上経過しています。PRのマージをご確認ください。`,
           },
         ]);
-        await notify(
-          row.ticketId,
-          `⏰ ${row.ticketId}「${row.title}」\nレビュー待ちになってから7日以上経過しています。\n対象: ${row.system}`
-        );
+        await notifyStall(row, {
+          stallKind: "review",
+          stallPhase: "remind",
+          elapsedMs,
+          prUrl: row.prUrl,
+        });
         await enqueueNotification(
           row.ticketId,
           "stalled",
@@ -217,10 +251,11 @@ async function processTicket(row: TicketRow, now: number): Promise<SweepResult> 
             body: `真田側のClaude Codeが着手してから48時間以上、状態が変わっていません。セッションが落ちていないかご確認ください（自動クローズはしません）。`,
           },
         ]);
-        await notify(
-          row.ticketId,
-          `⏰ ${row.ticketId}「${row.title}」\n真田側の実装に入ってから48時間以上、状態が変わっていません。\n対象: ${row.system}`
-        );
+        await notifyStall(row, {
+          stallKind: "sanada_implementing",
+          stallPhase: "remind",
+          elapsedMs,
+        });
         await enqueueNotification(
           row.ticketId,
           "stalled",

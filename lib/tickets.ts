@@ -19,6 +19,9 @@ export interface TicketRow {
   reporter: string;
   state: string;
   fgsUrl: string | null;
+  /** レビュー中PRのURL。Notionプロパティ「PR URL」（url型）。execute/callback の review 結果で書き込まれる。
+   * プロパティ未登録の旧DB・PR未作成のチケットは undefined（kz-sweep のレビューリマインドで省略可能な扱い）。 */
+  prUrl?: string;
   /** Notionの最終更新時刻（ISO文字列）。/board の並び・表示用。古いコードは未使用なので任意。 */
   lastEdited?: string;
   /** Notionの作成時刻（ISO文字列）。起票前 冪等チェックの時間窓判定用。任意。 */
@@ -100,6 +103,7 @@ function parseRow(page: any): TicketRow {
     reporter: plainFromRichText(props["起票者"]),
     state: nameFromSelect(props["状態"]),
     fgsUrl: valueFromUrl(props["FGSリンク"]),
+    prUrl: valueFromUrl(props["PR URL"]) || undefined,
     lastEdited: typeof page?.last_edited_time === "string" ? page.last_edited_time : "",
     createdTime: typeof page?.created_time === "string" ? page.created_time : "",
     // 優先度スコアリング（任意・プロパティが無ければ undefined＝旧チケット互換）。
@@ -578,6 +582,13 @@ export async function setTicketUrlField(
   url: string
 ): Promise<void> {
   await patchPage(pageId, { FGSリンク: { url } });
+}
+
+/** PR URL(url)を設定（レビュー通知の紐付け用・stallカード対応・2026-08-15）。
+ * Notion DBに「PR URL」プロパティ（url型）が無い場合は 400 で例外を投げる。呼び出し側
+ * （execute/callback route）は catch して握り潰す方針（本処理を止めない）。 */
+export async function setPrUrl(pageId: string, url: string): Promise<void> {
+  await patchPage(pageId, { "PR URL": { url } });
 }
 
 /** 担当(rich_text)を設定 */

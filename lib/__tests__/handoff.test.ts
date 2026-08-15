@@ -13,7 +13,15 @@ const findTarget = vi.fn((..._a: unknown[]): unknown => ({
 }));
 vi.mock("../targets", () => ({ findTarget: (...a: unknown[]) => findTarget(...a) }));
 
-import { handoffToSanada, buildHandoffPayload, handoffEnabled, handoffFyiToSanada } from "../handoff";
+import {
+  handoffToSanada,
+  buildHandoffPayload,
+  handoffEnabled,
+  handoffFyiToSanada,
+  handoffStallToSanada,
+  ticketUrlOf,
+  type HandoffStallPayload,
+} from "../handoff";
 
 function ticket(overrides: Record<string, unknown> = {}): any {
   return {
@@ -281,6 +289,99 @@ describe("handoffFyiToSanada（完了報告・詰まり・Merge待ち等のFYI�
     });
     // 2回目も全く同じbody＝相手側で内容による重複排除の手がかりが無い限り、区別できない。
     expect(init2.body).toBe(init1.body);
+  });
+});
+
+describe("handoffStallToSanada（kz-sweep 停滞リマインドの構造化送信）", () => {
+  const savedBase = process.env.MENTION_HISHO_BASE_URL;
+  const savedSecret = process.env.KAIZEN_HANDOFF_SECRET;
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fetchMock = vi.fn(async () => okResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    process.env.MENTION_HISHO_BASE_URL = "https://mention-hisho.example.com";
+    process.env.KAIZEN_HANDOFF_SECRET = "s3cret";
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    if (savedBase === undefined) delete process.env.MENTION_HISHO_BASE_URL;
+    else process.env.MENTION_HISHO_BASE_URL = savedBase;
+    if (savedSecret === undefined) delete process.env.KAIZEN_HANDOFF_SECRET;
+    else process.env.KAIZEN_HANDOFF_SECRET = savedSecret;
+  });
+
+  function stallPayload(overrides: Partial<HandoffStallPayload> = {}): HandoffStallPayload {
+    return {
+      kind: "stall",
+      ticketId: "KZ-131",
+      title: "チケットタイトル",
+      system: "対象システム名",
+      stallKind: "awaiting_go",
+      stallPhase: "remind",
+      elapsedHours: 50,
+      ticketUrl: "https://www.notion.so/xxx",
+      ...overrides,
+    };
+  }
+
+  it("kind='stall'のペイロードをそのまま宛先URL・認証ヘッダ付きで送る", async () => {
+    const payload = stallPayload({ autoCloseInHours: 118 });
+    const ok = await handoffStallToSanada(payload);
+    expect(ok).toBe(true);
+    const [url, init] = fetchMock.mock.calls[0] as [string, any];
+    expect(url).toBe("https://mention-hisho.example.com/api/kaizen/handoff");
+    expect(init.method).toBe("POST");
+    expect(init.headers["x-kaizen-handoff-secret"]).toBe("s3cret");
+    expect(JSON.parse(init.body)).toEqual(payload);
+  });
+
+  it("stallKind='review'でprUrlを含めて送れる", async () => {
+    const payload = stallPayload({
+      stallKind: "review",
+      prUrl: "https://github.com/tkgathr2/kaizen-mado/pull/12",
+    });
+    await handoffStallToSanada(payload);
+    const [, init] = fetchMock.mock.calls[0] as [string, any];
+    expect(JSON.parse(init.body)).toMatchObject({
+      stallKind: "review",
+      prUrl: "https://github.com/tkgathr2/kaizen-mado/pull/12",
+    });
+  });
+
+  it("MENTION_HISHO_BASE_URL未設定なら送らず false（呼び出し側がSlack警告へフォールバックできる）", async () => {
+    delete process.env.MENTION_HISHO_BASE_URL;
+    const ok = await handoffStallToSanada(stallPayload());
+    expect(ok).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("相手側が kind='stall' 未対応（400等）でも例外を投げず false（後方互換）", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 400, json: async () => ({ ok: false, error: "unknown kind" }) } as any);
+    const ok = await handoffStallToSanada(stallPayload());
+    expect(ok).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(2); // 1回＋リトライ1回
+  });
+
+  it("送信失敗（例外）でも投げず false を返す", async () => {
+    fetchMock.mockRejectedValue(new Error("boom"));
+    await expect(handoffStallToSanada(stallPayload())).resolves.toBe(false);
+  });
+
+  it("1回目が例外でも2回目が成功すれば true", async () => {
+    fetchMock.mockRejectedValueOnce(new Error("network down")).mockResolvedValueOnce(okResponse());
+    const ok = await handoffStallToSanada(stallPayload());
+    expect(ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("ticketUrlOf（NotionページURLの組み立て）", () => {
+  it("pageIdのハイフンを除いてURLを組み立てる", () => {
+    expect(ticketUrlOf("37b0d980-8b3b-8148-9721-e1fa84498c34")).toBe(
+      "https://www.notion.so/37b0d9808b3b81489721e1fa84498c34"
+    );
   });
 });
 

@@ -14,6 +14,7 @@ import {
   appendDiscussionBlocks,
   fetchTicketByPageId,
   setStatusChangedAt,
+  setPrUrl,
 } from "@/lib/tickets";
 import { returnLearningFromCompleted } from "@/lib/learn";
 import { notifyStuckOnce, notifyReviewOnce, buildMergedText } from "@/lib/notify";
@@ -158,6 +159,13 @@ export async function POST(req: NextRequest) {
       await appendDiscussionBlocks(pageId, [
         { heading: "PR作成（レビュー待ち）", body: `${detail}\nPR: ${prUrl}` },
       ]);
+      // PR URLをチケットへ記録（kz-sweepのレビューリマインドが stallペイロードの prUrl に使う）。
+      // Notion DBに「PR URL」プロパティが無い旧DBでも 400 を握り潰し、本処理は止めない。
+      if (prUrl) {
+        await setPrUrl(pageId, prUrl).catch((e) => {
+          console.warn("[execute/callback] setPrUrl failed (ignored):", (e as Error).message);
+        });
+      }
       // Merge待ち連絡（社長のアクション待ち＝進捗FYIではなく判断要求）。
       // 旧仕様はここで無音＝GO済みPRが誰にも知られず放置されていた
       // （実測でKZ-24/25/26/32/37の5本が無音滞留）。1チケット1回・de-dup付き
