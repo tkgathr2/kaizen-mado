@@ -28,6 +28,14 @@ export function checkCronSecret(req: NextRequest): boolean {
 // 監視系クライアント（kaizen-monitor 等のローカル常駐）向けの専用鍵 MONITOR_PUSH_SECRET も受ける。
 // 分離の意図：この鍵が漏れても送れるのは LINE 通知のみで、GO奪取・実行系（/api/process 等）には
 // 一切使えない（それらは checkCronSecret のまま＝最小権限）。
+//
+// 【Medium指摘6・2026-08-15 バグチェック】PR#169でこのエンドポイントの宛先が「カイゼンくん自前
+// LINE」から「真田専用LINEチャネル」へ変わったため、この鍵の保持者は真田Bot名義で任意テキストを
+// 真田チャネルへ投入できるようになった。真田チャネルは社長の自由文返信＝fireDevRoutine起動（開発
+// 発注）という特権的な経路の入口であるため、この鍵は実質「真田チャネルへの投稿権」を持つ（元の
+// 「LINE通知のみの最小権限鍵」という設計より権限が実質的に大きい）。route.ts側で本文に外部監視系
+// からの自動通知である旨の固定枠を付けることで、社長がこの経路の投稿を「開発発注」と誤認しない
+// ようにしている（鍵自体の権限を絞る変更ではなく表示上の区別）。
 export function checkLinePushAuth(req: NextRequest): boolean {
   if (checkCronSecret(req)) return true;
   const monitor = process.env.MONITOR_PUSH_SECRET;
@@ -68,8 +76,13 @@ export function checkAdminGoAuth(req: NextRequest): "ok" | "unauthorized" | "dis
 // x-kaizen-reply-secret ヘッダで必須にする。第三者が任意のチケットへ書き込める荒らし口に
 // ならないよう、未設定なら本番/非本番を問わず無効化する（fail-closed。呼び出し側で503）。
 export function checkKaizenReplyAuth(req: NextRequest): "ok" | "unauthorized" | "disabled" {
-  const secret = process.env.KAIZEN_REPLY_SECRET;
-  if (!secret || !secret.trim()) return "disabled";
+  // 【Medium指摘5修正・2026-08-15】空判定はtrim済みで行っていたが、比較対象(secret)自体は
+  // 未trimのままだった。送信側（mention-hisho-check）はtrim済みの値を送るため、Railway等の
+  // 環境変数に末尾改行が混入すると空判定はすり抜けるのに比較が一致せず恒久的に401になる
+  // （KAIZEN_HANDOFF_SECRETの検証と同じ流儀＝secret.trim()を比較にも使うよう統一する）。
+  const raw = process.env.KAIZEN_REPLY_SECRET;
+  if (!raw || !raw.trim()) return "disabled";
+  const secret = raw.trim();
   const x = req.headers.get("x-kaizen-reply-secret");
   return x && safeEqual(x, secret) ? "ok" : "unauthorized";
 }

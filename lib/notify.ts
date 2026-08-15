@@ -30,17 +30,27 @@ import { handoffEnabled, handoffFyiToSanada } from "./handoff";
  * 真田Bot名義のSlack警告（persona-slack-relay・社長＋幹部Botのみのチャンネル）で
  * 「届いていない」ことだけを知らせる（社長指示 2026-08-15：カイゼンくん自前LINEへの
  * フォールバックを全廃し、届かない通知は無音ではなくSlack警告に倒す）。
+ *
+ * 【バグチェック High-2・2026-08-15修正】戻り値は必ず handoffFyiToSanada の成否だけに従う。
+ * Slack警告は「本文が届いていないこと」を知らせるだけの副作用であり、その送信成功を
+ * sendFyi自体の成功として返してしまうと、呼び出し元（notifyStuckOnce等）が「本文は届いて
+ * いないのにSlack警告だけ届いた」状態を「送信成功」と誤認し、Notionへ「通知済み」マーカーを
+ * 記帳してしまう（以後、本文が永久に再送されなくなる）。lib/notification.ts の
+ * sendBatchNotifications と同じ方針に統一する。
  */
 async function sendFyi(
   ticketId: string,
   text: string,
   opts?: { awaitsReply?: boolean }
 ): Promise<boolean> {
-  if (await handoffFyiToSanada(ticketId, text, opts)) return true;
-  return notifySlackAlert(
-    `真田チャネルへのFYI通知（${ticketId}）が送れませんでした。text: ${text.slice(0, 100)}`,
-    "⚠️ FYI通知が真田チャネルへ送れませんでした"
-  );
+  const handed = await handoffFyiToSanada(ticketId, text, opts);
+  if (!handed) {
+    await notifySlackAlert(
+      `真田チャネルへのFYI通知（${ticketId}）が送れませんでした。text: ${text.slice(0, 100)}`,
+      "⚠️ FYI通知が真田チャネルへ送れませんでした"
+    ).catch(() => false);
+  }
+  return handed;
 }
 
 const NOTION_VERSION = "2022-06-28";

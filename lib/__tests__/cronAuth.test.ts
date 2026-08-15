@@ -176,6 +176,14 @@ describe("checkKaizenReplyAuth（真田チャネルからの引用返信の書�
     expect(checkKaizenReplyAuth(reqWith({ "x-cron-secret": "cron-key" }))).toBe("unauthorized");
   });
 
+  it("【Medium指摘5修正確認】KAIZEN_REPLY_SECRETに末尾改行が混入していても、trim済みの送信側の値で ok（比較もtrimして統一）", () => {
+    // Railway等の環境変数に末尾改行が混入するケース（空判定はtrim済みだったが、比較対象は
+    // 未trimのままだったため恒久的に401になっていた）。送信側（mention-hisho-check）は
+    // .trim()済みの値を送るため、比較側もtrimして揃える。
+    process.env.KAIZEN_REPLY_SECRET = "reply-key\n";
+    expect(checkKaizenReplyAuth(reqWith({ "x-kaizen-reply-secret": "reply-key" }))).toBe("ok");
+  });
+
   it("KAIZEN_REPLY_SECRET未設定は環境に関わらず disabled（fail-closed）", () => {
     delete process.env.KAIZEN_REPLY_SECRET;
     (process.env as any).NODE_ENV = "production";

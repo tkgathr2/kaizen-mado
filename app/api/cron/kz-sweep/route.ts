@@ -22,7 +22,7 @@ import type { TicketRow } from "@/lib/tickets";
 import { checkCronSecret } from "@/lib/cronAuth";
 import { TIMEOUTS, KZ_STATUS } from "@/lib/kz-state";
 import { notifySlackAlert } from "@/lib/line";
-import { handoffFyiToSanada, handoffEnabled } from "@/lib/handoff";
+import { handoffFyiToSanada } from "@/lib/handoff";
 import { enqueueNotification } from "@/lib/notification";
 
 export const runtime = "nodejs";
@@ -53,8 +53,13 @@ function getAnchor(row: TicketRow): number | null {
 // ── 通知（fail-safe: 未設定・失敗なら握り潰す）──
 // 真田システム経由が本線、失敗時はSlack警告（社長指示2026-08-15：
 // カイゼンくん自前LINEチャネルへの送信は全廃）。
+//
+// 【Low指摘9修正・2026-08-15 バグチェック】旧実装は handoffEnabled() が false のとき
+// 早期returnしてSlack警告すら送らず完全に無音になっていた。他8箇所（lib/notify.ts /
+// app/api/execute/route.ts 等）は handoffFyiToSanada の失敗判定だけでnotifySlackAlertへ
+// 倒しており、この関数だけ挙動が違っていた。handoffEnabled()のガードを外し、他箇所と
+// 同じパターン（handoffFyiToSanadaの失敗判定だけでSlack警告へ倒す）に統一する。
 async function notify(ticketId: string, text: string): Promise<void> {
-  if (!handoffEnabled()) return;
   const handed = await handoffFyiToSanada(ticketId, text).catch(() => false);
   if (handed) return;
   await notifySlackAlert(

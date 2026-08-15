@@ -13,6 +13,12 @@
 #   ANTHROPIC_API_KEY … Claude実装（既存GH secret）
 #   GITHUB_TOKEN … Actions自動付与。自リポ(kaizen-mado)のPR作成に使う（自己改修のみ。他リポはTARGET_REPO_PAT）
 #   TARGET_REPO_PAT … 任意。他リポ改修時のみ必要（無ければ自リポはgithub.tokenで動く）
+#
+# 【Medium指摘7・2026-08-15 バグチェック】2026-08-15 社長指示（PR#168）でGO承認後の実装は
+# 真田システム経由のみになり、kaizen-mado側の `lib/govote.ts` はGOで「着手」状態を新規に
+# 作らなくなった（`app/api/execute?mode=plan` が `fetchTicketsByState("着手")` で拾う対象への
+# 新規流入は遮断済み）。この plan ジョブ自体は削除していないため、Notionに既存の「着手」
+# チケットが残っていれば15分毎に引き続き拾って処理する（新規GO案件が積まれることはない）。
 name: kaizen-loop
 
 on:

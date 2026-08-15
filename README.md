@@ -66,9 +66,16 @@ npm run dev                  # http://localhost:3000/?sys=prorepo
 | `ALLOW_INSECURE_CRON` | `CRON_SECRET` 未設定でも内部APIを通す逃がし弁 | なし | `1` のときだけ認証を通す（本番では使わない・開発/テスト用） |
 
 #### 自動改修（GitHub Actions ディスパッチ）
+> ⚠️ **2026-08-15 社長指示（PR#168）で GO 経路からの新規流入は遮断済み**：`lib/govote.ts`
+> の `applyGoAction` は GO時に `executor==="sanada"` （真田システム経由）でしか状態を進めなく
+> なり、それ以外（旧既定の `"kaizen"`）は状態を変えず案内メッセージを返すだけになった。
+> よってこの節の GitHub Actions 自動改修（`app/api/execute` → `kaizen-loop.yml` /
+> `kaizen-execute.yml`）へ**新規に**チケットが流れ込む経路はもう無い。ただしワークフロー
+> ファイル自体・`app/api/execute` の実装は削除していないため、**既に「着手」状態になっている
+> 既存チケットが残っていれば従来どおり処理される**（詳細は下記「GO executor」節）。
 | 変数 | 役割 | 既定 | 設定すると |
 |---|---|---|---|
-| `GITHUB_DISPATCH_TOKEN` | 対象リポへ改修ジョブを発火するトークン | なし | 「GO」で自動改修が走る。未設定なら発火しない（提案で停止＝赤運用） |
+| `GITHUB_DISPATCH_TOKEN` | 対象リポへ改修ジョブを発火するトークン | なし | 既存の「着手」チケットの改修ジョブ発火にのみ使われる（GOからの新規流入は無い）。未設定なら発火しない |
 | `KAIZEN_ORCHESTRATOR_REPO` | 改修ジョブを起こすオーケストレータ・リポ | `tkgathr2/kaizen-mado` | 指定リポへディスパッチ |
 | `KAIZEN_AUTOPILOT` | 旧・自動着手スイッチ（**2026-08-12 以降は無効**） | — | **どんな値を入れても自動着手は起きない**。社長指示（2026-08-12）で「重要度・危険度に関係なく全チケットが必ず社長のLINE確認を経由する」運用へ変更し、`/api/process` のオートパイロット分岐を廃止したため。`lib/gate.ts` の `autopilotEnabled()` は将来の再有効化のため残しているが、本番コードからは呼ばれていない |
 | `KAIZEN_STUCK_MINUTES` | 「実装中」滞留をstuckとみなす分数 | `30` | 指定分で巻き戻し判定 |
@@ -99,16 +106,29 @@ Notion に `自動着手 実行ワークフローを起動` → `実装失敗（
 
 対策として `POST /api/admin/go` は `executor` を受け取る。
 
+> ⚠️ **2026-08-15 社長指示（PR#168）で追加修正**：「省略 / `"kaizen"`」は**もう `着手` へは
+> 遷移しない**。GO承認後の実装は真田システム（mention-hisho）経由の Claude Code のみとし、
+> カイゼンくん自身の GitHub Actions 自動改修（`/api/execute` → `kaizen-execute.yml` /
+> `kaizen-loop.yml`）への**新規流入は遮断**した。`lib/govote.ts` の `applyGoAction` は
+> `executor !== "sanada"` のとき状態を変えず、真田専用LINEチャネルでの操作を案内する
+> だけの no-op になる（下表は現在の実際の遷移先）。
+
 | executor | 遷移先 | 意味 |
 |---|---|---|
-| 省略 / `"kaizen"` | `着手` | 従来どおりカイゼンくん自身が自動改修する（受け渡し失敗時の自前LINE→GOのフォールバック経路） |
-| `"sanada"` | `真田実装中` | 真田側の Claude Code が既に起動済み。カイゼンくんの自動改修は**動かさない** |
+| 省略 / `"kaizen"` | 変化なし（`GO待ち`のまま） | **【2026-08-15 廃止】** GOそのものを保留し、真田専用LINEチャネルでの操作を案内するだけ。状態遷移も自動改修の起動もしない |
+| `"sanada"` | `真田実装中` | 真田側の Claude Code が既に起動済み。カイゼンくんの自動改修は**動かさない**（唯一の実装経路） |
 
-**「経路が1本も残っていない」ことの根拠**：カイゼンくん側で自動改修を起こすのは `app/api/execute` だけで、
+**GO経路からの新規流入が遮断されていることの根拠**：カイゼンくん側で自動改修を起こすのは `app/api/execute` だけで、
 そこが対象を引くのは状態リテラルによる Notion クエリだけ（`fetchTicketsByState("着手")` と
-reaper の `fetchStaleImplementing`→`fetchTicketsByState("実装中")`）。`真田実装中` はそのどちらにも現れず、
-`/api/process`（`受付`）・`review-list`（`レビュー`）・`/api/admin/go`（`GO待ち`）にも現れない。
-`lib/__tests__/sanadaExecutor.test.ts` がソースを機械検査して回帰を防ぐ。
+reaper の `fetchStaleImplementing`→`fetchTicketsByState("実装中")`）。GO経路（`lib/govote.ts`）は
+上表のとおり `着手` を二度と書かなくなったため、この2クエリへ新しく積まれるチケットはもう無い。
+`真田実装中` はそのどちらにも現れず、`/api/process`（`受付`）・`review-list`（`レビュー`）・
+`/api/admin/go`（`GO待ち`）にも現れない。`lib/__tests__/sanadaExecutor.test.ts` がソースを
+機械検査して回帰を防ぐ。**ただし** `app/api/execute` 自体やワークフローファイル
+（`kaizen-loop.yml`/`kaizen-execute.yml`）は削除していないため、**既に「着手」状態として
+Notion に残っている既存チケットがあれば従来どおり処理される**（cron/kaizen-loopの定期実行や
+reaperの巻き戻しの対象になり続ける）。完全に止めるにはワークフロー自体の無効化が必要だが、
+運用影響が大きいため今回は対象外（コード上の新規流入遮断のみ）。
 
 > ⚠️ **前提**：Notion の「🔁 カイゼンくん 改善チケットDB」の `状態`（select）に選択肢 **`真田実装中`** が登録されていること（2026-08-12 登録済み）。
 > Notion API は未登録の選択肢を**自動作成しない**（`Invalid select value for property "状態"` の 400 を返す）。
