@@ -2,6 +2,7 @@
 // 副作用なし（Notion読取は app/api/board が担当）。ここはテスト可能な整形だけ。
 // 読み取り専用の可視化が目的。内容(detail)など機微情報はカードに含めない。
 import type { TicketRow } from "./tickets";
+import { ticketUrlOf } from "./handoff";
 
 // ── パイプライン状態の正本（single source of truth） ──
 // 名前・色・絵文字・ファネル段を1か所にまとめる。board / dashboard / stats は
@@ -89,9 +90,13 @@ export interface BoardColumn {
 }
 
 /** pageId（ダッシュ有無どちらでも）から Notion ページURLを作る。 */
+/**
+ * 【bug-check-lab Medium-2修正・2026-08-16】DB移行後、pageIdはNotion実UUIDまたは
+ * 合成UUIDのいずれかであり、notion.soへの直リンクは新規チケットで確実に404になる。
+ * lib/handoff.tsのticketUrlOfと同じ /board/ticket/<pageId> 形式へ統一する。
+ */
 export function notionUrlFromPageId(pageId: string): string {
-  const id = String(pageId || "").replace(/-/g, "");
-  return id ? `https://www.notion.so/${id}` : "";
+  return pageId ? ticketUrlOf(pageId) : "";
 }
 
 /** TicketRow → BoardCard（detail等の機微情報は落とす）。 */

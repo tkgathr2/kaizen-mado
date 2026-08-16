@@ -32,9 +32,9 @@ function row(p: Partial<TicketRow>): TicketRow {
 }
 
 describe("board", () => {
-  it("notionUrlFromPageId はダッシュを除去してURL化する", () => {
+  it("notionUrlFromPageId は /board/ticket/<pageId> を返す（Notion直リンクは新規チケットで404になるため）", () => {
     expect(notionUrlFromPageId("37b0d980-8b3b-8148-9721-e1fa84498c34")).toBe(
-      "https://www.notion.so/37b0d9808b3b81489721e1fa84498c34"
+      "https://kaizen.takagi.bz/board/ticket/37b0d980-8b3b-8148-9721-e1fa84498c34"
     );
     expect(notionUrlFromPageId("")).toBe("");
   });
@@ -44,7 +44,7 @@ describe("board", () => {
     expect(c).not.toHaveProperty("detail");
     expect(JSON.stringify(c)).not.toContain("090-1234-5678");
     expect(c.ticketId).toBe("KZ-1");
-    expect(c.url).toContain("notion.so");
+    expect(c.url).toContain("/board/ticket/");
   });
 
   it("toBoardCard は欠損値をフォールバックする", () => {

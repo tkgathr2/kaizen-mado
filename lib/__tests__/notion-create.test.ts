@@ -158,14 +158,27 @@ describe("createTicket（Postgres起票）", () => {
     expect(queryMock).toHaveBeenCalledTimes(1);
   });
 
-  it("pageUrl はベースURLがあればチケット詳細画面を指し、無ければ空文字", async () => {
+  it("pageUrl はチケット詳細画面を指す（KAIZEN_PUBLIC_BASE。未設定時は既定のhttps://kaizen.takagi.bzに一本化・bug-check-lab Medium-5修正）", async () => {
     queryMock.mockResolvedValue({ rows: [insertedRow()] });
-    expect((await createTicket(baseTicket, "高木")).pageUrl).toBe("");
 
-    process.env.NEXT_PUBLIC_BASE_URL = "https://kaizen.takagi.bz";
-    const r = await createTicket(baseTicket, "高木");
-    expect(r.pageUrl).toBe(
+    // KAIZEN_PUBLIC_BASE未設定でも既定値が使われる（NEXT_PUBLIC_BASE_URL/VERCEL_URLには
+    // もはや依存しない。旧実装は未設定時に空文字を返していたが、house標準の
+    // ticketUrlOf(lib/handoff.ts)へ一本化したことで常にURLが返るようになった）。
+    const r1 = await createTicket(baseTicket, "高木");
+    expect(r1.pageUrl).toBe(
       "https://kaizen.takagi.bz/board/ticket/00000000-0000-4000-8000-00000000002a"
     );
+
+    const savedBase = process.env.KAIZEN_PUBLIC_BASE;
+    process.env.KAIZEN_PUBLIC_BASE = "https://custom.example.com";
+    try {
+      const r2 = await createTicket(baseTicket, "高木");
+      expect(r2.pageUrl).toBe(
+        "https://custom.example.com/board/ticket/00000000-0000-4000-8000-00000000002a"
+      );
+    } finally {
+      if (savedBase === undefined) delete process.env.KAIZEN_PUBLIC_BASE;
+      else process.env.KAIZEN_PUBLIC_BASE = savedBase;
+    }
   });
 });

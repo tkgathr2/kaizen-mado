@@ -10,6 +10,7 @@ import type { Ticket } from "./types";
 import { normalizeSystemForTicket } from "./systems";
 import { getPool, ensureSchema } from "./db/pool";
 import { mapTicketRow } from "./tickets";
+import { ticketUrlOf } from "./handoff";
 
 export interface SubmitResult {
   ticketId: string; // 例: "KZ-12"
@@ -112,9 +113,12 @@ async function insertTicket(values: any[]): Promise<any> {
 /** チケットの参照URL。Notion時代はNotionページURLを返していたが、正本がDBへ移ったので
  * カイゼンくん自身のチケット詳細画面（/board/ticket/[pageId]）を指す。
  * ベースURLが分からない環境では空文字（存在しないNotionリンクを作らない）。 */
+/**
+ * 【bug-check-lab Medium-5修正・2026-08-16】NEXT_PUBLIC_BASE_URL/VERCEL_URLという
+ * このファイル独自のenv varを見ていたが、house標準は KAIZEN_PUBLIC_BASE
+ * （lib/handoff.ts・lib/line.tsと同じ、既定値 https://kaizen.takagi.bz）。
+ * ticketUrlOf に一本化する。
+ */
 function ticketPageUrl(pageId: string): string {
-  const base = process.env.NEXT_PUBLIC_BASE_URL
-    || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
-  if (!base || !pageId) return "";
-  return `${base.replace(/\/+$/, "")}/board/ticket/${encodeURIComponent(pageId)}`;
+  return pageId ? ticketUrlOf(pageId) : "";
 }

@@ -1,10 +1,13 @@
 // ── カイゼンくん成長ダッシュボードの集計 ──
-// Notion改善チケットDBを全件読み、「声が集まる→直る→学びになる」の現在地を数える。
+// 改善チケットDB（Postgres）を全件読み、「声が集まる→直る→学びになる」の現在地を数える。
 // 集計は純粋関数（aggregateTickets）に分離し、now注入でテスト可能にする。
 // 状態名・ファネル段は lib/board.ts の正本を import（「議論中」等の表記ズレを防ぐ）。
+//
+// 【bug-check-lab Medium-3修正・2026-08-16】DB移行後もfetchAllTicketRowsがNotion API
+// を直接叩いたまま放置されており、/api/stats・/dashboard が移行日時点の値で固まる
+// リグレッションがあった。lib/tickets.tsのfetchAllTickets（Postgres）へ差し替える。
 import { funnelStageOf, FUNNEL_ORDER } from "./board";
-
-const NOTION_VERSION = "2022-06-28";
+import { fetchAllTickets } from "./tickets";
 
 export interface StatsRow {
   ticketId: string;
@@ -162,39 +165,6 @@ export function aggregateTickets(rows: StatsRow[], now: Date = new Date()): Kaiz
   };
 }
 
-// ── Notionから全チケットをページングで取得 ──
-function parseStatsRow(page: any): StatsRow {
-  const props = page?.properties ?? {};
-  const plain = (p: any, key: "title" | "rich_text") =>
-    Array.isArray(p?.[key]) ? p[key].map((r: any) => r?.plain_text ?? "").join("") : "";
-  let ticketId = "";
-  for (const key of Object.keys(props)) {
-    const u = props[key];
-    if (u?.type === "unique_id" && u.unique_id?.number != null) {
-      ticketId = `${u.unique_id.prefix || "KZ"}-${u.unique_id.number}`;
-      break;
-    }
-  }
-  return {
-    ticketId,
-    title: plain(props["チケット名"], "title"),
-    system: props["対象システム"]?.select?.name ?? "",
-    type: props["種別"]?.select?.name ?? "",
-    importance: props["重要度"]?.select?.name ?? "",
-    state: props["状態"]?.select?.name ?? "",
-    reporter: plain(props["起票者"], "rich_text"),
-    createdTime: page?.created_time ?? "",
-    learned: typeof props["FGSリンク"]?.url === "string" && !!props["FGSリンク"].url,
-    // 優先度スコアリング（プロパティが無ければ undefined＝旧チケット互換）。
-    urgency:
-      typeof props["緊急度"]?.number === "number" ? props["緊急度"].number : undefined,
-    importanceScore:
-      typeof props["重要度スコア"]?.number === "number"
-        ? props["重要度スコア"].number
-        : undefined,
-    priority: props["優先度"]?.select?.name || undefined,
-  };
-}
 
 // ── 起票者名(PII)のマスキング ──
 // /api/stats は認証OFFの間（OAuth鍵未投入時）middleware に保護されず公開で叩ける。
@@ -216,36 +186,24 @@ export function maskStatsReporters(stats: KaizenStats): KaizenStats {
   };
 }
 
-export async function fetchAllTicketRows(): Promise<StatsRow[]> {
-  const token = process.env.NOTION_TOKEN;
-  const databaseId = process.env.NOTION_DATABASE_ID;
-  if (!token || !databaseId) throw new Error("NOTION_TOKEN/NOTION_DATABASE_ID is not set");
+/** 安全弁：ダッシュボード集計が対象とする最大件数。超えた分は新しい順で切り捨てる。 */
+const STATS_MAX_ROWS = 5000;
 
-  const rows: StatsRow[] = [];
-  let cursor: string | undefined;
-  // 安全弁：最大10ページ（1000件）まで。超えたら新しい順に十分なので打ち切り。
-  for (let i = 0; i < 10; i++) {
-    const res = await fetch(`https://api.notion.com/v1/databases/${databaseId}/query`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${token}`,
-        "Notion-Version": NOTION_VERSION,
-      },
-      body: JSON.stringify({
-        page_size: 100,
-        ...(cursor ? { start_cursor: cursor } : {}),
-        sorts: [{ timestamp: "created_time", direction: "descending" }],
-      }),
-    });
-    if (!res.ok) {
-      const t = await res.text().catch(() => "");
-      throw new Error(`Notion stats query error ${res.status}: ${t.slice(0, 300)}`);
-    }
-    const data = await res.json();
-    for (const page of data?.results ?? []) rows.push(parseStatsRow(page));
-    if (!data?.has_more || !data?.next_cursor) break;
-    cursor = data.next_cursor;
-  }
-  return rows;
+export async function fetchAllTicketRows(): Promise<StatsRow[]> {
+  const tickets = await fetchAllTickets(STATS_MAX_ROWS);
+  return tickets.map((t) => ({
+    ticketId: t.ticketId,
+    title: t.title,
+    system: t.system,
+    type: t.type,
+    importance: t.importance,
+    state: t.state,
+    reporter: t.reporter,
+    createdTime: t.createdTime ?? "",
+    // FGSリンク有り＝学びDB還元済み（旧Notion「FGSリンク」プロパティと同じ判定）。
+    learned: !!t.fgsUrl,
+    urgency: t.urgency,
+    importanceScore: t.importanceScore,
+    priority: t.priority,
+  }));
 }

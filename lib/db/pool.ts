@@ -16,10 +16,20 @@ export function getPool(): Pool {
 
 let ensured: Promise<void> | null = null;
 
-/** テーブル未作成でも初回アクセス時に自動で用意する（mention-hishoのensureと同じ設計）。 */
+/** テーブル未作成でも初回アクセス時に自動で用意する（mention-hishoのensureと同じ設計）。
+ * 【bug-check-lab Medium-4修正・2026-08-16】初回が一時的な接続断等で失敗すると、
+ * rejectされたPromiseがそのまま永久にキャッシュされ、以後の全呼び出しが再試行すら
+ * せず同じエラーで即失敗し続けていた。失敗時はキャッシュをクリアし、次回呼び出しで
+ * 再試行できるようにする。 */
 export function ensureSchema(): Promise<void> {
   if (!ensured) {
-    ensured = getPool().query(SCHEMA_SQL).then(() => undefined);
+    ensured = getPool()
+      .query(SCHEMA_SQL)
+      .then(() => undefined)
+      .catch((err) => {
+        ensured = null;
+        throw err;
+      });
   }
   return ensured;
 }
