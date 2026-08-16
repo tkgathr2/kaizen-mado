@@ -73,7 +73,7 @@ export async function runMigration(opts: {
            line_chat, notion_page_id, created_at, updated_at
          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,
            COALESCE($22::timestamptz, now()), COALESCE($23::timestamptz, now()))
-         ON CONFLICT (notion_page_id) DO UPDATE SET
+         ON CONFLICT (notion_page_id) WHERE notion_page_id IS NOT NULL DO UPDATE SET
            system=EXCLUDED.system, type=EXCLUDED.type, importance=EXCLUDED.importance,
            title=EXCLUDED.title, detail=EXCLUDED.detail, reporter=EXCLUDED.reporter,
            state=EXCLUDED.state, assignee=EXCLUDED.assignee, fgs_url=EXCLUDED.fgs_url,
