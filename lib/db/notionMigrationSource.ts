@@ -68,6 +68,10 @@ export interface ParsedTicket {
   slackChannelId: string | null;
   slackThreadTs: string | null;
   slackUserId: string | null;
+  /** 社長⇔カイゼンくんのLINE往復ログ（Notion「lineChat」rich_textプロパティ）。
+   * 【bug-check-lab High-2修正・2026-08-16】移行対象に含めないと既存チケットの
+   * 会話履歴が丸ごと空表示になる。 */
+  lineChat: string;
   createdTime: string | null;
   lastEdited: string | null;
 }
@@ -95,6 +99,7 @@ export function parseNotionPage(page: any): ParsedTicket {
     slackChannelId: plainFromRichText(props["Slack Channel ID"]) || null,
     slackThreadTs: plainFromRichText(props["Slack Thread TS"]) || null,
     slackUserId: plainFromRichText(props["Slack User ID"]) || null,
+    lineChat: plainFromRichText(props["lineChat"]),
     createdTime: typeof page?.created_time === "string" ? page.created_time : null,
     lastEdited: typeof page?.last_edited_time === "string" ? page.last_edited_time : null,
   };
@@ -129,7 +134,11 @@ export interface BlockEntry {
   createdTime: string | null;
 }
 
-export async function fetchDiscussionBlocks(token: string, notionPageId: string): Promise<BlockEntry[]> {
+export async function fetchDiscussionBlocks(
+  token: string,
+  notionPageId: string,
+  opts?: { throwOnError?: boolean }
+): Promise<BlockEntry[]> {
   const entries: BlockEntry[] = [];
   let cursor: string | undefined;
   let pages = 0;
@@ -138,7 +147,17 @@ export async function fetchDiscussionBlocks(token: string, notionPageId: string)
     url.searchParams.set("page_size", "100");
     if (cursor) url.searchParams.set("start_cursor", cursor);
     const res = await fetch(url.toString(), { method: "GET", headers: notionHeaders(token) });
-    if (!res.ok) return entries;
+    if (!res.ok) {
+      // 【bug-check-lab Medium-1対応・2026-08-16】移行時（throwOnError:true）はここで黙って
+      // 空配列を返さない。呼び出し元（migrate-tickets route）がトランザクションごと
+      // ROLLBACKして再実行時に取りこぼしを再試行できるようにするため、例外を投げる。
+      // それ以外の呼び出し元（将来の一時検証等）は従来どおり空配列にfail-safeする。
+      if (opts?.throwOnError) {
+        const t = await res.text().catch(() => "");
+        throw new Error(`Notion blocks fetch error ${res.status} (page=${notionPageId}): ${t.slice(0, 300)}`);
+      }
+      return entries;
+    }
     const data = await res.json();
     const blocks = Array.isArray(data?.results) ? data.results : [];
     for (const b of blocks) {
