@@ -1,4 +1,13 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
+
+// Postgres プールをモックする（Notion blocks API fetch のモックから移行・2026-08-16）。
+const { queryMock } = vi.hoisted(() => ({ queryMock: vi.fn() }));
+
+vi.mock("../db/pool", () => ({
+  getPool: () => ({ query: (...args: any[]) => queryMock(...args) }),
+  ensureSchema: async () => undefined,
+}));
+
 import {
   maxAutoRetries,
   summarizeRetryBlocks,
@@ -8,18 +17,28 @@ import {
 } from "../tickets";
 
 // reaper の自動リトライ上限（無限リトライ根絶・KZ-17事案）のカウント基盤テスト。
-// カウントの真実の源＝Notion議論ブロックの印（REAPER_RESET_HEADING）の数。
+// カウントの真実の源＝ticket_discussion_blocks に残る印（REAPER_RESET_HEADING）の数。
 
 function env(value?: string): NodeJS.ProcessEnv {
   return (value === undefined ? {} : { KAIZEN_MAX_RETRIES: value }) as unknown as NodeJS.ProcessEnv;
 }
 
-function h3(text: string) {
-  return { type: "heading_3", heading_3: { rich_text: [{ plain_text: text }] } };
+/** 議論ログ1行（見出しのみ） */
+function h(heading: string) {
+  return { heading, body: null };
 }
-function para(text: string) {
-  return { type: "paragraph", paragraph: { rich_text: [{ plain_text: text }] } };
+/** 議論ログ1行（本文のみ） */
+function p(body: string) {
+  return { heading: null, body };
 }
+
+function queueRows(...batches: any[][]) {
+  queryMock.mockReset();
+  for (const b of batches) queryMock.mockResolvedValueOnce({ rows: b });
+  queryMock.mockResolvedValue({ rows: [] });
+}
+
+beforeEach(() => queueRows());
 
 describe("maxAutoRetries（env KAIZEN_MAX_RETRIES・既定3）", () => {
   const saved = process.env.KAIZEN_MAX_RETRIES;
@@ -55,21 +74,20 @@ describe("summarizeRetryBlocks（印の数＝リトライ回数・直近失敗�
   });
 
   it("stuck回収の印を数える（0→1→2→3）", () => {
-    const marker = h3(REAPER_RESET_HEADING);
     for (let n = 0; n <= 3; n++) {
-      const blocks = Array.from({ length: n }, () => marker);
+      const blocks = Array.from({ length: n }, () => h(REAPER_RESET_HEADING));
       expect(summarizeRetryBlocks(blocks).count).toBe(n);
     }
   });
 
-  it("失敗理由（実装失敗/基盤エラー見出し直後のparagraph）を拾い、最後のものが勝つ", () => {
+  it("失敗理由（実装失敗/基盤エラー見出しに続く本文）を拾い、最後のものが勝つ", () => {
     const blocks = [
-      h3("実装失敗（差し戻し）"),
-      para("[IMPL_FAILED] tests failed: 3 assertions"),
-      h3(REAPER_RESET_HEADING),
-      para("「実装中」のまま30分以上応答が無かったため…"),
-      h3("基盤エラー（実装中のまま保持）"),
-      para("仕組み側の不調で進めませんでした。\n詳細：401 Unauthorized"),
+      h("実装失敗（差し戻し）"),
+      p("[IMPL_FAILED] tests failed: 3 assertions"),
+      h(REAPER_RESET_HEADING),
+      p("「実装中」のまま30分以上応答が無かったため…"),
+      h("基盤エラー（実装中のまま保持）"),
+      p("仕組み側の不調で進めませんでした。\n詳細：401 Unauthorized"),
     ];
     const info = summarizeRetryBlocks(blocks);
     expect(info.count).toBe(1);
@@ -77,78 +95,75 @@ describe("summarizeRetryBlocks（印の数＝リトライ回数・直近失敗�
     expect(info.lastFailure).toBe("401 Unauthorized");
   });
 
-  it("関係ない見出し直後のparagraphは失敗理由にしない", () => {
-    const blocks = [h3("自動着手"), para("実行ワークフローを起動")];
-    expect(summarizeRetryBlocks(blocks).lastFailure).toBeNull();
+  it("見出しと本文が同じ1行に入っていても同じ判定になる（Postgres版の実データ形）", () => {
+    const blocks = [
+      { heading: "実装失敗（差し戻し）", body: "詳細：build failed" },
+      { heading: REAPER_RESET_HEADING, body: "自動リセットしました" },
+    ];
+    const info = summarizeRetryBlocks(blocks);
+    expect(info.count).toBe(1);
+    expect(info.lastFailure).toBe("build failed");
+  });
+
+  it("関係ない見出しに続く本文は失敗理由にしない", () => {
+    expect(summarizeRetryBlocks([h("自動着手"), p("実行ワークフローを起動")]).lastFailure).toBeNull();
   });
 
   it("上限到達（RETRY_CAP_HEADING）以降の印だけ数える＝再GO後は枠が復活", () => {
     const blocks = [
-      h3(REAPER_RESET_HEADING),
-      h3(REAPER_RESET_HEADING),
-      h3(REAPER_RESET_HEADING),
-      h3(RETRY_CAP_HEADING),
-      para("自動改修を3回試して失敗したため停止しました。"),
-      h3(REAPER_RESET_HEADING),
+      h(REAPER_RESET_HEADING),
+      h(REAPER_RESET_HEADING),
+      h(REAPER_RESET_HEADING),
+      h(RETRY_CAP_HEADING),
+      p("自動改修を3回試して失敗したため停止しました。"),
+      h(REAPER_RESET_HEADING),
     ];
     expect(summarizeRetryBlocks(blocks).count).toBe(1);
   });
 });
 
 describe("getReaperRetryInfo（fail-safe＝失敗時は count=0 で『戻す側』に倒す）", () => {
-  const savedToken = process.env.NOTION_TOKEN;
-  const savedFetch = globalThis.fetch;
+  it("正常系：議論ログを挿入順(id昇順)で読み count/lastFailure を返す", async () => {
+    queueRows(
+      [{ id: "5" }], // pageId → 内部ID 解決
+      [
+        h(REAPER_RESET_HEADING),
+        h(REAPER_RESET_HEADING),
+        h("実装失敗（差し戻し）"),
+        p("[IMPL_FAILED] build failed"),
+      ]
+    );
 
-  beforeEach(() => {
-    process.env.NOTION_TOKEN = "test-token";
-  });
-  afterEach(() => {
-    if (savedToken === undefined) delete process.env.NOTION_TOKEN;
-    else process.env.NOTION_TOKEN = savedToken;
-    globalThis.fetch = savedFetch;
-    vi.restoreAllMocks();
-  });
-
-  it("正常系：ブロックを読み count/lastFailure を返す（ページネーション込み）", async () => {
-    const page1 = {
-      results: [h3(REAPER_RESET_HEADING), h3(REAPER_RESET_HEADING)],
-      has_more: true,
-      next_cursor: "c2",
-    };
-    const page2 = {
-      results: [h3("実装失敗（差し戻し）"), para("[IMPL_FAILED] build failed")],
-      has_more: false,
-    };
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce({ ok: true, json: async () => page1 })
-      .mockResolvedValueOnce({ ok: true, json: async () => page2 });
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
-
-    const info = await getReaperRetryInfo("page-1");
+    const info = await getReaperRetryInfo("00000000-0000-4000-8000-000000000005");
     expect(info.count).toBe(2);
     expect(info.lastFailure).toBe("[IMPL_FAILED] build failed");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    // 2ページ目は start_cursor 付きで呼ぶ。
-    expect(String(fetchMock.mock.calls[1][0])).toContain("start_cursor=c2");
+
+    // 時系列＝挿入順なので必ず id ASC で読む（ここが崩れるとリトライ集計が壊れる）。
+    const sql = String(queryMock.mock.calls[1][0]).replace(/\s+/g, " ").trim();
+    expect(sql).toContain("FROM ticket_discussion_blocks WHERE ticket_id = $1::bigint");
+    expect(sql).toContain("ORDER BY id ASC");
+    expect(queryMock.mock.calls[1][1]).toEqual(["5"]);
   });
 
-  it("HTTPエラー（res.ok=false）なら count=0 / lastFailure=null", async () => {
-    globalThis.fetch = vi
-      .fn()
-      .mockResolvedValue({ ok: false, status: 500, json: async () => ({}) }) as unknown as typeof fetch;
-    expect(await getReaperRetryInfo("page-1")).toEqual({ count: 0, lastFailure: null });
+  it("該当チケットが無ければ count=0 / lastFailure=null", async () => {
+    queueRows([]);
+    expect(await getReaperRetryInfo("00000000-0000-4000-8000-0000000000ff")).toEqual({
+      count: 0,
+      lastFailure: null,
+    });
   });
 
-  it("fetch例外でも count=0 / lastFailure=null（throwしない）", async () => {
-    globalThis.fetch = vi.fn().mockRejectedValue(new Error("network down")) as unknown as typeof fetch;
-    expect(await getReaperRetryInfo("page-1")).toEqual({ count: 0, lastFailure: null });
+  it("DB例外でも count=0 / lastFailure=null（throwしない）", async () => {
+    queryMock.mockReset();
+    queryMock.mockRejectedValue(new Error("connection refused"));
+    expect(await getReaperRetryInfo("00000000-0000-4000-8000-000000000005")).toEqual({
+      count: 0,
+      lastFailure: null,
+    });
   });
 
-  it("NOTION_TOKEN未設定・pageId空でも count=0（fail-safe）", async () => {
-    delete process.env.NOTION_TOKEN;
-    expect(await getReaperRetryInfo("page-1")).toEqual({ count: 0, lastFailure: null });
-    process.env.NOTION_TOKEN = "test-token";
+  it("pageId が空なら count=0（fail-safe・DBに触れない）", async () => {
     expect(await getReaperRetryInfo("")).toEqual({ count: 0, lastFailure: null });
+    expect(queryMock).not.toHaveBeenCalled();
   });
 });

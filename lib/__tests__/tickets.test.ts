@@ -1,11 +1,25 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+// Postgres プールをモックする（Notion API fetch のモックから移行・2026-08-16）。
+// lib/db/pool.ts の getPool()/ensureSchema() だけを差し替え、tickets.ts 本体は素で動かす。
+const { queryMock } = vi.hoisted(() => ({ queryMock: vi.fn() }));
+
+vi.mock("../db/pool", () => ({
+  getPool: () => ({ query: (...args: any[]) => queryMock(...args) }),
+  ensureSchema: async () => undefined,
+}));
+
 import {
   fetchTicketsByState,
   fetchAllTickets,
+  fetchTicketByPageId,
   fetchCompletedUnlearned,
+  fetchNonTerminalTickets,
   updateTicketState,
   setTicketUrlField,
   setPrUrl,
+  setTicketAssignee,
+  setStatusChangedAt,
   appendDiscussionBlocks,
   isStaleImplementing,
   staleImplementingMinutes,
@@ -15,94 +29,69 @@ import {
   matchDuplicate,
   findRecentDuplicate,
   findTicketByTicketId,
+  findGoMachiByTicketId,
+  findExistingBySlackThreadTs,
   type TicketRow,
 } from "../tickets";
 import type { Ticket } from "../types";
 
-// 指定件数ぶんのダミー結果ページを生成（has_more / next_cursor 制御つき）。
-function page(count: number, hasMore: boolean, cursor?: string) {
-  const results = Array.from({ length: count }, (_, i) => ({
-    id: `page-${cursor ?? "first"}-${i}`,
-    properties: {
-      ID: { type: "unique_id", unique_id: { prefix: "KZ", number: i + 1 } },
-      対象システム: { type: "select", select: { name: "プロレポ" } },
-      種別: { type: "select", select: { name: "改善" } },
-      重要度: { type: "select", select: { name: "中" } },
-      チケット名: { type: "title", title: [{ plain_text: `t${i}` }] },
-      内容: { type: "rich_text", rich_text: [] },
-      起票者: { type: "rich_text", rich_text: [] },
-      状態: { type: "select", select: { name: "完了" } },
-      FGSリンク: { type: "url", url: null },
-    },
-  }));
+/** app/api/board/proposal-token/route.ts が pageId に課している検証。
+ * ここを通らない pageId を返すと /board の GO/却下 ボタンが 400 で壊れる。 */
+const BOARD_UUID_RE =
+  /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i;
+
+const T0 = new Date("2026-06-26T12:00:00.000Z");
+
+function dbRow(over: Record<string, any> = {}) {
   return {
-    ok: true,
-    json: async () => ({ results, has_more: hasMore, next_cursor: hasMore ? (cursor ?? "cur-1") : null }),
+    id: "1",
+    ticket_number: 12,
+    system: "プロレポ",
+    type: "改善",
+    importance: "高",
+    title: "一覧が表示されない",
+    detail: "一覧ページが空になる",
+    reporter: "現場フォーム",
+    state: "受付",
+    assignee: "",
+    fgs_url: null,
+    pr_url: null,
+    urgency: null,
+    importance_score: null,
+    priority: null,
+    priority_reason: null,
+    status_changed_at: null,
+    slack_channel_id: null,
+    slack_thread_ts: null,
+    slack_user_id: null,
+    notion_page_id: null,
+    created_at: T0,
+    updated_at: T0,
+    ...over,
   };
 }
 
-// query 応答のダミー（properties一式入り1件）
-function queryResponse() {
-  return {
-    ok: true,
-    json: async () => ({
-      results: [
-        {
-          id: "page-abc-123",
-          properties: {
-            ID: { type: "unique_id", unique_id: { prefix: "KZ", number: 12 } },
-            対象システム: { type: "select", select: { name: "プロレポ" } },
-            種別: { type: "select", select: { name: "改善" } },
-            重要度: { type: "select", select: { name: "高" } },
-            チケット名: {
-              type: "title",
-              title: [{ plain_text: "一覧が" }, { plain_text: "表示されない" }],
-            },
-            内容: {
-              type: "rich_text",
-              rich_text: [{ plain_text: "一覧ページが空になる" }],
-            },
-            起票者: {
-              type: "rich_text",
-              rich_text: [{ plain_text: "現場フォーム" }],
-            },
-            状態: { type: "select", select: { name: "受付" } },
-            FGSリンク: { type: "url", url: null },
-          },
-        },
-      ],
-    }),
-  };
+/** 呼び出し順に返す行を仕込む。以降は空配列。 */
+function queueRows(...batches: any[][]) {
+  queryMock.mockReset();
+  for (const b of batches) queryMock.mockResolvedValueOnce({ rows: b });
+  queryMock.mockResolvedValue({ rows: [] });
 }
 
-describe("tickets", () => {
-  let originalToken: string | undefined;
-  let originalDbId: string | undefined;
-  let originalFetch: typeof global.fetch;
+const sqlOf = (i = 0) => String(queryMock.mock.calls[i][0]).replace(/\s+/g, " ").trim();
+const paramsOf = (i = 0) => queryMock.mock.calls[i][1];
 
-  beforeEach(() => {
-    originalToken = process.env.NOTION_TOKEN;
-    originalDbId = process.env.NOTION_DATABASE_ID;
-    originalFetch = global.fetch;
-    process.env.NOTION_TOKEN = "test-token";
-    process.env.NOTION_DATABASE_ID = "test-db";
-  });
+beforeEach(() => {
+  queueRows();
+});
 
-  afterEach(() => {
-    if (originalToken === undefined) delete process.env.NOTION_TOKEN;
-    else process.env.NOTION_TOKEN = originalToken;
-    if (originalDbId === undefined) delete process.env.NOTION_DATABASE_ID;
-    else process.env.NOTION_DATABASE_ID = originalDbId;
-    global.fetch = originalFetch;
-  });
-
-  it("fetchTicketsByState がプロパティを TicketRow に正しくマップする", async () => {
-    global.fetch = vi.fn().mockResolvedValue(queryResponse());
+describe("tickets（Postgres版）", () => {
+  it("fetchTicketsByState がDB行を TicketRow に正しくマップする", async () => {
+    queueRows([dbRow()]);
 
     const rows = await fetchTicketsByState("受付", 5);
     expect(rows).toHaveLength(1);
     const r = rows[0];
-    expect(r.pageId).toBe("page-abc-123");
     expect(r.ticketId).toBe("KZ-12");
     expect(r.system).toBe("プロレポ");
     expect(r.type).toBe("改善");
@@ -112,236 +101,233 @@ describe("tickets", () => {
     expect(r.reporter).toBe("現場フォーム");
     expect(r.state).toBe("受付");
     expect(r.fgsUrl).toBeNull();
+    expect(r.prUrl).toBeUndefined();
+    expect(r.lastEdited).toBe(T0.toISOString());
+    expect(r.createdTime).toBe(T0.toISOString());
   });
 
-  it("fetchTicketsByState は query エンドポイントへ正しい filter/page_size で POST する", async () => {
-    let capturedUrl = "";
-    let capturedInit: RequestInit = {};
-    global.fetch = vi.fn().mockImplementation((url: string, init: RequestInit) => {
-      capturedUrl = url;
-      capturedInit = init;
-      return Promise.resolve(queryResponse());
-    });
-
+  it("fetchTicketsByState は state で絞り limit を渡す", async () => {
+    queueRows([dbRow()]);
     await fetchTicketsByState("受付", 3);
-    expect(capturedUrl).toBe(
-      "https://api.notion.com/v1/databases/test-db/query"
-    );
-    expect(capturedInit.method).toBe("POST");
-    const body = JSON.parse(capturedInit.body as string);
-    expect(body.filter).toEqual({ property: "状態", select: { equals: "受付" } });
-    expect(body.page_size).toBe(3);
+    expect(sqlOf()).toContain("WHERE state = $1");
+    expect(sqlOf()).toContain("ORDER BY created_at DESC");
+    expect(paramsOf()).toEqual(["受付", 3]);
   });
 
-  it("updateTicketState は page を PATCH し状態 select を更新する", async () => {
-    let capturedUrl = "";
-    let capturedInit: RequestInit = {};
-    global.fetch = vi.fn().mockImplementation((url: string, init: RequestInit) => {
-      capturedUrl = url;
-      capturedInit = init;
-      return Promise.resolve({ ok: true, json: async () => ({}) });
-    });
-
-    await updateTicketState("page-xyz", "GO待ち");
-    expect(capturedUrl).toBe("https://api.notion.com/v1/pages/page-xyz");
-    expect(capturedInit.method).toBe("PATCH");
-    const body = JSON.parse(capturedInit.body as string);
-    expect(body.properties.状態).toEqual({ select: { name: "GO待ち" } });
-  });
-
-  it("setTicketUrlField は FGSリンク url を PATCH する", async () => {
-    let capturedInit: RequestInit = {};
-    global.fetch = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
-      capturedInit = init;
-      return Promise.resolve({ ok: true, json: async () => ({}) });
-    });
-
-    await setTicketUrlField("page-xyz", "knowhow://memorized");
-    expect(capturedInit.method).toBe("PATCH");
-    const body = JSON.parse(capturedInit.body as string);
-    expect(body.properties.FGSリンク).toEqual({ url: "knowhow://memorized" });
-  });
-
-  it("setPrUrl は PR URL プロパティを PATCH する（stallカードの prUrl 紐付け用）", async () => {
-    let capturedUrl = "";
-    let capturedInit: RequestInit = {};
-    global.fetch = vi.fn().mockImplementation((url: string, init: RequestInit) => {
-      capturedUrl = url;
-      capturedInit = init;
-      return Promise.resolve({ ok: true, json: async () => ({}) });
-    });
-
-    await setPrUrl("page-xyz", "https://github.com/tkgathr2/kaizen-mado/pull/12");
-    expect(capturedUrl).toBe("https://api.notion.com/v1/pages/page-xyz");
-    expect(capturedInit.method).toBe("PATCH");
-    const body = JSON.parse(capturedInit.body as string);
-    expect(body.properties["PR URL"]).toEqual({
-      url: "https://github.com/tkgathr2/kaizen-mado/pull/12",
-    });
-  });
-
-  it("setPrUrl はプロパティ未登録DB（Notionが400を返す）でthrowする（呼び出し側でcatchする前提）", async () => {
-    global.fetch = vi
-      .fn()
-      .mockResolvedValue({ ok: false, status: 400, text: async () => "Invalid property" });
-    await expect(setPrUrl("page-xyz", "https://x/pr/1")).rejects.toThrow(/Notion update error/);
-  });
-
-  it("parseRow: 「PR URL」プロパティがあれば prUrl に反映する", async () => {
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        results: [
-          {
-            id: "page-with-pr",
-            properties: {
-              ID: { type: "unique_id", unique_id: { prefix: "KZ", number: 131 } },
-              対象システム: { type: "select", select: { name: "カイゼンくん本体" } },
-              種別: { type: "select", select: { name: "改善" } },
-              重要度: { type: "select", select: { name: "中" } },
-              チケット名: { type: "title", title: [{ plain_text: "レビュー中の件" }] },
-              内容: { type: "rich_text", rich_text: [] },
-              起票者: { type: "rich_text", rich_text: [] },
-              状態: { type: "select", select: { name: "レビュー" } },
-              FGSリンク: { type: "url", url: null },
-              "PR URL": { type: "url", url: "https://github.com/tkgathr2/kaizen-mado/pull/12" },
-            },
-          },
-        ],
+  it("任意フィールド（PR URL・優先度・Slackメタ）が入っていれば TicketRow に反映する", async () => {
+    queueRows([
+      dbRow({
+        pr_url: "https://github.com/tkgathr2/kaizen-mado/pull/12",
+        urgency: 9,
+        importance_score: 8,
+        priority: "高",
+        priority_reason: "業務停止",
+        status_changed_at: T0,
+        slack_channel_id: "C123",
+        slack_thread_ts: "1720000000.0001",
+        slack_user_id: "U123",
       }),
-    });
-
-    const rows = await fetchTicketsByState("レビュー", 1);
-    expect(rows[0].prUrl).toBe("https://github.com/tkgathr2/kaizen-mado/pull/12");
-  });
-
-  it("parseRow: 「PR URL」プロパティが無い旧DB・未作成PRは prUrl が undefined", async () => {
-    global.fetch = vi.fn().mockResolvedValue(queryResponse());
-    const rows = await fetchTicketsByState("受付", 1);
-    expect(rows[0].prUrl).toBeUndefined();
-  });
-
-  it("appendDiscussionBlocks は blocks/children へ heading_3 と paragraph を PATCH する", async () => {
-    let capturedUrl = "";
-    let capturedInit: RequestInit = {};
-    global.fetch = vi.fn().mockImplementation((url: string, init: RequestInit) => {
-      capturedUrl = url;
-      capturedInit = init;
-      return Promise.resolve({ ok: true, json: async () => ({}) });
-    });
-
-    await appendDiscussionBlocks("page-xyz", [
-      { heading: "方針", body: "対応します" },
     ]);
-    expect(capturedUrl).toBe(
-      "https://api.notion.com/v1/blocks/page-xyz/children"
+    const r = (await fetchTicketsByState("レビュー", 1))[0];
+    expect(r.prUrl).toBe("https://github.com/tkgathr2/kaizen-mado/pull/12");
+    expect(r.urgency).toBe(9);
+    expect(r.importanceScore).toBe(8);
+    expect(r.priority).toBe("高");
+    expect(r.priorityReason).toBe("業務停止");
+    expect(r.statusChangedAt).toBe(T0.toISOString());
+    expect(r.slackChannelId).toBe("C123");
+    expect(r.slackThreadTs).toBe("1720000000.0001");
+    expect(r.slackUserId).toBe("U123");
+  });
+
+  it("fetchAllTickets は updated_at の新しい順で引く（/board の並び）", async () => {
+    queueRows([dbRow()]);
+    await fetchAllTickets(250);
+    expect(sqlOf()).toContain("ORDER BY updated_at DESC");
+    expect(paramsOf()).toEqual([250]);
+  });
+
+  it("fetchCompletedUnlearned は 完了 かつ FGSリンク空 を引く", async () => {
+    queueRows([dbRow({ state: "完了" })]);
+    await fetchCompletedUnlearned(10);
+    expect(sqlOf()).toContain("(fgs_url IS NULL OR fgs_url = '')");
+    expect(paramsOf()).toEqual(["完了", 10]);
+  });
+
+  it("fetchNonTerminalTickets は4状態を1クエリ（state = ANY）でまとめて引く", async () => {
+    queueRows([dbRow({ state: "GO待ち" })]);
+    await fetchNonTerminalTickets(50);
+    expect(sqlOf()).toContain("state = ANY($1)");
+    expect(paramsOf()[0]).toEqual(["GO待ち", "差し戻し", "レビュー", "真田実装中"]);
+    expect(paramsOf()[1]).toBe(50);
+    // Notion版のような状態ごとの複数クエリにはしない。
+    expect(queryMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── pageId 設計（移行の最重要ポイント）──
+describe("pageId の組み立てと逆引き", () => {
+  it("移行データ（notion_page_id あり）は実Notion UUIDをそのまま pageId にする", async () => {
+    const notionId = "1f2e3d4c-5b6a-7988-9a0b-1c2d3e4f5061";
+    queueRows([dbRow({ notion_page_id: notionId })]);
+    const r = (await fetchTicketsByState("受付", 1))[0];
+    expect(r.pageId).toBe(notionId);
+  });
+
+  it("新規チケット（notion_page_id なし）は内部IDから合成したUUID形式の pageId になる", async () => {
+    queueRows([dbRow({ id: "42", notion_page_id: null })]);
+    const r = (await fetchTicketsByState("受付", 1))[0];
+    expect(r.pageId).toBe("00000000-0000-4000-8000-00000000002a");
+  });
+
+  it("★合成 pageId は /board の proposal-token の UUID 検証を通る（通らないとGO/却下が壊れる）", async () => {
+    for (const id of ["1", "42", "999999", "2147483647"]) {
+      queueRows([dbRow({ id, notion_page_id: null })]);
+      const r = (await fetchTicketsByState("受付", 1))[0];
+      expect(BOARD_UUID_RE.test(r.pageId)).toBe(true);
+    }
+  });
+
+  it("合成 pageId は内部IDへ逆変換され id で直引きされる", async () => {
+    queueRows([dbRow({ id: "42" })]);
+    await fetchTicketByPageId("00000000-0000-4000-8000-00000000002a");
+    expect(sqlOf()).toContain("WHERE id = $1::bigint");
+    expect(paramsOf()).toEqual(["42"]);
+  });
+
+  it("実Notion UUID は notion_page_id で引く（移行済みチケットの既存リンクが生きる）", async () => {
+    const notionId = "1f2e3d4c5b6a79889a0b1c2d3e4f5061";
+    queueRows([dbRow({ notion_page_id: notionId })]);
+    await fetchTicketByPageId(notionId);
+    expect(sqlOf()).toContain("WHERE notion_page_id = $1");
+    expect(paramsOf()).toEqual([notionId]);
+  });
+
+  it("裸の数値 pageId も内部IDとして受ける（防御的）", async () => {
+    queueRows([dbRow()]);
+    await fetchTicketByPageId("7");
+    expect(sqlOf()).toContain("WHERE id = $1::bigint");
+    expect(paramsOf()).toEqual(["7"]);
+  });
+
+  it("pageId が空ならDBに触れず null", async () => {
+    expect(await fetchTicketByPageId("")).toBeNull();
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+
+  it("該当行が無ければ null", async () => {
+    queueRows([]);
+    expect(await fetchTicketByPageId("00000000-0000-4000-8000-000000000001")).toBeNull();
+  });
+});
+
+// ── 更新系 ──
+describe("更新系（updated_at を必ず進める）", () => {
+  it("updateTicketState は state と updated_at を更新する", async () => {
+    await updateTicketState("00000000-0000-4000-8000-000000000005", "GO待ち");
+    expect(sqlOf()).toBe(
+      "UPDATE tickets SET state = $2, updated_at = now() WHERE id = $1::bigint"
     );
-    expect(capturedInit.method).toBe("PATCH");
-    const body = JSON.parse(capturedInit.body as string);
-    expect(body.children).toHaveLength(2);
-    expect(body.children[0].type).toBe("heading_3");
-    expect(body.children[1].type).toBe("paragraph");
-    expect(body.children[0].heading_3.rich_text[0].text.content).toBe("方針");
-    expect(body.children[1].paragraph.rich_text[0].text.content).toBe("対応します");
+    expect(paramsOf()).toEqual(["5", "GO待ち"]);
   });
 
-  it("token 未設定のとき throw する", async () => {
-    delete process.env.NOTION_TOKEN;
-    global.fetch = vi.fn();
-    await expect(fetchTicketsByState("受付")).rejects.toThrow();
+  it("setTicketUrlField は fgs_url を更新する", async () => {
+    await setTicketUrlField("5", "knowhow://memorized");
+    expect(sqlOf()).toContain("SET fgs_url = $2");
+    expect(paramsOf()).toEqual(["5", "knowhow://memorized"]);
   });
 
-  it("query 応答が ok=false のとき throw する", async () => {
-    global.fetch = vi
-      .fn()
-      .mockResolvedValue({ ok: false, status: 500, text: async () => "err" });
-    await expect(fetchTicketsByState("受付")).rejects.toThrow(/Notion query error/);
+  it("setPrUrl は pr_url を更新する（列が常にあるので旧実装のような400は起きない）", async () => {
+    await setPrUrl("5", "https://github.com/tkgathr2/kaizen-mado/pull/12");
+    expect(sqlOf()).toContain("SET pr_url = $2");
+    expect(paramsOf()).toEqual(["5", "https://github.com/tkgathr2/kaizen-mado/pull/12"]);
   });
 
-  // ── ページネーション（has_more / next_cursor）対応 ──
-  it("fetchAllTickets は has_more の間 start_cursor を付けて全件取得する", async () => {
-    const captured: any[] = [];
-    let call = 0;
-    global.fetch = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
-      captured.push(JSON.parse(init.body as string));
-      call++;
-      // 1ページ目: 100件 has_more=true、2ページ目: 30件 has_more=false。
-      return Promise.resolve(call === 1 ? page(100, true, "cur-1") : page(30, false));
-    });
-
-    const rows = await fetchAllTickets(500);
-    expect(rows).toHaveLength(130); // 100 + 30 を取りこぼさず合算
-    expect(captured).toHaveLength(2);
-    expect(captured[0].start_cursor).toBeUndefined(); // 1回目はカーソルなし
-    expect(captured[1].start_cursor).toBe("cur-1"); // 2回目は前回のnext_cursor
-    expect(captured[0].sorts).toBeTruthy(); // ボードはsorts付き
+  it("setTicketAssignee は assignee を更新する（Notionの1900字切り詰めは廃止）", async () => {
+    const long = "あ".repeat(2500);
+    await setTicketAssignee("5", long);
+    expect(sqlOf()).toContain("SET assignee = $2");
+    expect(paramsOf()[1]).toHaveLength(2500);
   });
 
-  it("fetchAllTickets は limit に達したら has_more でも止める", async () => {
-    let call = 0;
-    global.fetch = vi.fn().mockImplementation(() => {
-      call++;
-      return Promise.resolve(page(100, true, "cur-1"));
-    });
-    const rows = await fetchAllTickets(100);
-    expect(rows).toHaveLength(100);
-    expect(call).toBe(1); // limitちょうどで2ページ目を引かない
+  it("setStatusChangedAt は status_changed_at を ISO で更新する", async () => {
+    await setStatusChangedAt("5", T0);
+    expect(sqlOf()).toContain("SET status_changed_at = $2");
+    expect(paramsOf()).toEqual(["5", T0.toISOString()]);
   });
 
-  it("fetchCompletedUnlearned もページネーションで全件取得する", async () => {
-    let call = 0;
-    global.fetch = vi.fn().mockImplementation(() => {
-      call++;
-      return Promise.resolve(call === 1 ? page(100, true, "cur-1") : page(5, false));
-    });
-    const rows = await fetchCompletedUnlearned(1000);
-    expect(rows).toHaveLength(105);
-    expect(call).toBe(2);
+  it("setStatusChangedAt はDB例外を握り潰す（状態遷移を巻き添えにしない）", async () => {
+    queryMock.mockReset();
+    queryMock.mockRejectedValue(new Error("connection lost"));
+    await expect(setStatusChangedAt("5", T0)).resolves.toBeUndefined();
   });
 
-  // ── stuck回収（reaper）：実装中の滞留判定・取得 ──
-  it("fetchStaleImplementing は『実装中』を取得し lastEdited が閾値超のものだけ返す", async () => {
+  it("pageId が空の更新は no-op（DBに触れない）", async () => {
+    await updateTicketState("", "完了");
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+});
+
+// ── 議論ログ（追記専用・挿入順が命）──
+describe("appendDiscussionBlocks", () => {
+  it("チケットを解決し、1回のINSERTで挿入順どおりに複数行を追記する", async () => {
+    queueRows([{ id: "5" }]);
+    await appendDiscussionBlocks("00000000-0000-4000-8000-000000000005", [
+      { heading: "方針", body: "対応します" },
+      { heading: "続報" },
+      { body: "完了しました" },
+    ]);
+
+    // 1回目=ID解決 / 2回目=INSERT / 3回目=updated_at 更新
+    expect(queryMock).toHaveBeenCalledTimes(3);
+    expect(sqlOf(0)).toContain("SELECT id FROM tickets WHERE id = $1::bigint");
+
+    expect(sqlOf(1)).toBe(
+      "INSERT INTO ticket_discussion_blocks (ticket_id, heading, body) VALUES " +
+        "($1::bigint, $2, $3), ($1::bigint, $4, $5), ($1::bigint, $6, $7)"
+    );
+    expect(paramsOf(1)).toEqual([
+      "5",
+      "方針", "対応します",
+      "続報", null,
+      null, "完了しました",
+    ]);
+
+    expect(sqlOf(2)).toContain("UPDATE tickets SET updated_at = now()");
+  });
+
+  it("空の lines はDBに触れない", async () => {
+    await appendDiscussionBlocks("5", []);
+    await appendDiscussionBlocks("5", [{}, { heading: "", body: "" }]);
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+
+  it("該当チケットが無ければ throw する（Notion時代の404相当）", async () => {
+    queueRows([]);
+    await expect(
+      appendDiscussionBlocks("00000000-0000-4000-8000-0000000000ff", [{ heading: "x" }])
+    ).rejects.toThrow(/チケットが見つかりません/);
+  });
+});
+
+// ── stuck回収（reaper）──
+describe("fetchStaleImplementing", () => {
+  it("『実装中』を取得し lastEdited が閾値超のものだけ返す", async () => {
     const now = Date.parse("2026-06-26T12:00:00.000Z");
-    const mk = (id: string, editedIso: string) => ({
-      id,
-      last_edited_time: editedIso,
-      properties: {
-        ID: { type: "unique_id", unique_id: { prefix: "KZ", number: 1 } },
-        対象システム: { type: "select", select: { name: "カイゼンくん本体" } },
-        種別: { type: "select", select: { name: "改善" } },
-        重要度: { type: "select", select: { name: "中" } },
-        チケット名: { type: "title", title: [{ plain_text: id }] },
-        内容: { type: "rich_text", rich_text: [] },
-        起票者: { type: "rich_text", rich_text: [] },
-        状態: { type: "select", select: { name: "実装中" } },
-        FGSリンク: { type: "url", url: null },
-      },
-    });
-    let capturedBody: any = null;
-    global.fetch = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
-      capturedBody = JSON.parse(init.body as string);
-      return Promise.resolve({
-        ok: true,
-        json: async () => ({
-          results: [
-            mk("fresh", "2026-06-26T11:50:00.000Z"), // 10分前＝閾値未満（残す対象でない）
-            mk("stuck", "2026-06-26T11:20:00.000Z"), // 40分前＝閾値超（回収対象）
-          ],
-        }),
-      });
-    });
+    queueRows([
+      dbRow({ id: "1", title: "fresh", state: "実装中", updated_at: new Date("2026-06-26T11:50:00.000Z") }),
+      dbRow({ id: "2", title: "stuck", state: "実装中", updated_at: new Date("2026-06-26T11:20:00.000Z") }),
+    ]);
 
     const rows = await fetchStaleImplementing(30, 10, now);
-    // 「実装中」でフィルタしてクエリしている
-    expect(capturedBody.filter).toEqual({ property: "状態", select: { equals: "実装中" } });
-    // 40分前の1件だけが stuck として返る
+    expect(paramsOf()).toEqual(["実装中", 10]);
     expect(rows.map((r) => r.title)).toEqual(["stuck"]);
   });
 
   it("staleImplementingMinutes は env 既定30・正の数のみ採用", () => {
     expect(staleImplementingMinutes({} as NodeJS.ProcessEnv)).toBe(30);
     expect(staleImplementingMinutes({ KAIZEN_STUCK_MINUTES: "45" } as any)).toBe(45);
-    expect(staleImplementingMinutes({ KAIZEN_STUCK_MINUTES: "0" } as any)).toBe(30); // 0は不採用→既定
+    expect(staleImplementingMinutes({ KAIZEN_STUCK_MINUTES: "0" } as any)).toBe(30);
     expect(staleImplementingMinutes({ KAIZEN_STUCK_MINUTES: "-5" } as any)).toBe(30);
     expect(staleImplementingMinutes({ KAIZEN_STUCK_MINUTES: "abc" } as any)).toBe(30);
   });
@@ -352,12 +338,12 @@ describe("isStaleImplementing（stuck判定の純粋ロジック）", () => {
   const base = { state: "実装中" as const };
 
   it("実装中＋閾値以上の経過は stuck（true）", () => {
-    expect(isStaleImplementing({ ...base, lastEdited: "2026-06-26T11:20:00.000Z" }, now, 30)).toBe(true); // 40分前
-    expect(isStaleImplementing({ ...base, lastEdited: "2026-06-26T11:30:00.000Z" }, now, 30)).toBe(true); // ちょうど30分前（>=）
+    expect(isStaleImplementing({ ...base, lastEdited: "2026-06-26T11:20:00.000Z" }, now, 30)).toBe(true);
+    expect(isStaleImplementing({ ...base, lastEdited: "2026-06-26T11:30:00.000Z" }, now, 30)).toBe(true);
   });
 
   it("実装中でも閾値未満なら stuck でない（false）", () => {
-    expect(isStaleImplementing({ ...base, lastEdited: "2026-06-26T11:45:00.000Z" }, now, 30)).toBe(false); // 15分前
+    expect(isStaleImplementing({ ...base, lastEdited: "2026-06-26T11:45:00.000Z" }, now, 30)).toBe(false);
   });
 
   it("状態が実装中でなければ常に false（巻き戻さない）", () => {
@@ -372,20 +358,20 @@ describe("isStaleImplementing（stuck判定の純粋ロジック）", () => {
   });
 });
 
-// ── 起票前 冪等チェック（インスタンス跨ぎの真の二重起票防止） ──
+// ── 起票前 冪等チェック ──
 describe("submitDedupSeconds / anonSubmitDedupSeconds（時間窓）", () => {
   it("既定15秒・正の数のみ採用・1〜600にクランプ", () => {
     expect(submitDedupSeconds({} as NodeJS.ProcessEnv)).toBe(15);
     expect(submitDedupSeconds({ KAIZEN_SUBMIT_DEDUP_SECONDS: "30" } as any)).toBe(30);
-    expect(submitDedupSeconds({ KAIZEN_SUBMIT_DEDUP_SECONDS: "0" } as any)).toBe(15); // 0は不採用→既定
+    expect(submitDedupSeconds({ KAIZEN_SUBMIT_DEDUP_SECONDS: "0" } as any)).toBe(15);
     expect(submitDedupSeconds({ KAIZEN_SUBMIT_DEDUP_SECONDS: "-5" } as any)).toBe(15);
     expect(submitDedupSeconds({ KAIZEN_SUBMIT_DEDUP_SECONDS: "abc" } as any)).toBe(15);
-    expect(submitDedupSeconds({ KAIZEN_SUBMIT_DEDUP_SECONDS: "9999" } as any)).toBe(600); // 上限クランプ
+    expect(submitDedupSeconds({ KAIZEN_SUBMIT_DEDUP_SECONDS: "9999" } as any)).toBe(600);
   });
 
   it("匿名の窓は記名の半分（最低1秒）", () => {
-    expect(anonSubmitDedupSeconds({} as NodeJS.ProcessEnv)).toBe(7); // 15/2=7.5→7
-    expect(anonSubmitDedupSeconds({ KAIZEN_SUBMIT_DEDUP_SECONDS: "1" } as any)).toBe(1); // 1/2→最低1
+    expect(anonSubmitDedupSeconds({} as NodeJS.ProcessEnv)).toBe(7);
+    expect(anonSubmitDedupSeconds({ KAIZEN_SUBMIT_DEDUP_SECONDS: "1" } as any)).toBe(1);
   });
 });
 
@@ -413,51 +399,27 @@ describe("matchDuplicate（完全同一内容の厳密照合）", () => {
   });
 
   it("記名：完全同一内容＋同一起票者はヒット（正規化・全半角/大小/空白吸収）", () => {
-    const rows = [row({ title: "  写真が横倒し " })];
-    expect(matchDuplicate(rows, tk(), "高木", false)?.pageId).toBe("p-1");
+    expect(matchDuplicate([row({ title: "  写真が横倒し " })], tk(), "高木", false)?.pageId).toBe("p-1");
   });
 
   it("記名：起票者が違えばヒットしない（別人の同一内容は通す）", () => {
-    const rows = [row({ reporter: "脇本" })];
-    expect(matchDuplicate(rows, tk(), "高木", false)).toBeNull();
+    expect(matchDuplicate([row({ reporter: "脇本" })], tk(), "高木", false)).toBeNull();
   });
 
   it("内容（detail）が違えばヒットしない（正当な別の声は通す）", () => {
-    const rows = [row({ detail: "別の不具合" })];
-    expect(matchDuplicate(rows, tk(), "高木", false)).toBeNull();
+    expect(matchDuplicate([row({ detail: "別の不具合" })], tk(), "高木", false)).toBeNull();
   });
 
   it("重要度が違えばヒットしない", () => {
-    const rows = [row({ importance: "高" })];
-    expect(matchDuplicate(rows, tk(), "高木", false)).toBeNull();
+    expect(matchDuplicate([row({ importance: "高" })], tk(), "高木", false)).toBeNull();
   });
 
   it("匿名：起票者を見ず内容完全一致のみでヒット", () => {
-    const rows = [row({ reporter: "現場フォーム" })];
-    expect(matchDuplicate(rows, tk(), null, true)?.pageId).toBe("p-1");
+    expect(matchDuplicate([row({ reporter: "現場フォーム" })], tk(), null, true)?.pageId).toBe("p-1");
   });
 });
 
-describe("findRecentDuplicate（Notion段の起票前 冪等チェック）", () => {
-  let originalToken: string | undefined;
-  let originalDbId: string | undefined;
-  let originalFetch: typeof global.fetch;
-
-  beforeEach(() => {
-    originalToken = process.env.NOTION_TOKEN;
-    originalDbId = process.env.NOTION_DATABASE_ID;
-    originalFetch = global.fetch;
-    process.env.NOTION_TOKEN = "test-token";
-    process.env.NOTION_DATABASE_ID = "test-db";
-  });
-  afterEach(() => {
-    if (originalToken === undefined) delete process.env.NOTION_TOKEN;
-    else process.env.NOTION_TOKEN = originalToken;
-    if (originalDbId === undefined) delete process.env.NOTION_DATABASE_ID;
-    else process.env.NOTION_DATABASE_ID = originalDbId;
-    global.fetch = originalFetch;
-  });
-
+describe("findRecentDuplicate（DB段の起票前 冪等チェック）", () => {
   const tk: Ticket = {
     system: "ほうこちゃん",
     type: "改善",
@@ -466,144 +428,113 @@ describe("findRecentDuplicate（Notion段の起票前 冪等チェック）", ()
     importance: "中",
   };
 
-  // Notion query 応答（1件・指定内容）を作る
-  function notionRow(over: { title?: string; detail?: string; reporter?: string; system?: string } = {}) {
-    return {
-      id: "page-dup-1",
-      created_time: "2026-06-26T12:00:00.000Z",
-      properties: {
-        ID: { type: "unique_id", unique_id: { prefix: "KZ", number: 7 } },
-        対象システム: { type: "select", select: { name: over.system ?? "ほうこちゃん" } },
-        種別: { type: "select", select: { name: "改善" } },
-        重要度: { type: "select", select: { name: "中" } },
-        チケット名: { type: "title", title: [{ plain_text: over.title ?? "写真が横倒し" }] },
-        内容: { type: "rich_text", rich_text: [{ plain_text: over.detail ?? "PDFで回転する" }] },
-        起票者: { type: "rich_text", rich_text: [{ plain_text: over.reporter ?? "高木" }] },
-        状態: { type: "select", select: { name: "受付" } },
-        FGSリンク: { type: "url", url: null },
-      },
-    };
-  }
-
-  it("メモリ段をすり抜けた同一内容を Notion 段で検出して既存を返す（記名）", async () => {
-    let capturedBody: any = null;
-    global.fetch = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
-      capturedBody = JSON.parse(init.body as string);
-      return Promise.resolve({ ok: true, json: async () => ({ results: [notionRow()] }) });
+  const dupRow = (over: Record<string, any> = {}) =>
+    dbRow({
+      ticket_number: 7,
+      system: "ほうこちゃん",
+      type: "改善",
+      importance: "中",
+      title: "写真が横倒し",
+      detail: "PDFで回転する",
+      reporter: "高木",
+      ...over,
     });
+
+  it("メモリ段をすり抜けた同一内容をDB段で検出して既存を返す（記名）", async () => {
+    queueRows([dupRow()]);
     const hit = await findRecentDuplicate(tk, "高木");
     expect(hit?.ticketId).toBe("KZ-7");
-    // created_time 窓＋対象システム＋起票者で絞っている
-    const and = capturedBody.filter.and;
-    expect(and[0].timestamp).toBe("created_time");
-    expect(and[0].created_time.on_or_after).toBeTruthy();
-    expect(and[1]).toEqual({ property: "対象システム", select: { equals: "ほうこちゃん" } });
-    expect(and[2]).toEqual({ property: "起票者", rich_text: { equals: "高木" } });
+    // created_at 窓＋対象システム＋起票者で絞っている
+    expect(sqlOf()).toContain("created_at >= $1::timestamptz");
+    expect(sqlOf()).toContain("system = $2");
+    expect(sqlOf()).toContain("reporter = $3");
+    expect(paramsOf()[1]).toBe("ほうこちゃん");
+    expect(paramsOf()[2]).toBe("高木");
   });
 
   it("別内容は弾かない（null＝通常作成にフォールバック）", async () => {
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ results: [notionRow({ detail: "全く別の不具合" })] }),
-    });
+    queueRows([dupRow({ detail: "全く別の不具合" })]);
     expect(await findRecentDuplicate(tk, "高木")).toBeNull();
   });
 
   it("匿名は起票者フィルタを付けず内容完全一致のみで検出する", async () => {
-    let capturedBody: any = null;
-    global.fetch = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
-      capturedBody = JSON.parse(init.body as string);
-      return Promise.resolve({ ok: true, json: async () => ({ results: [notionRow({ reporter: "現場フォーム" })] }) });
-    });
+    queueRows([dupRow({ reporter: "現場フォーム" })]);
     const hit = await findRecentDuplicate(tk, null);
     expect(hit?.ticketId).toBe("KZ-7");
-    // 起票者フィルタは付かない（and は2要素＝窓＋システムのみ）
-    expect(capturedBody.filter.and).toHaveLength(2);
+    expect(sqlOf()).not.toContain("reporter = $3");
+    expect(paramsOf()).toHaveLength(2);
   });
 
-  it("Notion クエリ失敗時は握りつぶして null（起票を止めない＝声を取りこぼさない）", async () => {
-    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 500, text: async () => "boom" });
-    expect(await findRecentDuplicate(tk, "高木")).toBeNull();
-  });
-
-  it("認証未設定でも throw せず null（fail-safe）", async () => {
-    delete process.env.NOTION_TOKEN;
-    global.fetch = vi.fn();
+  it("DBクエリ失敗時は握りつぶして null（起票を止めない＝声を取りこぼさない）", async () => {
+    queryMock.mockReset();
+    queryMock.mockRejectedValue(new Error("connection refused"));
     expect(await findRecentDuplicate(tk, "高木")).toBeNull();
   });
 });
 
 describe("findTicketByTicketId（POST /api/kaizen/reply の書き戻し先探索）", () => {
-  let originalToken: string | undefined;
-  let originalDbId: string | undefined;
-  let originalFetch: typeof global.fetch;
-
-  beforeEach(() => {
-    originalToken = process.env.NOTION_TOKEN;
-    originalDbId = process.env.NOTION_DATABASE_ID;
-    originalFetch = global.fetch;
-    process.env.NOTION_TOKEN = "test-token";
-    process.env.NOTION_DATABASE_ID = "test-db";
-  });
-  afterEach(() => {
-    if (originalToken === undefined) delete process.env.NOTION_TOKEN;
-    else process.env.NOTION_TOKEN = originalToken;
-    if (originalDbId === undefined) delete process.env.NOTION_DATABASE_ID;
-    else process.env.NOTION_DATABASE_ID = originalDbId;
-    global.fetch = originalFetch;
-  });
-
-  it("ticketId の番号部分で unique_id フィルタを組み立て、状態を問わず1件返す", async () => {
-    let capturedBody: any = null;
-    global.fetch = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
-      capturedBody = JSON.parse(init.body as string);
-      return Promise.resolve({
-        ok: true,
-        json: async () => ({
-          results: [
-            {
-              id: "page-reply-1",
-              properties: {
-                ID: { type: "unique_id", unique_id: { prefix: "KZ", number: 12 } },
-                対象システム: { type: "select", select: { name: "プロレポ" } },
-                種別: { type: "select", select: { name: "改善" } },
-                重要度: { type: "select", select: { name: "中" } },
-                チケット名: { type: "title", title: [{ plain_text: "件名" }] },
-                内容: { type: "rich_text", rich_text: [] },
-                起票者: { type: "rich_text", rich_text: [] },
-                状態: { type: "select", select: { name: "差し戻し" } },
-                FGSリンク: { type: "url", url: null },
-              },
-            },
-          ],
-        }),
-      });
-    });
-
+  it("ticketId の番号部分で ticket_number を引き、状態を問わず1件返す", async () => {
+    queueRows([dbRow({ ticket_number: 12, state: "差し戻し" })]);
     const hit = await findTicketByTicketId("KZ-12");
-
-    expect(hit?.pageId).toBe("page-reply-1");
     expect(hit?.ticketId).toBe("KZ-12");
     expect(hit?.state).toBe("差し戻し");
-    expect(capturedBody.filter).toEqual({ property: "ID", unique_id: { equals: 12 } });
+    expect(sqlOf()).toContain("WHERE ticket_number = $1");
+    expect(paramsOf()).toEqual([12]);
   });
 
   it("該当チケットが無ければ null", async () => {
-    global.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ results: [] }) });
+    queueRows([]);
     expect(await findTicketByTicketId("KZ-999")).toBeNull();
   });
 
-  it("不正な形式（数字が取れない）なら Notion へ問い合わせず null", async () => {
-    const fetchMock = vi.fn();
-    global.fetch = fetchMock;
+  it("不正な形式・空文字ならDBに問い合わせず null", async () => {
     expect(await findTicketByTicketId("not-a-ticket-id")).toBeNull();
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await findTicketByTicketId("")).toBeNull();
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("findGoMachiByTicketId", () => {
+  it("連番と GO待ち で1件引く", async () => {
+    queueRows([dbRow({ ticket_number: 12, state: "GO待ち" })]);
+    const hit = await findGoMachiByTicketId("KZ-12");
+    expect(hit?.ticketId).toBe("KZ-12");
+    expect(sqlOf()).toContain("WHERE ticket_number = $1 AND state = $2");
+    expect(paramsOf()).toEqual([12, "GO待ち"]);
   });
 
-  it("空文字なら null", async () => {
-    const fetchMock = vi.fn();
-    global.fetch = fetchMock;
-    expect(await findTicketByTicketId("")).toBeNull();
-    expect(fetchMock).not.toHaveBeenCalled();
+  it("小文字も受ける（kz-12）", async () => {
+    queueRows([dbRow({ ticket_number: 12, state: "GO待ち" })]);
+    expect((await findGoMachiByTicketId("kz-12"))?.ticketId).toBe("KZ-12");
+  });
+
+  it("表記ゆれ（KZ-012・別prefix）はDBに触れず null（Notion版と同じ厳密さ）", async () => {
+    expect(await findGoMachiByTicketId("KZ-012")).toBeNull();
+    expect(await findGoMachiByTicketId("AB-12")).toBeNull();
+    expect(await findGoMachiByTicketId("")).toBeNull();
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("findExistingBySlackThreadTs", () => {
+  it("thread_ts + channel_id + 未終端3状態 で直近1件を引く", async () => {
+    queueRows([dbRow({ slack_thread_ts: "1720000000.0001", slack_channel_id: "C1" })]);
+    const hit = await findExistingBySlackThreadTs("1720000000.0001", "C1");
+    expect(hit?.ticketId).toBe("KZ-12");
+    expect(sqlOf()).toContain("slack_thread_ts = $1 AND slack_channel_id = $2");
+    expect(sqlOf()).toContain("state = ANY($3)");
+    expect(paramsOf()[2]).toEqual(["受付", "GO待ち", "議論中"]);
+  });
+
+  it("引数が欠けていればDBに触れず null", async () => {
+    expect(await findExistingBySlackThreadTs("", "C1")).toBeNull();
+    expect(await findExistingBySlackThreadTs("ts", "")).toBeNull();
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+
+  it("DB失敗時は握りつぶして null（fail-safe＝起票を止めない）", async () => {
+    queryMock.mockReset();
+    queryMock.mockRejectedValue(new Error("boom"));
+    expect(await findExistingBySlackThreadTs("ts", "C1")).toBeNull();
   });
 });

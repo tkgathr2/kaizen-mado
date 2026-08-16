@@ -1,83 +1,93 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+// チケット取得元が Notion API → Postgres へ移行したため（2026-08-16）、
+// このテストも「Notionのquery応答モック」から「pgプールのモック」へ切り替えた。
+// knowhow（/api/devin/memorize）側は従来どおり global.fetch のモックで検証する。
+const { queryMock } = vi.hoisted(() => ({ queryMock: vi.fn() }));
+
+vi.mock("../db/pool", () => ({
+  getPool: () => ({ query: (...args: any[]) => queryMock(...args) }),
+  ensureSchema: async () => undefined,
+}));
+
 import {
   returnLearningFromCompleted,
   returnLearningFromFailed,
 } from "../learn";
 
-// 完了済み未学習チケット1件を返す query 応答
-function completedQueryResponse() {
+const T0 = new Date("2026-06-26T12:00:00.000Z");
+
+function dbRow(over: Record<string, any> = {}) {
   return {
-    ok: true,
-    json: async () => ({
-      results: [
-        {
-          id: "page-done-1",
-          properties: {
-            ID: { type: "unique_id", unique_id: { prefix: "KZ", number: 5 } },
-            対象システム: { type: "select", select: { name: "プロレポ" } },
-            種別: { type: "select", select: { name: "bug" } },
-            重要度: { type: "select", select: { name: "高" } },
-            チケット名: { type: "title", title: [{ plain_text: "エラー修正" }] },
-            内容: { type: "rich_text", rich_text: [{ plain_text: "500が出る" }] },
-            起票者: { type: "rich_text", rich_text: [{ plain_text: "現場フォーム" }] },
-            状態: { type: "select", select: { name: "完了" } },
-            FGSリンク: { type: "url", url: null },
-          },
-        },
-      ],
-    }),
+    id: "1",
+    ticket_number: 5,
+    system: "プロレポ",
+    type: "bug",
+    importance: "高",
+    title: "エラー修正",
+    detail: "500が出る",
+    reporter: "現場フォーム",
+    state: "完了",
+    assignee: "",
+    fgs_url: null,
+    pr_url: null,
+    urgency: null,
+    importance_score: null,
+    priority: null,
+    priority_reason: null,
+    status_changed_at: null,
+    slack_channel_id: null,
+    slack_thread_ts: null,
+    slack_user_id: null,
+    notion_page_id: null,
+    created_at: T0,
+    updated_at: T0,
+    ...over,
   };
 }
 
-// 差し戻し（未学習）チケット1件を返す query 応答（state を差し替え可能）
-function failedQueryResponse(state: string, fgsUrl: string | null = null) {
-  return {
-    ok: true,
-    json: async () => ({
-      results: [
-        {
-          id: `page-failed-${state}`,
-          properties: {
-            ID: { type: "unique_id", unique_id: { prefix: "KZ", number: 9 } },
-            対象システム: { type: "select", select: { name: "ステレポ" } },
-            種別: { type: "select", select: { name: "新機能" } },
-            重要度: { type: "select", select: { name: "中" } },
-            チケット名: { type: "title", title: [{ plain_text: "一括出力" }] },
-            内容: { type: "rich_text", rich_text: [{ plain_text: "CSVで出したい" }] },
-            起票者: { type: "rich_text", rich_text: [{ plain_text: "現場フォーム" }] },
-            状態: { type: "select", select: { name: state } },
-            FGSリンク: { type: "url", url: fgsUrl },
-          },
-        },
-      ],
-    }),
-  };
+/** tickets テーブルの応答を仕込む。UPDATE は素通し（呼ばれたことだけ検証する）。 */
+function installDb(opts: { completed?: any[]; byState?: Record<string, any[]> } = {}) {
+  queryMock.mockReset();
+  queryMock.mockImplementation(async (sql: string, params: any[] = []) => {
+    const s = String(sql).replace(/\s+/g, " ").trim();
+    if (s.startsWith("UPDATE tickets")) return { rows: [] };
+    // fetchCompletedUnlearned（完了 かつ FGSリンク空）
+    if (s.includes("fgs_url IS NULL OR fgs_url = ''")) {
+      return { rows: opts.completed ?? [] };
+    }
+    // fetchTicketsByState
+    if (s.includes("WHERE state = $1")) {
+      return { rows: (opts.byState ?? {})[params[0]] ?? [] };
+    }
+    return { rows: [] };
+  });
+}
+
+/** FGSリンクへの冪等マーク UPDATE 呼び出しを拾う。 */
+function markCalls() {
+  return queryMock.mock.calls.filter((c) =>
+    String(c[0]).replace(/\s+/g, " ").includes("SET fgs_url = $2")
+  );
 }
 
 describe("returnLearningFromCompleted", () => {
   let originalEnabled: string | undefined;
-  let originalToken: string | undefined;
-  let originalDbId: string | undefined;
   let originalFetch: typeof global.fetch;
 
   beforeEach(() => {
     originalEnabled = process.env.KNOWHOW_ENABLED;
-    originalToken = process.env.NOTION_TOKEN;
-    originalDbId = process.env.NOTION_DATABASE_ID;
     originalFetch = global.fetch;
+    installDb();
   });
 
   afterEach(() => {
     if (originalEnabled === undefined) delete process.env.KNOWHOW_ENABLED;
     else process.env.KNOWHOW_ENABLED = originalEnabled;
-    if (originalToken === undefined) delete process.env.NOTION_TOKEN;
-    else process.env.NOTION_TOKEN = originalToken;
-    if (originalDbId === undefined) delete process.env.NOTION_DATABASE_ID;
-    else process.env.NOTION_DATABASE_ID = originalDbId;
     global.fetch = originalFetch;
   });
 
-  it("KNOWHOW_ENABLED 未設定なら {memorized:0, skipped:'disabled'}（fetchを呼ばない）", async () => {
+  it("KNOWHOW_ENABLED 未設定なら {memorized:0, skipped:'disabled'}（DBにもfetchにも触れない）", async () => {
     delete process.env.KNOWHOW_ENABLED;
     const mockFetch = vi.fn();
     global.fetch = mockFetch;
@@ -85,20 +95,16 @@ describe("returnLearningFromCompleted", () => {
     const result = await returnLearningFromCompleted();
     expect(result).toEqual({ memorized: 0, skipped: "disabled" });
     expect(mockFetch).not.toHaveBeenCalled();
+    expect(queryMock).not.toHaveBeenCalled();
   });
 
-  it("有効化＋完了チケット1件で memorized:1 を返し、マークPATCHが呼ばれる", async () => {
+  it("有効化＋完了チケット1件で memorized:1 を返し、冪等マークが書かれる", async () => {
     process.env.KNOWHOW_ENABLED = "true";
-    process.env.NOTION_TOKEN = "test-token";
-    process.env.NOTION_DATABASE_ID = "test-db";
+    installDb({ completed: [dbRow({ id: "77" })] });
 
     const calls: { url: string; init: RequestInit }[] = [];
     global.fetch = vi.fn().mockImplementation((url: string, init: RequestInit) => {
       calls.push({ url, init });
-      // query（DB) → 完了チケット応答 / それ以外（memorize・PATCH）は ok
-      if (url.includes("/databases/")) {
-        return Promise.resolve(completedQueryResponse());
-      }
       return Promise.resolve({ ok: true, json: async () => ({}) });
     });
 
@@ -114,29 +120,18 @@ describe("returnLearningFromCompleted", () => {
     expect(memBody.tags).toContain("fix_success");
     expect(memBody.tags).toContain("全体学習");
 
-    // FGSリンクへの冪等マーク PATCH が呼ばれる
-    const markCall = calls.find(
-      (c) =>
-        c.url === "https://api.notion.com/v1/pages/page-done-1" &&
-        c.init.method === "PATCH"
-    );
-    expect(markCall).toBeDefined();
-    const markBody = JSON.parse(markCall!.init.body as string);
-    expect(markBody.properties.FGSリンク.url).toBe("knowhow://memorized");
+    // FGSリンクへの冪等マーク UPDATE が、その行の内部IDに対して書かれる
+    const marks = markCalls();
+    expect(marks).toHaveLength(1);
+    expect(marks[0][1]).toEqual(["77", "knowhow://memorized"]);
   });
 
   it("memorize が ok=false ならマークせず memorized:0", async () => {
     process.env.KNOWHOW_ENABLED = "true";
-    process.env.NOTION_TOKEN = "test-token";
-    process.env.NOTION_DATABASE_ID = "test-db";
+    installDb({ completed: [dbRow()] });
 
-    const calls: { url: string; init: RequestInit }[] = [];
-    global.fetch = vi.fn().mockImplementation((url: string, init: RequestInit) => {
-      calls.push({ url, init });
-      if (url.includes("/databases/")) {
-        return Promise.resolve(completedQueryResponse());
-      }
-      if (url.includes("/api/devin/memorize")) {
+    global.fetch = vi.fn().mockImplementation((url: string) => {
+      if (String(url).includes("/api/devin/memorize")) {
         return Promise.resolve({ ok: false, status: 500 });
       }
       return Promise.resolve({ ok: true, json: async () => ({}) });
@@ -144,37 +139,40 @@ describe("returnLearningFromCompleted", () => {
 
     const result = await returnLearningFromCompleted();
     expect(result.memorized).toBe(0);
-    const markCall = calls.find(
-      (c) => c.url.includes("/pages/") && c.init.method === "PATCH"
-    );
-    expect(markCall).toBeUndefined();
+    expect(markCalls()).toHaveLength(0);
   });
 });
 
 describe("returnLearningFromFailed（しくじり先生：失敗からの学習）", () => {
   let originalEnabled: string | undefined;
-  let originalToken: string | undefined;
-  let originalDbId: string | undefined;
   let originalFetch: typeof global.fetch;
 
   beforeEach(() => {
     originalEnabled = process.env.KNOWHOW_ENABLED;
-    originalToken = process.env.NOTION_TOKEN;
-    originalDbId = process.env.NOTION_DATABASE_ID;
     originalFetch = global.fetch;
+    installDb();
   });
 
   afterEach(() => {
     if (originalEnabled === undefined) delete process.env.KNOWHOW_ENABLED;
     else process.env.KNOWHOW_ENABLED = originalEnabled;
-    if (originalToken === undefined) delete process.env.NOTION_TOKEN;
-    else process.env.NOTION_TOKEN = originalToken;
-    if (originalDbId === undefined) delete process.env.NOTION_DATABASE_ID;
-    else process.env.NOTION_DATABASE_ID = originalDbId;
     global.fetch = originalFetch;
   });
 
-  it("KNOWHOW_ENABLED 未設定なら {memorized:0, skipped:'disabled'}（fetchを呼ばない）", async () => {
+  const failedRow = (state: string, fgsUrl: string | null = null) =>
+    dbRow({
+      id: `9${state.length}`,
+      ticket_number: 9,
+      system: "ステレポ",
+      type: "新機能",
+      importance: "中",
+      title: "一括出力",
+      detail: "CSVで出したい",
+      state,
+      fgs_url: fgsUrl,
+    });
+
+  it("KNOWHOW_ENABLED 未設定なら {memorized:0, skipped:'disabled'}（DBにもfetchにも触れない）", async () => {
     delete process.env.KNOWHOW_ENABLED;
     const mockFetch = vi.fn();
     global.fetch = mockFetch;
@@ -182,23 +180,16 @@ describe("returnLearningFromFailed（しくじり先生：失敗からの学習�
     const result = await returnLearningFromFailed();
     expect(result).toEqual({ memorized: 0, skipped: "disabled" });
     expect(mockFetch).not.toHaveBeenCalled();
+    expect(queryMock).not.toHaveBeenCalled();
   });
 
   it("差し戻し1件を失敗の学び(kind=fix_failed)として記録し、冪等マークする", async () => {
     process.env.KNOWHOW_ENABLED = "true";
-    process.env.NOTION_TOKEN = "test-token";
-    process.env.NOTION_DATABASE_ID = "test-db";
+    installDb({ byState: { 差し戻し: [failedRow("差し戻し")] } });
 
     const calls: { url: string; init: RequestInit }[] = [];
     global.fetch = vi.fn().mockImplementation((url: string, init: RequestInit) => {
       calls.push({ url, init });
-      if (url.includes("/databases/")) {
-        // filter の状態に応じて 差し戻し のみ1件、却下は0件
-        const body = JSON.parse((init.body as string) || "{}");
-        const state = body?.filter?.select?.equals;
-        if (state === "差し戻し") return Promise.resolve(failedQueryResponse("差し戻し"));
-        return Promise.resolve({ ok: true, json: async () => ({ results: [] }) });
-      }
       return Promise.resolve({ ok: true, json: async () => ({}) });
     });
 
@@ -213,26 +204,16 @@ describe("returnLearningFromFailed（しくじり先生：失敗からの学習�
     expect(memBody.tags).toContain("差し戻し");
 
     // 冪等マーク（FGSリンク）が付く
-    const markCall = calls.find(
-      (c) => c.url.includes("/pages/page-failed-差し戻し") && c.init.method === "PATCH"
-    );
-    expect(markCall).toBeDefined();
+    expect(markCalls()).toHaveLength(1);
   });
 
   it("却下は kind=correction（軌道修正）として記録される", async () => {
     process.env.KNOWHOW_ENABLED = "true";
-    process.env.NOTION_TOKEN = "test-token";
-    process.env.NOTION_DATABASE_ID = "test-db";
+    installDb({ byState: { 却下: [failedRow("却下")] } });
 
     const calls: { url: string; init: RequestInit }[] = [];
     global.fetch = vi.fn().mockImplementation((url: string, init: RequestInit) => {
       calls.push({ url, init });
-      if (url.includes("/databases/")) {
-        const body = JSON.parse((init.body as string) || "{}");
-        const state = body?.filter?.select?.equals;
-        if (state === "却下") return Promise.resolve(failedQueryResponse("却下"));
-        return Promise.resolve({ ok: true, json: async () => ({ results: [] }) });
-      }
       return Promise.resolve({ ok: true, json: async () => ({}) });
     });
 
@@ -246,25 +227,19 @@ describe("returnLearningFromFailed（しくじり先生：失敗からの学習�
 
   it("既に学習済み（FGSリンクあり）は再記録しない（二重防止）", async () => {
     process.env.KNOWHOW_ENABLED = "true";
-    process.env.NOTION_TOKEN = "test-token";
-    process.env.NOTION_DATABASE_ID = "test-db";
+    installDb({
+      byState: { 差し戻し: [failedRow("差し戻し", "knowhow://memorized")] },
+    });
 
     const calls: { url: string; init: RequestInit }[] = [];
     global.fetch = vi.fn().mockImplementation((url: string, init: RequestInit) => {
       calls.push({ url, init });
-      if (url.includes("/databases/")) {
-        const body = JSON.parse((init.body as string) || "{}");
-        const state = body?.filter?.select?.equals;
-        if (state === "差し戻し")
-          return Promise.resolve(failedQueryResponse("差し戻し", "knowhow://memorized"));
-        return Promise.resolve({ ok: true, json: async () => ({ results: [] }) });
-      }
       return Promise.resolve({ ok: true, json: async () => ({}) });
     });
 
     const result = await returnLearningFromFailed();
     expect(result.memorized).toBe(0);
-    const memorizeCall = calls.find((c) => c.url.includes("/api/devin/memorize"));
-    expect(memorizeCall).toBeUndefined();
+    expect(calls.find((c) => c.url.includes("/api/devin/memorize"))).toBeUndefined();
+    expect(markCalls()).toHaveLength(0);
   });
 });
