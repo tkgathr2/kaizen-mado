@@ -178,7 +178,7 @@ describe("line（純関数）", () => {
     // 【2026-08-15 社長指示】GOは真田専用LINEチャネル一本化のため「GO KZ-12」テキスト返信の
     // 案内は無くなり、代わりに真田チャネルへの案内文言になる。
     expect(text).toContain("真田専用LINEチャネル");
-    expect(text).toContain("https://www.notion.so/p1");
+    expect(text).toContain("https://kaizen.takagi.bz/board/ticket/p1");
     // 読みやすさ改修（2026-06-27）：素人語の見出し＋空行レイアウト
     expect(text).toContain("❓ こまりごと");
     expect(text).toContain("一覧が重くて開くのが遅い");
@@ -307,9 +307,9 @@ describe("文面ヘルパ", () => {
     expect(truncateForLine("あいうえおかきくけこさ", 10)).toBe("あいうえおかきくけ…");
     expect(truncateForLine(null, 5)).toBe("");
   });
-  it("notionPageUrl はハイフン無しのURLを返す", () => {
+  it("notionPageUrl は /board/ticket/<pageId> 形式でURLを返す（DB移行・2026-08-16）", () => {
     expect(notionPageUrl("37b0d980-8b3b-8148-9721-e1fa84498c34")).toBe(
-      "https://www.notion.so/37b0d9808b3b81489721e1fa84498c34"
+      "https://kaizen.takagi.bz/board/ticket/37b0d980-8b3b-8148-9721-e1fa84498c34"
     );
   });
 });

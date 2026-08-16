@@ -2,7 +2,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // lib/notify.ts の検証：
 //  - 詰まり連絡は「同じチケットで1回だけ」送る（de-dup）。
-//    判定は Notion ページ直下に heading_3「詰まり通知済み」があるか。
+//    判定は Postgres ticket_discussion_blocks に heading_3「詰まり通知済み」があるか
+//    （【DB移行・2026-08-16 bug-check-lab High-1修正】以前はNotion API直叩きだったが、
+//    lib/tickets.ts の hasDiscussionHeading へ委譲するよう変更。ここではその委譲だけを
+//    モックで検証し、hasDiscussionHeading自体の fail-safe 挙動は tickets.ts 側のテストで担保）。
 //  - 真田システム（mention-hisho）への handoff が本線。lineEnabled/handoffEnabled どちらかが
 //    有効なら試みる（自前LINEは全廃したため lineEnabled 単独では何も送らない）。
 //  - handoffが失敗したら、カイゼンくん自前LINEへは一切フォールバックせず、真田Bot名義の
@@ -22,10 +25,13 @@ vi.mock("@/lib/line", () => ({
   actionBanner: (kind: string, action?: string) => `BANNER(${kind}:${action ?? ""})`,
 }));
 
-// 印の追記（appendDiscussionBlocks）も差し替えて、呼ばれた回数・引数を検証。
+// 印の追記（appendDiscussionBlocks）・印の有無判定（hasDiscussionHeading）を差し替える。
 const appendDiscussionBlocks = vi.fn(async () => undefined);
+const hasDiscussionHeading = vi.fn(async (_pageId: string, _heading: string) => false);
 vi.mock("@/lib/tickets", () => ({
   appendDiscussionBlocks: (...a: unknown[]) => appendDiscussionBlocks(...(a as [])),
+  hasDiscussionHeading: (...a: unknown[]) =>
+    hasDiscussionHeading(...(a as [string, string])),
 }));
 
 // 真田システムへの受け渡し（handoffFyiToSanada）も差し替える。
@@ -52,37 +58,18 @@ const ticket: TicketRow = {
   fgsUrl: null,
 };
 
-// fetch をモックして Notion blocks 取得を制御する。
-function mockFetchReturningBlocks(blocks: unknown[]) {
-  return vi.fn(async () => ({
-    ok: true,
-    status: 200,
-    json: async () => ({ results: blocks }),
-  })) as unknown as typeof fetch;
-}
-
 describe("lib/notify 詰まり連絡の de-dup", () => {
-  const savedFetch = global.fetch;
-  const savedToken = process.env.NOTION_TOKEN;
-
   beforeEach(() => {
     vi.clearAllMocks();
     lineEnabled.mockReturnValue(true);
     notifySlackAlert.mockResolvedValue(true);
     handoffEnabled.mockReturnValue(true);
     handoffFyiToSanada.mockResolvedValue(true);
-    process.env.NOTION_TOKEN = "tok";
-  });
-  afterEach(() => {
-    global.fetch = savedFetch;
-    if (savedToken === undefined) delete process.env.NOTION_TOKEN;
-    else process.env.NOTION_TOKEN = savedToken;
+    hasDiscussionHeading.mockResolvedValue(false);
   });
 
   it("印が無ければ真田handoffで送信し、印（詰まり通知済み）を追記する", async () => {
-    global.fetch = mockFetchReturningBlocks([
-      { type: "heading_3", heading_3: { rich_text: [{ plain_text: "実装失敗（差し戻し）" }] } },
-    ]);
+    hasDiscussionHeading.mockResolvedValue(false);
 
     const sent = await notifyStuckOnce(ticket, "Notionトークンが必要です");
 
@@ -103,9 +90,7 @@ describe("lib/notify 詰まり連絡の de-dup", () => {
   });
 
   it("既に印があれば送らない（連打防止・handoff/Slackどちらも呼ばれない）", async () => {
-    global.fetch = mockFetchReturningBlocks([
-      { type: "heading_3", heading_3: { rich_text: [{ plain_text: STUCK_MARKER_HEADING }] } },
-    ]);
+    hasDiscussionHeading.mockResolvedValue(true);
 
     const sent = await notifyStuckOnce(ticket, "理由");
 
@@ -118,7 +103,7 @@ describe("lib/notify 詰まり連絡の de-dup", () => {
   it("LINE未設定でも真田handoffが有効なら試みる（自前LINEへは依存しない）", async () => {
     lineEnabled.mockReturnValue(false);
     handoffEnabled.mockReturnValue(true);
-    global.fetch = mockFetchReturningBlocks([]);
+    hasDiscussionHeading.mockResolvedValue(false);
 
     const sent = await notifyStuckOnce(ticket, "理由");
 
@@ -129,7 +114,7 @@ describe("lib/notify 詰まり連絡の de-dup", () => {
   it("LINE・真田handoffの両方が無効なら送らない（fail-safe）", async () => {
     lineEnabled.mockReturnValue(false);
     handoffEnabled.mockReturnValue(false);
-    global.fetch = mockFetchReturningBlocks([]);
+    hasDiscussionHeading.mockResolvedValue(false);
 
     const sent = await notifyStuckOnce(ticket, "理由");
 
@@ -146,7 +131,7 @@ describe("lib/notify 詰まり連絡の de-dup", () => {
     // 再送されなくなる＝バグ本体）。
     handoffFyiToSanada.mockResolvedValue(false);
     notifySlackAlert.mockResolvedValue(true);
-    global.fetch = mockFetchReturningBlocks([]);
+    hasDiscussionHeading.mockResolvedValue(false);
 
     const sent = await notifyStuckOnce(ticket, "理由");
 
@@ -174,7 +159,7 @@ describe("lib/notify 詰まり連絡の de-dup", () => {
     // よって本文が届いていない1回目は false を返し印を記帳しない＝次回に再試行できる。
     handoffFyiToSanada.mockResolvedValue(false);
     notifySlackAlert.mockResolvedValue(true);
-    global.fetch = mockFetchReturningBlocks([]); // 1回目：まだ印は無い
+    hasDiscussionHeading.mockResolvedValue(false); // 1回目：まだ印は無い
 
     const sent = await notifyStuckOnce(ticket, "Notionトークンが必要です");
 
@@ -191,7 +176,7 @@ describe("lib/notify 詰まり連絡の de-dup", () => {
     vi.clearAllMocks();
     handoffEnabled.mockReturnValue(true);
     handoffFyiToSanada.mockResolvedValue(true); // 今度はhandoffが直った
-    global.fetch = mockFetchReturningBlocks([]); // 印はまだ無い（1回目で記帳されていないため）
+    hasDiscussionHeading.mockResolvedValue(false); // 印はまだ無い（1回目で記帳されていないため）
 
     const sentAgain = await notifyStuckOnce(ticket, "Notionトークンが必要です");
 
@@ -206,7 +191,7 @@ describe("lib/notify 詰まり連絡の de-dup", () => {
   it("真田handoff・Slack警告の両方が失敗したら印を残さない（次回再試行できるように）", async () => {
     handoffFyiToSanada.mockResolvedValue(false);
     notifySlackAlert.mockResolvedValue(false);
-    global.fetch = mockFetchReturningBlocks([]);
+    hasDiscussionHeading.mockResolvedValue(false);
 
     const sent = await notifyStuckOnce(ticket, "理由");
 
@@ -214,18 +199,18 @@ describe("lib/notify 詰まり連絡の de-dup", () => {
     expect(appendDiscussionBlocks).not.toHaveBeenCalled();
   });
 
-  it("hasStuckMarker：取得失敗(!ok)時は連打回避で true（送らない側）に倒す", async () => {
-    global.fetch = vi.fn(async () => ({
-      ok: false,
-      status: 500,
-      json: async () => ({}),
-    })) as unknown as typeof fetch;
-
+  // 【DB移行・2026-08-16】hasStuckMarker自体はもはやNotion APIを直接叩かず、
+  // lib/tickets.ts の hasDiscussionHeading（Postgres版・fail-safeでtrue/falseを返す）へ
+  // そのまま委譲するだけの薄いラッパーになった。ここでは委譲が正しく行われることだけを
+  // 検証する（fail-safeの中身自体は tickets.ts 側のテストで担保する）。
+  it("hasStuckMarker：hasDiscussionHeadingがtrueならtrueを返す（委譲）", async () => {
+    hasDiscussionHeading.mockResolvedValue(true);
     expect(await hasStuckMarker("page-x")).toBe(true);
+    expect(hasDiscussionHeading).toHaveBeenCalledWith("page-x", STUCK_MARKER_HEADING);
   });
 
-  it("hasStuckMarker：NOTION_TOKEN未設定なら false（印無し扱い）", async () => {
-    delete process.env.NOTION_TOKEN;
+  it("hasStuckMarker：hasDiscussionHeadingがfalseならfalseを返す（委譲）", async () => {
+    hasDiscussionHeading.mockResolvedValue(false);
     expect(await hasStuckMarker("page-x")).toBe(false);
   });
 });

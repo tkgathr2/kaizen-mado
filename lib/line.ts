@@ -373,9 +373,12 @@ export function truncateForLine(s: string | null | undefined, max: number): stri
   return t.slice(0, Math.max(0, max - 1)) + "…";
 }
 
-/** NotionページURL（詳細はLINEに書かずリンクへ逃がす）。 */
+/** チケット詳細ページURL（詳細はLINEに書かずリンクへ逃がす）。
+ * 【DB移行・2026-08-16】lib/handoff.ts の ticketUrlOf と同じ理由で /board/ticket/<pageId> に統一
+ * （新規チケットのpageIdは実在のNotionページを指さないため）。 */
 export function notionPageUrl(pageId: string): string {
-  return `https://www.notion.so/${(pageId || "").replace(/-/g, "")}`;
+  const base = (process.env.KAIZEN_PUBLIC_BASE || "https://kaizen.takagi.bz").replace(/\/+$/, "");
+  return `${base}/board/ticket/${encodeURIComponent(pageId || "")}`;
 }
 
 // ── 文字化け（mojibake）検知ガード ──

@@ -21,7 +21,7 @@
 // ★ fail-safe：真田handoff・Slack警告のどちらも未設定なら送らない。読取/送信/追記で例外が
 //   出ても握りつぶす（カイゼンくんの改善ループを通知の失敗で止めない）。
 import type { TicketRow } from "./tickets";
-import { appendDiscussionBlocks } from "./tickets";
+import { appendDiscussionBlocks, hasDiscussionHeading } from "./tickets";
 import { lineEnabled, notifySlackAlert, truncateForLine, BOARD_URL, msgHead, stageBar, actionBanner } from "./line";
 import { handoffEnabled, handoffFyiToSanada } from "./handoff";
 
@@ -53,65 +53,30 @@ async function sendFyi(
   return handed;
 }
 
-const NOTION_VERSION = "2022-06-28";
-
-/** 詰まり通知の de-dup 用の印（heading_3 の見出し文言）。 */
+/** 詰まり通知の de-dup 用の印（見出し文言）。 */
 export const STUCK_MARKER_HEADING = "詰まり通知済み";
 
 /** Merge待ち（レビュー到達）通知の de-dup 用の印。 */
 export const REVIEW_MARKER_HEADING = "Merge待ち通知済み";
 
-/** Notion auth（tickets.ts と同じ env を読む）。未設定なら null（fail-safe）。 */
-function notionToken(): string | null {
-  return process.env.NOTION_TOKEN || null;
-}
-
 /**
- * チケットページに既に「詰まり通知済み」の印（heading_3）があるか。
- * ページ直下の子ブロックを最大100件まで見て heading_3 の本文に印文言を含むものを探す。
- * 取得に失敗したら「印は無い」とみなす…のではなく、二重通知を避けるため "true（送らない側）"
- * に倒す（連打防止を優先）。LINE自体は fail-safe で副作用が小さいため、安全側＝送らない。
+ * チケットページに既に「詰まり通知済み」の印があるか。
+ *
+ * 【DB移行・2026-08-16 bug-check-lab High-1修正】印の書き込みは appendDiscussionBlocks
+ * （Postgres ticket_discussion_blocks）に移ったが、この読み取りだけ Notion API を
+ * 直接叩いたまま放置されていた（kz-sweep の hasReminderBlock と全く同じ欠陥）。
+ * 新規チケット（合成pageId・Notionページ実体なし）では404→送らない側に倒れて
+ * 「詰まりました」LINEが永久に届かず、移行済みチケットでは印がPostgres側にしか
+ * 積まれないため毎回falseになり同じ通知が再送され続けていた。tickets.ts の
+ * hasDiscussionHeading（Postgres版・同じfail-safe方針）へ一本化する。
  */
 export async function hasStuckMarker(pageId: string): Promise<boolean> {
   return hasMarker(pageId, STUCK_MARKER_HEADING);
 }
 
-/**
- * 指定した印（heading_3 の見出し文言）がページに既にあるか（de-dup の共通実装）。
- * 取得失敗・例外は「ある（＝送らない側）」に倒して連打を防ぐ。
- */
+/** 指定した印（見出し文言）がページに既にあるか（de-dup の共通実装）。 */
 export async function hasMarker(pageId: string, heading: string): Promise<boolean> {
-  const token = notionToken();
-  if (!token || !pageId) return false;
-  try {
-    const res = await fetch(
-      `https://api.notion.com/v1/blocks/${pageId}/children?page_size=100`,
-      {
-        method: "GET",
-        headers: {
-          authorization: `Bearer ${token}`,
-          "Notion-Version": NOTION_VERSION,
-        },
-      }
-    );
-    if (!res.ok) {
-      console.error("[notify] 印の確認に失敗（送信を見送り）", res.status);
-      return true; // 確認できないときは連打を避けて送らない側に倒す
-    }
-    const data = await res.json();
-    const blocks: any[] = Array.isArray(data?.results) ? data.results : [];
-    for (const b of blocks) {
-      if (b?.type !== "heading_3") continue;
-      const text: string = (b?.heading_3?.rich_text || [])
-        .map((r: any) => r?.plain_text ?? "")
-        .join("");
-      if (text.includes(heading)) return true;
-    }
-    return false;
-  } catch (e) {
-    console.error("[notify] 印の確認で例外（送信を見送り）", (e as Error).message);
-    return true; // 例外時も連打を避けて送らない側に倒す
-  }
+  return hasDiscussionHeading(pageId, heading);
 }
 
 /** 詰まり連絡の本文（助けを求める形・素人語・短く）。 */

@@ -1,9 +1,15 @@
-// ── Notion 改善チケットDB への起票（サーバ側のみ） ──
+// ── 改善チケットの起票（サーバ側のみ） ──
+//
+// 【2026-08-16 Notion API → Postgres(Railway) 移行】
+// 起票先を Notion DB から Postgres（lib/db/schema.ts の tickets）へ移した。
+// Notion への書き込みは一切行わない。ファイル名 lib/notion.ts は呼び出し元
+// （app/api/submit・app/api/slack/events・app/api/line/webhook）が
+// `@/lib/notion` から import しているため据え置く（呼び出し元は変更しない方針）。
+// createTicket の名前・引数・戻り値（SubmitResult）は移行前と同一。
 import type { Ticket } from "./types";
 import { normalizeSystemForTicket } from "./systems";
-
-const NOTION_API = "https://api.notion.com/v1/pages";
-const NOTION_VERSION = "2022-06-28";
+import { getPool, ensureSchema } from "./db/pool";
+import { mapTicketRow } from "./tickets";
 
 export interface SubmitResult {
   ticketId: string; // 例: "KZ-12"
@@ -11,10 +17,21 @@ export interface SubmitResult {
   pageId: string;
 }
 
-function richText(content: string) {
-  // Notionのrich_textは2000字/ブロック上限。安全側で切る。
-  return [{ type: "text", text: { content: content.slice(0, 1900) } }];
-}
+/** 新規チケットの初期状態（Notion時代の 状態=受付 と同じ）。 */
+const INITIAL_STATE = "受付";
+
+/** ticket_number 採番の衝突リトライ回数。
+ *
+ * ★採番方式の判断（2026-08-16）：移行エンドポイント
+ *   app/api/admin/migrate-tickets/route.ts は最後に `ticket_number_seq` を作って
+ *   MAX+1 にsetvalしている。しかし本番起票がそのシーケンスに依存すると、
+ *   **移行を流す前（新規DB・ローカル開発・テスト）はシーケンスが存在せず INSERT が落ちる**
+ *   ＝起票が失敗して現場の声を取りこぼす。カイゼンくんの最優先は「声を絶対に落とさない」
+ *   なので、シーケンスの有無に依存しない `MAX(ticket_number)+1` を採る。
+ *   一意性の最終保証は schema.ts の UNIQUE 制約で、同時起票が重なったときだけ
+ *   UNIQUE 違反(23505)を捕まえて番号を取り直す（起票は低頻度なのでこれで十分）。
+ *   ＝シーケンスが有っても無くても正しく動く。 */
+const TICKET_NUMBER_RETRIES = 5;
 
 /**
  * 改善チケットDBに「状態=受付」で1件起票する。
@@ -25,123 +42,79 @@ export async function createTicket(
   ticket: Ticket,
   reporter: string | null
 ): Promise<SubmitResult> {
-  const token = process.env.NOTION_TOKEN;
-  if (!token) throw new Error("NOTION_TOKEN is not set");
-
-  const databaseId = process.env.NOTION_DATABASE_ID;
-  if (!databaseId) throw new Error("NOTION_DATABASE_ID is not set");
+  await ensureSchema();
 
   const system = normalizeSystemForTicket(ticket.system);
   const title = (ticket.title || "改善のご要望").slice(0, 100);
 
-  // 必須プロパティ（既存DBに必ずある想定）。
-  const baseProps: Record<string, any> = {
-    チケット名: { title: richText(title) },
-    対象システム: { select: { name: system } },
-    種別: { select: { name: ticket.type } },
-    重要度: { select: { name: ticket.importance } },
-    状態: { select: { name: "受付" } },
-    起票元: { select: { name: "フォーム" } },
-    内容: { rich_text: richText(ticket.detail) },
-    起票者: { rich_text: richText(reporter?.trim() || "現場フォーム") },
-  };
+  // Notion時代に best-effort（プロパティが無ければ落として再試行）で書いていた
+  // 優先度スコアリング・Slackメタは、Postgres では列が常に存在するので素直に入れる。
+  const values = [
+    system,
+    ticket.type,
+    ticket.importance,
+    title,
+    ticket.detail,
+    reporter?.trim() || "現場フォーム",
+    INITIAL_STATE,
+    typeof ticket.urgency === "number" ? ticket.urgency : null,
+    typeof ticket.importanceScore === "number" ? ticket.importanceScore : null,
+    ticket.priority ?? null,
+    ticket.priorityReason ?? null,
+    ticket.slackChannelId ?? null,
+    ticket.slackThreadTs ?? null,
+    ticket.slackUserId ?? null,
+  ];
 
-  // ── 優先度スコアリング（§4.5.1）＋ Slack起点メタ。best-effort で書く。
-  // Notion DB に該当プロパティが無くても起票が落ちないよう、別オブジェクトに分け、
-  // 付きで失敗したら base のみで再試行する（fail-safe・声を取りこぼさない）。
-  const scoringProps = buildScoringProps(ticket);
-  const slackProps = buildSlackProps(ticket);
-  const extraProps = { ...scoringProps, ...slackProps };
-
-  const data = await createPage(token, databaseId, baseProps, extraProps);
+  const row = await insertTicket(values);
+  const mapped = mapTicketRow(row);
   return {
-    ticketId: formatTicketId(data),
-    pageUrl: data?.url ?? "",
-    pageId: data?.id ?? "",
+    ticketId: mapped.ticketId,
+    pageUrl: ticketPageUrl(mapped.pageId),
+    pageId: mapped.pageId,
   };
 }
 
-/** 優先度スコアリングの Notion プロパティ（点数=number／優先度=select／根拠=rich_text）。
- * 値が無ければ空オブジェクト（旧チケット互換）。 */
-function buildScoringProps(ticket: Ticket): Record<string, any> {
-  const props: Record<string, any> = {};
-  if (typeof ticket.urgency === "number") props["緊急度"] = { number: ticket.urgency };
-  if (typeof ticket.importanceScore === "number")
-    props["重要度スコア"] = { number: ticket.importanceScore };
-  if (ticket.priority) props["優先度"] = { select: { name: ticket.priority } };
-  if (ticket.priorityReason) props["優先度根拠"] = { rich_text: richText(ticket.priorityReason) };
-  return props;
-}
+/** tickets へ1件INSERTし、採番衝突(23505)だけリトライする。 */
+async function insertTicket(values: any[]): Promise<any> {
+  const sql = `
+    INSERT INTO tickets (
+      ticket_number, system, type, importance, title, detail, reporter, state,
+      urgency, importance_score, priority, priority_reason,
+      slack_channel_id, slack_thread_ts, slack_user_id
+    ) VALUES (
+      (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM tickets),
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+    )
+    RETURNING *`;
 
-/** Slack起点チケットのメタ情報（rich_text）。値が無ければ空オブジェクト。
- * Notion DB に「Slack Channel ID」「Slack Thread TS」「Slack User ID」プロパティが
- * 存在する場合のみ保存される。プロパティ未設定でも fail-safe で起票は続行する。 */
-function buildSlackProps(ticket: Ticket): Record<string, any> {
-  const props: Record<string, any> = {};
-  if (ticket.slackChannelId)
-    props["Slack Channel ID"] = { rich_text: richText(ticket.slackChannelId) };
-  if (ticket.slackThreadTs)
-    props["Slack Thread TS"] = { rich_text: richText(ticket.slackThreadTs) };
-  if (ticket.slackUserId)
-    props["Slack User ID"] = { rich_text: richText(ticket.slackUserId) };
-  return props;
-}
-
-/** Notion ページ作成。追加プロパティ付きで失敗し、かつ追加分があった場合は
- * base のみ（追加分を落として）1回だけ再試行する（プロパティ未定義DBでも起票を通す・fail-safe）。 */
-async function createPage(
-  token: string,
-  databaseId: string,
-  baseProps: Record<string, any>,
-  extraProps: Record<string, any>
-): Promise<any> {
-  const hasExtra = Object.keys(extraProps).length > 0;
-  const res = await postPage(token, databaseId, { ...baseProps, ...extraProps });
-  if (res.ok) return res.json();
-
-  const errText = await res.text().catch(() => "");
-  // 追加プロパティを送って失敗したときだけ、base のみで1回再試行（DBに新プロパティが無い等）。
-  if (hasExtra) {
-    console.error(
-      "[notion] create with extra props failed, retrying without them:",
-      `${res.status} ${errText.slice(0, 200)}`
-    );
-    const retry = await postPage(token, databaseId, baseProps);
-    if (retry.ok) return retry.json();
-    const retryErr = await retry.text().catch(() => "");
-    throw new Error(`Notion API error ${retry.status}: ${retryErr.slice(0, 400)}`);
-  }
-  throw new Error(`Notion API error ${res.status}: ${errText.slice(0, 400)}`);
-}
-
-async function postPage(
-  token: string,
-  databaseId: string,
-  properties: Record<string, any>
-): Promise<Response> {
-  return fetch(NOTION_API, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${token}`,
-      "Notion-Version": NOTION_VERSION,
-    },
-    body: JSON.stringify({ parent: { database_id: databaseId }, properties }),
-  });
-}
-
-/** auto_increment_id（unique_id）プロパティから "KZ-12" を組み立てる */
-function formatTicketId(page: any): string {
-  const props = page?.properties ?? {};
-  for (const key of Object.keys(props)) {
-    const p = props[key];
-    if (p?.type === "unique_id" && p.unique_id) {
-      const prefix = p.unique_id.prefix || "KZ";
-      const num = p.unique_id.number;
-      if (num != null) return `${prefix}-${num}`;
+  let lastErr: unknown = null;
+  for (let attempt = 0; attempt < TICKET_NUMBER_RETRIES; attempt++) {
+    try {
+      const res = await getPool().query(sql, values);
+      const row = res.rows?.[0];
+      if (!row) throw new Error("INSERT が行を返しませんでした");
+      return row;
+    } catch (err) {
+      lastErr = err;
+      // 23505 = unique_violation。同時起票で同じ ticket_number を取った場合のみ再試行。
+      if ((err as { code?: string })?.code !== "23505") throw err;
+      console.warn(
+        `[tickets] ticket_number 採番が衝突したため再試行します (${attempt + 1}/${TICKET_NUMBER_RETRIES})`
+      );
     }
   }
-  // unique_id が取れない場合はページIDの短縮で代替表示
-  const short = String(page?.id ?? "").replace(/-/g, "").slice(0, 6).toUpperCase();
-  return short ? `KZ-${short}` : "KZ-受付";
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error("ticket_number の採番に失敗しました");
+}
+
+/** チケットの参照URL。Notion時代はNotionページURLを返していたが、正本がDBへ移ったので
+ * カイゼンくん自身のチケット詳細画面（/board/ticket/[pageId]）を指す。
+ * ベースURLが分からない環境では空文字（存在しないNotionリンクを作らない）。 */
+function ticketPageUrl(pageId: string): string {
+  const base = process.env.NEXT_PUBLIC_BASE_URL
+    || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
+  if (!base || !pageId) return "";
+  return `${base.replace(/\/+$/, "")}/board/ticket/${encodeURIComponent(pageId)}`;
 }

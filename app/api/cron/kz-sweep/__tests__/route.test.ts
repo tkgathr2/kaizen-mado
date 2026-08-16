@@ -2,13 +2,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // ── /api/cron/kz-sweep：状態タイムアウト監視の通知が構造化stallペイロードで
 //    handoffStallToSanada（kind="stall"）を呼ぶことを検証する（2026-08-15 社長形式承認・案A）。
-// hasReminderBlock（Notion直叩き）は NOTION_TOKEN 未設定にして常に「未リマインド」側へ倒す
-// （tickets.ts と同じ fail-safe パターン。token/pageId欠落時は即 false を返す実装）。
+// hasDiscussionHeading（Postgres版・DB移行2026-08-16）は既定で「未リマインド」側（false）を
+// 返すモックにする（旧 hasReminderBlock の Notion直叩き版と同じ既定挙動）。
 
 const fetchNonTerminalTickets = vi.fn(async (..._a: unknown[]): Promise<unknown[]> => []);
 const updateTicketState = vi.fn(async (..._a: unknown[]) => {});
 const appendDiscussionBlocks = vi.fn(async (..._a: unknown[]) => {});
 const setStatusChangedAt = vi.fn(async () => {});
+const hasDiscussionHeading = vi.fn(async (..._a: unknown[]) => false);
 const checkCronSecret = vi.fn((..._a: unknown[]) => true);
 const notifySlackAlert = vi.fn(async (..._a: unknown[]) => true);
 const enqueueNotification = vi.fn(async (..._a: unknown[]) => {});
@@ -19,6 +20,7 @@ vi.mock("@/lib/tickets", () => ({
   updateTicketState: (...a: unknown[]) => updateTicketState(...a),
   appendDiscussionBlocks: (...a: unknown[]) => appendDiscussionBlocks(...a),
   setStatusChangedAt: (...a: unknown[]) => setStatusChangedAt(...(a as [])),
+  hasDiscussionHeading: (...a: unknown[]) => hasDiscussionHeading(...a),
 }));
 vi.mock("@/lib/cronAuth", () => ({
   checkCronSecret: (...a: unknown[]) => checkCronSecret(...a),
@@ -61,18 +63,12 @@ function ticket(overrides: Record<string, unknown> = {}) {
 }
 
 describe("/api/cron/kz-sweep（構造化stallペイロード送信）", () => {
-  const savedToken = process.env.NOTION_TOKEN;
-
   beforeEach(() => {
     vi.clearAllMocks();
     checkCronSecret.mockReturnValue(true);
     handoffStallToSanada.mockResolvedValue(true);
     fetchNonTerminalTickets.mockResolvedValue([]);
-    delete process.env.NOTION_TOKEN; // hasReminderBlock を常に「未リマインド」に倒す
-  });
-  afterEach(() => {
-    if (savedToken === undefined) delete process.env.NOTION_TOKEN;
-    else process.env.NOTION_TOKEN = savedToken;
+    hasDiscussionHeading.mockResolvedValue(false); // 常に「未リマインド」側へ倒す
   });
 
   it("GO待ち48h超：stallKind=awaiting_go, stallPhase=remind, autoCloseInHoursを含めて送る", async () => {

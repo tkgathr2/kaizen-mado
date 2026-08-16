@@ -117,10 +117,16 @@ export async function handoffFyiToSanada(
   return false;
 }
 
-/** NotionチケットページのURL（lib/line.ts の notionPageUrl と同じ組み立て）。
- * kz-sweep（stallペイロード組み立て）からも参照するため export する。 */
+/** チケット詳細ページのURL（lib/line.ts の notionPageUrl と同じ組み立て）。
+ * kz-sweep（stallペイロード組み立て）からも参照するため export する。
+ *
+ * 【DB移行・2026-08-16】旧実装は notion.so/<pageId> を直接組み立てていたが、
+ * チケットストアがPostgresへ移行した後は新規チケットのpageIdが実在のNotionページを
+ * 指さない（合成UUID）ため、Notionリンクは新規チケットで確実に404になる。移行元の
+ * 旧チケットも含め、必ず動く自前の /board/ticket/<pageId> へ統一する。 */
 export function ticketUrlOf(pageId: string): string {
-  return `https://www.notion.so/${(pageId || "").replace(/-/g, "")}`;
+  const base = (process.env.KAIZEN_PUBLIC_BASE || "https://kaizen.takagi.bz").replace(/\/+$/, "");
+  return `${base}/board/ticket/${encodeURIComponent(pageId || "")}`;
 }
 
 /**
