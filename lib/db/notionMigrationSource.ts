@@ -40,8 +40,10 @@ function findUniqueId(props: any): any {
   return null;
 }
 function ticketNumberFromProps(props: any): number | null {
-  const u = props["ID"]?.type === "unique_id" ? props["ID"] : findUniqueId(props);
-  const n = u?.number;
+  const prop = props["ID"]?.type === "unique_id" ? props["ID"] : findUniqueId(props);
+  // Notion API の unique_id プロパティは {type:"unique_id", unique_id:{prefix,number}} という
+  // 入れ子構造（既存 lib/tickets.ts の idFromUniqueId と同じ形）。number は一段深い。
+  const n = prop?.unique_id?.number;
   return typeof n === "number" ? n : null;
 }
 
