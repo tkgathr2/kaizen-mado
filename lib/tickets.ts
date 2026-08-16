@@ -511,6 +511,31 @@ export function summarizeRetryBlocks(blocks: DiscussionBlock[]): ReaperRetryInfo
   return { count, lastFailure };
 }
 
+/**
+ * 指定の見出し文字列を含む議論ログ行が既にあるか（kz-sweepの連打防止用）。
+ *
+ * 【引き継ぎ・重要】Postgres移行前は Notion のページブロックを直接検索していたが、
+ * 議論ログの保存先が ticket_discussion_blocks（Postgres）に変わったため、Notion検索の
+ * ままだと**新しく積んだリマインド見出しが永久に見つからず、同じリマインドが
+ * cron実行のたびに再送され続ける**（社長への通知スパム）。この関数はその置き換え。
+ * fail-safe方針は元実装と同じ＝取得失敗・例外時は「既にある」とみなして送らない側に倒す。
+ */
+export async function hasDiscussionHeading(pageId: string, heading: string): Promise<boolean> {
+  try {
+    if (!pageId) return true;
+    const ticketId = await resolveTicketId(pageId);
+    if (ticketId === null) return true;
+    const rows = await query<{ heading: string | null }>(
+      `SELECT heading FROM ticket_discussion_blocks WHERE ticket_id = $1::bigint AND heading LIKE '%' || $2 || '%'`,
+      [ticketId, heading]
+    );
+    return rows.length > 0;
+  } catch (err) {
+    console.error("[tickets] hasDiscussionHeading 例外（送らない側の安全側）:", (err as Error).message);
+    return true;
+  }
+}
+
 /** チケットの議論ログを読み、リトライ回数と直近失敗理由を返す。
  * ★ fail-safe：取得失敗・接続不可・例外はすべて { count: 0, lastFailure: null } を返す
  * ＝「数えられないときは従来どおり『着手』へ戻す側」に倒す（誤って差し戻さない安全側）。 */
@@ -668,4 +693,52 @@ export async function fetchNonTerminalTickets(limit = 50): Promise<TicketRow[]> 
     [states, cap(limit)]
   );
   return rows.map(mapTicketRow);
+}
+
+// ── 社長⇔カイゼンくんのLINE往復ログ（旧 lib/kaizen-notion.ts の Postgres移行版） ──
+// 【DB移行・2026-08-16】旧実装は Notion「lineChat」rich_textプロパティに改行区切りで
+// 追記していた。tickets.line_chat 列（TEXT）へ同じ形式のまま移す。呼び出し元
+// （lib/kaizen-notion.ts が薄いラッパーとして再エクスポート）は変更不要。
+
+/** チケットのLINE往復ログへ1行追記する（「HH:MM ユーザー: メッセージ」形式）。 */
+export async function appendLineChat(pageId: string, chatLine: string): Promise<boolean> {
+  if (!pageId || !chatLine) return false;
+  try {
+    const ticketId = await resolveTicketId(pageId);
+    if (ticketId === null) return false;
+    await query(
+      `UPDATE tickets SET line_chat = CASE WHEN line_chat = '' THEN $2 ELSE line_chat || E'\n' || $2 END,
+       updated_at = now() WHERE id = $1::bigint`,
+      [ticketId, chatLine]
+    );
+    return true;
+  } catch (err) {
+    console.error("[tickets] appendLineChat error:", (err as Error).message);
+    return false;
+  }
+}
+
+/** チケットのLINE往復ログ全文を取得する（改行区切り）。 */
+export async function getLineChat(pageId: string): Promise<string> {
+  if (!pageId) return "";
+  try {
+    const ticketId = await resolveTicketId(pageId);
+    if (ticketId === null) return "";
+    const rows = await query<{ line_chat: string }>(
+      `SELECT line_chat FROM tickets WHERE id = $1::bigint`,
+      [ticketId]
+    );
+    return rows[0]?.line_chat ?? "";
+  } catch (err) {
+    console.error("[tickets] getLineChat error:", (err as Error).message);
+    return "";
+  }
+}
+
+/** LINE往復ログ列の初期化。Postgresでは列自体がDEFAULT ''で常に初期化済みのため実質no-op
+ * （既存呼び出し元との互換のためインターフェースだけ残す）。 */
+export async function ensureLineChatField(pageId: string): Promise<boolean> {
+  if (!pageId) return false;
+  const ticketId = await resolveTicketId(pageId).catch(() => null);
+  return ticketId !== null;
 }

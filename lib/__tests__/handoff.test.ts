@@ -62,16 +62,16 @@ describe("buildHandoffPayload（受け渡しbodyの組み立て）", () => {
       type: "bug",
       priority: "高",
       reporter: "起票者",
-      ticketUrl: "https://www.notion.so/37b0d9808b3b81489721e1fa84498c34",
+      ticketUrl: "https://kaizen.takagi.bz/board/ticket/37b0d980-8b3b-8148-9721-e1fa84498c34",
       repo: "tkgathr2/security-report-system",
       houshin: "議論で出た方針",
       steps: ["改善手順1", "改善手順2"],
     });
   });
 
-  it("ticketUrl は pageId のハイフンを除いて組み立てる", () => {
+  it("ticketUrl は /board/ticket/<pageId> 形式で組み立てる（DB移行・2026-08-16）", () => {
     const p = buildHandoffPayload(ticket(), discussion);
-    expect(p.ticketUrl).toBe("https://www.notion.so/37b0d9808b3b81489721e1fa84498c34");
+    expect(p.ticketUrl).toBe("https://kaizen.takagi.bz/board/ticket/37b0d980-8b3b-8148-9721-e1fa84498c34");
   });
 
   it("repo が未確定（null）ならキー自体を省略する", () => {
@@ -377,10 +377,10 @@ describe("handoffStallToSanada（kz-sweep 停滞リマインドの構造化送�
   });
 });
 
-describe("ticketUrlOf（NotionページURLの組み立て）", () => {
-  it("pageIdのハイフンを除いてURLを組み立てる", () => {
+describe("ticketUrlOf（チケット詳細ページURLの組み立て・DB移行2026-08-16）", () => {
+  it("/board/ticket/<pageId> 形式でURLを組み立てる", () => {
     expect(ticketUrlOf("37b0d980-8b3b-8148-9721-e1fa84498c34")).toBe(
-      "https://www.notion.so/37b0d9808b3b81489721e1fa84498c34"
+      "https://kaizen.takagi.bz/board/ticket/37b0d980-8b3b-8148-9721-e1fa84498c34"
     );
   });
 });

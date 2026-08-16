@@ -26,9 +26,16 @@ CREATE TABLE IF NOT EXISTS tickets (
   slack_thread_ts TEXT,
   slack_user_id TEXT,
   notion_page_id TEXT,
+  -- 社長⇔カイゼンくんのLINE往復ログ（旧Notion「lineChat」rich_textプロパティの置き換え）。
+  -- 改行区切りの単純テキスト（既存 lib/kaizen-notion.ts と同じ形式をそのまま踏襲）。
+  line_chat TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- 新規テーブルのCREATE TABLE後にこのSCHEMA_SQLへ列を追加した場合でも安全に反映されるよう、
+-- ALTER TABLE ADD COLUMN IF NOT EXISTS でも同じ列を保証する（防御的・冪等）。
+ALTER TABLE tickets ADD COLUMN IF NOT EXISTS line_chat TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS tickets_state_idx ON tickets (state);
 CREATE UNIQUE INDEX IF NOT EXISTS tickets_notion_page_id_idx ON tickets (notion_page_id) WHERE notion_page_id IS NOT NULL;

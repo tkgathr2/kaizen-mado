@@ -17,6 +17,7 @@ import {
   updateTicketState,
   appendDiscussionBlocks,
   setStatusChangedAt,
+  hasDiscussionHeading,
 } from "@/lib/tickets";
 import type { TicketRow } from "@/lib/tickets";
 import { checkCronSecret } from "@/lib/cronAuth";
@@ -143,7 +144,7 @@ async function processTicket(row: TicketRow, now: number): Promise<SweepResult> 
     }
     if (elapsedMs >= TIMEOUTS.AWAITING_GO_REMIND_MS) {
       // 48h超 → リマインド（Notionに印を付けて連打しない）
-      const alreadyReminded = await hasReminderBlock(row.pageId, "GO待ちリマインド");
+      const alreadyReminded = await hasDiscussionHeading(row.pageId, "GO待ちリマインド");
       if (!alreadyReminded) {
         await appendDiscussionBlocks(row.pageId, [
           {
@@ -184,7 +185,7 @@ async function processTicket(row: TicketRow, now: number): Promise<SweepResult> 
       return { ...base, action: "closed", reason: "BLOCKED 7d timeout" };
     }
     if (elapsedMs >= TIMEOUTS.BLOCKED_REMIND_MS) {
-      const alreadyReminded = await hasReminderBlock(row.pageId, "差し戻しリマインド");
+      const alreadyReminded = await hasDiscussionHeading(row.pageId, "差し戻しリマインド");
       if (!alreadyReminded) {
         await appendDiscussionBlocks(row.pageId, [
           {
@@ -212,7 +213,7 @@ async function processTicket(row: TicketRow, now: number): Promise<SweepResult> 
   // ── レビュー ──
   if (row.state === KZ_STATUS.REVIEW) {
     if (elapsedMs >= TIMEOUTS.REVIEW_REMIND_MS) {
-      const alreadyReminded = await hasReminderBlock(row.pageId, "レビューリマインド");
+      const alreadyReminded = await hasDiscussionHeading(row.pageId, "レビューリマインド");
       if (!alreadyReminded) {
         await appendDiscussionBlocks(row.pageId, [
           {
@@ -243,7 +244,7 @@ async function processTicket(row: TicketRow, now: number): Promise<SweepResult> 
   // ただし放置は検知する（真田側のセッションが落ちたまま誰も気付かない状態を作らない）。
   if (row.state === KZ_STATUS.SANADA_IMPLEMENTING) {
     if (elapsedMs >= TIMEOUTS.SANADA_IMPLEMENTING_REMIND_MS) {
-      const alreadyReminded = await hasReminderBlock(row.pageId, "真田実装中リマインド");
+      const alreadyReminded = await hasDiscussionHeading(row.pageId, "真田実装中リマインド");
       if (!alreadyReminded) {
         await appendDiscussionBlocks(row.pageId, [
           {
@@ -268,40 +269,6 @@ async function processTicket(row: TicketRow, now: number): Promise<SweepResult> 
   }
 
   return { ...base, action: "none" };
-}
-
-// ── 連打防止：指定の見出し文字列を含むブロックが既にあるか ──
-// Notionの子ブロックを最大100件まで見て heading_3 の本文を検索する。
-// 取得失敗時は「既にある」とみなして送らない（notify.ts の hasStuckMarker と同方針）。
-const NOTION_VERSION = "2022-06-28";
-async function hasReminderBlock(pageId: string, heading: string): Promise<boolean> {
-  const token = process.env.NOTION_TOKEN;
-  if (!token || !pageId) return false;
-  try {
-    const res = await fetch(
-      `https://api.notion.com/v1/blocks/${pageId}/children?page_size=100`,
-      {
-        method: "GET",
-        headers: {
-          authorization: `Bearer ${token}`,
-          "Notion-Version": NOTION_VERSION,
-        },
-      }
-    );
-    if (!res.ok) return true; // 確認できない時は送らない側に倒す
-    const data = await res.json();
-    const blocks: any[] = Array.isArray(data?.results) ? data.results : [];
-    for (const b of blocks) {
-      if (b?.type !== "heading_3") continue;
-      const text: string = (b?.heading_3?.rich_text || [])
-        .map((r: any) => r?.plain_text ?? "")
-        .join("");
-      if (text.includes(heading)) return true;
-    }
-    return false;
-  } catch {
-    return true; // 例外時も送らない側に倒す
-  }
 }
 
 // ── メインハンドラ ──
