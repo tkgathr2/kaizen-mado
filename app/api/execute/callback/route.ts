@@ -19,7 +19,13 @@ import {
 import { returnLearningFromCompleted } from "@/lib/learn";
 import { notifyStuckOnce, notifyReviewOnce, buildMergedText } from "@/lib/notify";
 import { checkCronSecret } from "@/lib/cronAuth";
-import { isInfraError, buildInfraNoticeText, notifySlackAlert } from "@/lib/line";
+import {
+  isInfraError,
+  buildInfraNoticeText,
+  notifySlackAlert,
+  notifyKuharaCopy,
+  buildKuharaMergedText,
+} from "@/lib/line";
 import { handoffFyiToSanada } from "@/lib/handoff";
 import { isValidFailureClass, type FailureClass } from "@/lib/kz-state";
 import { findTarget } from "@/lib/targets";
@@ -123,6 +129,11 @@ export async function POST(req: NextRequest) {
       // 真田システム経由が本線。失敗時はカイゼンくん自前LINEへは送らず、真田Bot名義の
       // Slack警告（社長＋幹部Botのみ）で知らせる（社長指示 2026-08-15：自前LINEフォールバック全廃）。
       const mergedText = buildMergedText(current, prUrl);
+      // 久原さん複製投稿（ベストエフォート・失敗しても本来の完了報告には一切影響しない）。
+      await notifyKuharaCopy(
+        "完了報告",
+        buildKuharaMergedText(current, prUrl)
+      ).catch(() => false);
       const handed = await handoffFyiToSanada(ticketId, mergedText).catch(() => false);
       if (!handed) {
         await notifySlackAlert(

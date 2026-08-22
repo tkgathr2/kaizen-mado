@@ -18,6 +18,7 @@ const returnLearningFromCompleted = vi.fn(
 // 2026-08-15：受け渡し失敗時は自前LINE（旧pushProposal）へは一切フォールバックせず、
 // notifySlackAlert（真田Bot名義のSlack警告）へ倒す。
 const notifySlackAlert = vi.fn(async (_detail: string) => true);
+const notifyKuharaCopy = vi.fn(async (..._a: unknown[]) => true);
 // 2026-08-12：真田システム（mention-hisho）への受け渡し。成功したら notifySlackAlert は呼ばない。
 const handoffToSanada = vi.fn(async () => true);
 const kickEndpoint = vi.fn(async () => true);
@@ -38,6 +39,8 @@ vi.mock("@/lib/learn", () => ({
 // LINE送信・トリガ・ターゲット解決・ゲートは名前付きモックで差し替え（呼び出し検証に使う）。
 vi.mock("@/lib/line", () => ({
   notifySlackAlert: (...a: unknown[]) => notifySlackAlert(...(a as [string])),
+  notifyKuharaCopy: (...a: unknown[]) => notifyKuharaCopy(...a),
+  buildKuharaGoText: () => ["KUHARA-GO"],
   msgHead: () => "",
   stageBar: () => "",
   BOARD_URL: "x",

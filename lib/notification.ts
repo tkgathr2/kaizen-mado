@@ -24,7 +24,15 @@
  *    （cron ハンドラだけは結果を JSON で可視化する）。
  */
 
-import { truncateForLine, lineEnabled, BOARD_URL, actionBanner, notifySlackAlert } from "@/lib/line";
+import {
+  truncateForLine,
+  lineEnabled,
+  BOARD_URL,
+  actionBanner,
+  notifySlackAlert,
+  notifyKuharaCopy,
+  buildKuharaDigestText,
+} from "@/lib/line";
 import { handoffFyiToSanada } from "@/lib/handoff";
 
 export interface QueuedNotification {
@@ -375,6 +383,8 @@ export async function sendBatchNotifications(
   //（LINE 5000字上限で 400 になるのを絶対に避ける）。
   const body = buildDigestText(items).slice(0, 4900);
   console.log(`[notification] digest送信 (${items.length}件)`);
+  // 久原さん複製投稿（ベストエフォート・失敗しても本来のダイジェスト送信には一切影響しない）。
+  await notifyKuharaCopy("日次ダイジェスト", buildKuharaDigestText(items)).catch(() => false);
   // ダイジェストは複数チケットの束ねなので、真田handoffの冪等キー（ticketId単位）には
   // 「digest:<日付>」という合成IDを使う（同日の再送だけ重複扱いにする）。
   const digestId = `digest:${new Date().toISOString().slice(0, 10)}`;

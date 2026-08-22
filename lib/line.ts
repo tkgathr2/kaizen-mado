@@ -342,6 +342,135 @@ export async function pushTextReturningId(
   return { ok: true, messageId: sent[0]?.id };
 }
 
+// ── 久原さん（AI・DX顧問候補・社外・NDA未締結）向け Slack複製投稿 ──
+// 社長宛LINE通知（GO伺い・詰まり連絡・Merge待ち・完了報告・毎朝ダイジェスト）と同じ内容の要約を、
+// 久原さんも参加する専用チャンネルへ複製投稿する（社長指示 2026-08-22）。
+// 既存の notifySlackAlert（persona-relay 経由）の仕組みをそのまま流用し、投稿先チャンネルだけ
+// 環境変数で切り替える（トークン・チャンネルIDは一切ハードコードしない）。
+// ★fail-safe：PERSONA_RELAY_URL/SECRET または KAIZEN_KUHARA_SLACK_CHANNEL が
+//   1つでも未設定なら静かにスキップする。失敗時も例外を投げず false を返すのみ＝
+//   呼び出し元の本来のLINE/handoff通知には一切影響しない（呼び出し元は必ず .catch() で隔離する）。
+// ★NDA未締結の社外の立場のため、本文は要点のみの要約とし、生ログ・詳細な内部議論は載せない。
+function kuharaChannelRelay(): { url: string; secret: string; channel: string } | null {
+  const url = process.env.PERSONA_RELAY_URL?.trim();
+  const secret = process.env.PERSONA_RELAY_SECRET?.trim();
+  const channel = process.env.KAIZEN_KUHARA_SLACK_CHANNEL?.trim();
+  if (!url || !secret || !channel) return null;
+  return { url: url.replace(/\/+$/, ""), secret, channel };
+}
+
+export type KuharaNotifyKind =
+  | "GO伺い"
+  | "詰まり連絡"
+  | "Merge待ち"
+  | "完了報告"
+  | "日次ダイジェスト";
+
+/**
+ * 社長宛LINE通知と同じ内容の要約を、久原さん閲覧用チャンネルへ複製投稿する（ベストエフォート）。
+ * 失敗しても false を返すだけで例外は投げない（呼び出し元の本来の通知処理には一切影響しない）。
+ */
+export async function notifyKuharaCopy(
+  kind: KuharaNotifyKind,
+  summaryLines: string[]
+): Promise<boolean> {
+  const relay = kuharaChannelRelay();
+  if (!relay) return false;
+  try {
+    const res = await fetch(`${relay.url}/send`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        "x-relay-secret": relay.secret,
+      },
+      body: JSON.stringify({
+        persona: "sanada",
+        channel: relay.channel,
+        text: [`📋 カイゼンくん通知（複製）／${kind}`, ``, ...summaryLines].join("\n"),
+      }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** 久原さん複製投稿の先頭2行（対象システム＋案件ID／タイトル）。全種別共通。 */
+function kuharaTicketHeaderLines(ticket: {
+  ticketId?: string | null;
+  system?: string | null;
+  title?: string | null;
+}): string[] {
+  return [
+    `🖥 ${systemLabel(ticket.system)}`,
+    `🎫 ${ticket.ticketId || "案件ID未特定"}：${cleanForLine(ticket.title || "（タイトル未設定）", 60)}`,
+  ];
+}
+
+/** GO伺いの複製要約。 */
+export function buildKuharaGoText(ticket: TicketRow, d: DiscussResult): string[] {
+  return [
+    ...kuharaTicketHeaderLines(ticket),
+    `❓ こまりごと：${cleanForLine(d.problemPlain || ticket.title || "改善のご要望", 60)}`,
+    `🧭 おすすめ：${truncateForLine(d.recommendation, 30)}（社長のGO待ち）`,
+    `🔗 ${notionPageUrl(ticket.pageId)}`,
+  ];
+}
+
+/** 詰まり連絡の複製要約。 */
+export function buildKuharaStuckText(ticket: TicketRow, reason: string): string[] {
+  return [
+    ...kuharaTicketHeaderLines(ticket),
+    `🆘 詰まった理由：${truncateForLine(reason || "詳細不明", 80)}`,
+    `🔗 ${notionPageUrl(ticket.pageId)}`,
+  ];
+}
+
+/** Merge待ち連絡の複製要約。 */
+export function buildKuharaReviewText(
+  ticket: TicketRow,
+  prUrl: string,
+  detail: string
+): string[] {
+  return [
+    ...kuharaTicketHeaderLines(ticket),
+    `✋ Merge待ち：${truncateForLine(detail || "自動マージ条件を満たさず", 60)}`,
+    ...(prUrl ? [`PR ▶ ${prUrl}`] : []),
+    `🔗 ${notionPageUrl(ticket.pageId)}`,
+  ];
+}
+
+/** 完了報告の複製要約。 */
+export function buildKuharaMergedText(
+  ticket: { ticketId?: string | null; system?: string | null; title?: string | null; pageId: string },
+  prUrl: string
+): string[] {
+  return [
+    ...kuharaTicketHeaderLines(ticket),
+    `✅ 本番反映まで完了しました`,
+    ...(prUrl ? [`PR ▶ ${prUrl}`] : []),
+    `🔗 ${notionPageUrl(ticket.pageId)}`,
+  ];
+}
+
+/** 毎朝ダイジェストの複製要約（チケット単位の1行サマリ・最大20件・超過分は件数だけ畳む）。 */
+export function buildKuharaDigestText(
+  items: Array<{ ticketId: string; type: string; message: string }>
+): string[] {
+  const MAX = 20;
+  const shown = items.slice(0, MAX);
+  const lines = shown.map(
+    (n) => `・${n.ticketId}（${n.type}）：${truncateForLine(n.message, 40)}`
+  );
+  const omitted = items.length > MAX ? [`…ほか ${items.length - MAX}件`] : [];
+  return [
+    `🌅 昨日のうごき ${items.length}件`,
+    ...lines,
+    ...omitted,
+    `🔗 ${BOARD_URL}`,
+  ];
+}
+
 /** postback応答用の簡易reply（「着手します」等の受領返信）。
  *  quoteToken を渡すと、そのメッセージ（＝相手の発言）を引用した形で表示される
  *  （LINEネイティブの引用返信UI・何に対しての返事か視覚的にわかる）。 */
@@ -702,16 +831,15 @@ export async function pushProposal(ticket: TicketRow, d: DiscussResult): Promise
   // Slackメンション形式の起票者は表示名へ解決してから文面を組む（社長要望2026-07-08）。
   // 解決に失敗しても buildProposalText 側で元の文字列にフォールバックされる（fail-safe）。
   const reporterDisplay = await resolveReporterDisplay(ticket.reporter);
+  const ticketForText = { ...ticket, reporter: reporterDisplay };
+  // 久原さん複製投稿（ベストエフォート・失敗しても本来のLINE通知には一切影響しない）。
+  await notifyKuharaCopy("GO伺い", buildKuharaGoText(ticketForText, d)).catch(() => false);
   const res = await postLine(LINE_PUSH_ENDPOINT, {
     to: targetUserId(),
     messages: [
       {
         type: "text",
-        text: buildProposalText(
-          { ...ticket, reporter: reporterDisplay },
-          d,
-          { isSlackOrigin }
-        ),
+        text: buildProposalText(ticketForText, d, { isSlackOrigin }),
         quickReply: goQuickReply(ticket.pageId),
       },
     ],
