@@ -20,10 +20,13 @@ import {
 // ── LINE/真田handoffをモック（実送信させない） ──
 const pushMock = vi.fn(async (_t: string) => true);
 const alertMock = vi.fn(async (..._a: unknown[]) => true);
+const kuharaCopyMock = vi.fn(async (..._a: unknown[]) => true);
 let lineOn = true;
 vi.mock("@/lib/line", () => ({
   lineEnabled: () => lineOn,
   notifySlackAlert: (...a: unknown[]) => alertMock(...a),
+  notifyKuharaCopy: (...a: unknown[]) => kuharaCopyMock(...a),
+  buildKuharaDigestText: () => ["KUHARA-DIGEST"],
   truncateForLine: (s: string | null | undefined, max: number) => {
     const t = (s || "").trim().replace(/\s+/g, " ");
     return t.length <= max ? t : t.slice(0, Math.max(0, max - 1)) + "…";

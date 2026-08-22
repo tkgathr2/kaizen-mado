@@ -22,7 +22,18 @@
 //   出ても握りつぶす（カイゼンくんの改善ループを通知の失敗で止めない）。
 import type { TicketRow } from "./tickets";
 import { appendDiscussionBlocks, hasDiscussionHeading } from "./tickets";
-import { lineEnabled, notifySlackAlert, truncateForLine, BOARD_URL, msgHead, stageBar, actionBanner } from "./line";
+import {
+  lineEnabled,
+  notifySlackAlert,
+  notifyKuharaCopy,
+  buildKuharaStuckText,
+  buildKuharaReviewText,
+  truncateForLine,
+  BOARD_URL,
+  msgHead,
+  stageBar,
+  actionBanner,
+} from "./line";
 import { handoffEnabled, handoffFyiToSanada } from "./handoff";
 
 /**
@@ -120,6 +131,9 @@ export async function notifyStuckOnce(
   // 既に通知済みなら送らない（連打防止）。
   if (await hasStuckMarker(ticket.pageId)) return false;
 
+  // 久原さん複製投稿（ベストエフォート・失敗しても本来のLINE/handoff通知には一切影響しない）。
+  await notifyKuharaCopy("詰まり連絡", buildKuharaStuckText(ticket, reason)).catch(() => false);
+
   const sent = await sendFyi(ticket.ticketId, buildStuckText(ticket, reason), {
     awaitsReply: true,
   });
@@ -167,6 +181,12 @@ export async function notifyReviewOnce(
 ): Promise<boolean> {
   if (!lineEnabled() && !handoffEnabled()) return false;
   if (await hasMarker(ticket.pageId, REVIEW_MARKER_HEADING)) return false;
+
+  // 久原さん複製投稿（ベストエフォート・失敗しても本来のLINE/handoff通知には一切影響しない）。
+  await notifyKuharaCopy(
+    "Merge待ち",
+    buildKuharaReviewText(ticket, prUrl, detail)
+  ).catch(() => false);
 
   const sent = await sendFyi(ticket.ticketId, buildReviewText(ticket, prUrl, detail));
   if (!sent) return false;

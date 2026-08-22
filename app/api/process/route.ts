@@ -21,7 +21,7 @@ import {
   setStatusChangedAt,
 } from "@/lib/tickets";
 import { discussTicket } from "@/lib/discuss";
-import { notifySlackAlert, BOARD_URL } from "@/lib/line";
+import { notifySlackAlert, notifyKuharaCopy, buildKuharaGoText, BOARD_URL } from "@/lib/line";
 import { handoffToSanada } from "@/lib/handoff";
 import { checkCronSecret } from "@/lib/cronAuth";
 import { returnLearningFromCompleted } from "@/lib/learn";
@@ -83,6 +83,9 @@ export async function POST(req: NextRequest) {
         const goWaitTicket = { ...ticket, state: "GO待ち" };
         await updateTicketState(ticket.pageId, "GO待ち");
         await setStatusChangedAt(ticket.pageId); // Phase 1: 状態変更日時を記録
+
+        // 久原さん複製投稿（ベストエフォート・失敗しても本来のGO伺い通知には一切影響しない）。
+        await notifyKuharaCopy("GO伺い", buildKuharaGoText(goWaitTicket, d)).catch(() => false);
 
         // 本線：真田システム（mention-hisho）へ受け渡す。真田側が「真田宛メンション」として
         // 扱い、既存の真田LINEカード（✅OK/✏️修正/🚫却下/🛠ClaudeCodeへ送る）を社長へ出す。

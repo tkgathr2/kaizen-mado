@@ -15,9 +15,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // LINE/Slack警告は名前付きモックで差し替え（呼ばれた/呼ばれてないを検証）。
 const lineEnabled = vi.fn(() => true);
 const notifySlackAlert = vi.fn(async (_detail: string) => true);
+const notifyKuharaCopy = vi.fn(async (..._a: unknown[]) => true);
 vi.mock("@/lib/line", () => ({
   lineEnabled: () => lineEnabled(),
   notifySlackAlert: (...a: unknown[]) => notifySlackAlert(...(a as [string])),
+  notifyKuharaCopy: (...a: unknown[]) => notifyKuharaCopy(...a),
+  buildKuharaStuckText: () => ["KUHARA-STUCK"],
+  buildKuharaReviewText: () => ["KUHARA-REVIEW"],
   truncateForLine: (s: string, max: number) => (s || "").slice(0, max),
   BOARD_URL: "https://kaizen.takagi.bz/board",
   msgHead: () => "HEAD",
@@ -63,6 +67,7 @@ describe("lib/notify 詰まり連絡の de-dup", () => {
     vi.clearAllMocks();
     lineEnabled.mockReturnValue(true);
     notifySlackAlert.mockResolvedValue(true);
+    notifyKuharaCopy.mockResolvedValue(true);
     handoffEnabled.mockReturnValue(true);
     handoffFyiToSanada.mockResolvedValue(true);
     hasDiscussionHeading.mockResolvedValue(false);
@@ -212,6 +217,20 @@ describe("lib/notify 詰まり連絡の de-dup", () => {
   it("hasStuckMarker：hasDiscussionHeadingがfalseならfalseを返す（委譲）", async () => {
     hasDiscussionHeading.mockResolvedValue(false);
     expect(await hasStuckMarker("page-x")).toBe(false);
+  });
+
+  it("久原さん複製投稿（notifyKuharaCopy）を呼ぶが、失敗しても本来の詰まり連絡（handoff）には影響しない", async () => {
+    // notifyKuharaCopy が reject しても .catch(()=>false) で握り潰され、
+    // sendFyi/handoffFyiToSanada 経由の本来の通知は正常に完了しなければならない（fail-safe隔離）。
+    notifyKuharaCopy.mockRejectedValue(new Error("relay down"));
+    hasDiscussionHeading.mockResolvedValue(false);
+
+    const sent = await notifyStuckOnce(ticket, "理由");
+
+    expect(notifyKuharaCopy).toHaveBeenCalledTimes(1);
+    expect(notifyKuharaCopy).toHaveBeenCalledWith("詰まり連絡", ["KUHARA-STUCK"]);
+    expect(sent).toBe(true);
+    expect(handoffFyiToSanada).toHaveBeenCalledTimes(1);
   });
 });
 

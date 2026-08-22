@@ -17,6 +17,7 @@ const notifySlackAlert = vi.fn(async (_detail: string) => true);
 const enqueueNotification = vi.fn(async (..._a: unknown[]) => {});
 const findTarget = vi.fn((..._a: unknown[]) => null as unknown);
 const handoffFyiToSanada = vi.fn(async (..._a: unknown[]) => false);
+const notifyKuharaCopy = vi.fn(async (..._a: unknown[]) => true);
 
 vi.mock("@/lib/tickets", () => ({
   updateTicketState: (...a: unknown[]) => updateTicketState(...a),
@@ -38,6 +39,8 @@ vi.mock("@/lib/line", () => ({
   isInfraError: (d: string | null | undefined) => Boolean((d || "").includes("401")),
   buildInfraNoticeText: () => "infra-text",
   notifySlackAlert: (...a: unknown[]) => notifySlackAlert(...(a as [string])),
+  notifyKuharaCopy: (...a: unknown[]) => notifyKuharaCopy(...a),
+  buildKuharaMergedText: () => ["KUHARA-MERGED"],
 }));
 vi.mock("@/lib/slack", () => ({ postToSlack: async () => true }));
 vi.mock("@/lib/notification", () => ({
