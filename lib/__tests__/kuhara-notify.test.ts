@@ -110,6 +110,19 @@ describe("notifyKuharaCopy（久原さん複製投稿）", () => {
     expect(body.text).toContain("🎫 KZ-42：一覧が重い");
   });
 
+  it("冒頭で久原さんへ@メンションする（2026-08-22追加・メンション無しだと通知が飛ばず本番実測で発覚）", async () => {
+    process.env.PERSONA_RELAY_URL = "https://relay.example.com";
+    process.env.PERSONA_RELAY_SECRET = "s3cret";
+    process.env.KAIZEN_KUHARA_SLACK_CHANNEL = "C0BSSMT0LHW";
+
+    await notifyKuharaCopy("GO伺い", ["line1"]);
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    expect(body.text).toContain("<@U0BLFU47BS9>");
+    expect(body.text.indexOf("<@U0BLFU47BS9>")).toBe(0); // 冒頭であること
+  });
+
   it("relayがエラー応答(ok:false)を返しても例外を投げずfalseを返す", async () => {
     process.env.PERSONA_RELAY_URL = "https://relay.example.com";
     process.env.PERSONA_RELAY_SECRET = "s3cret";

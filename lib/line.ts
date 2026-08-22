@@ -366,9 +366,14 @@ export type KuharaNotifyKind =
   | "完了報告"
   | "日次ダイジェスト";
 
+/** 久原さんへのメンション用Slack user_id（AI・DX顧問候補）。mention-hisho側の実装と揃える。 */
+const KUHARA_SLACK_USER_ID = "U0BLFU47BS9";
+
 /**
  * 社長宛LINE通知と同じ内容の要約を、久原さん閲覧用チャンネルへ複製投稿する（ベストエフォート）。
  * 失敗しても false を返すだけで例外は投げない（呼び出し元の本来の通知処理には一切影響しない）。
+ * 【2026-08-22 追記】mention-hisho側（真田宛メンション複製）と同様に、冒頭で久原さんへ
+ * @メンションする。メンションが無いとSlack通知が飛ばず気づかれないため（本番実測で発覚・修正）。
  */
 export async function notifyKuharaCopy(
   kind: KuharaNotifyKind,
@@ -386,7 +391,11 @@ export async function notifyKuharaCopy(
       body: JSON.stringify({
         persona: "sanada",
         channel: relay.channel,
-        text: [`📋 カイゼンくん通知（複製）／${kind}`, ``, ...summaryLines].join("\n"),
+        text: [
+          `<@${KUHARA_SLACK_USER_ID}> 📋 カイゼンくん通知（複製）／${kind}`,
+          ``,
+          ...summaryLines,
+        ].join("\n"),
       }),
     });
     return res.ok;
