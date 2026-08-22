@@ -11,6 +11,7 @@ import {
   buildDigestText,
   enqueueNotification,
   runDailyNotificationBatch,
+  sendBatchNotifications,
   __setDigestStoreForTest,
   type DigestStore,
   type DigestBlock,
@@ -163,6 +164,33 @@ describe("buildDigestText", () => {
     expect(text).toContain("…ほか");
     // 先頭のチケットは載っている（打ち切りは末尾側）。
     expect(text).toContain("● KZ-0");
+  });
+});
+
+describe("sendBatchNotifications（日次ダイジェスト・久原さん複製投稿）", () => {
+  const items = [n("KZ-1", "completion", "反映しました", new Date())];
+
+  it("本送信（handoff）が成功したら久原さん複製投稿（日次ダイジェスト）も呼ぶ", async () => {
+    pushMock.mockResolvedValue(true as never);
+    kuharaCopyMock.mockClear();
+
+    const ok = await sendBatchNotifications(items);
+
+    expect(ok).toBe(true);
+    expect(kuharaCopyMock).toHaveBeenCalledWith("日次ダイジェスト", ["KUHARA-DIGEST"]);
+  });
+
+  it("【修正4・回帰検出用】本送信（handoff）が失敗したら久原さん複製投稿は呼ばない（重複送信防止・2026-08-22修正）", async () => {
+    // 【修正前の欠陥】複製投稿はhandoffの成否を待たず先に呼ばれていたため、handed===false の
+    // たびに呼び出し元（runDailyNotificationBatch）がキューを消費せず再試行し、久原さんだけ
+    // 複製が連打されていた。本送信が失敗した今回は複製投稿自体が呼ばれてはいけない。
+    pushMock.mockResolvedValue(false as never);
+    kuharaCopyMock.mockClear();
+
+    const ok = await sendBatchNotifications(items);
+
+    expect(ok).toBe(false);
+    expect(kuharaCopyMock).not.toHaveBeenCalled();
   });
 });
 

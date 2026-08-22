@@ -235,6 +235,18 @@ describe("/api/process 全件GO待ち＋真田システムへの受け渡し", (
     expect(json.processed?.[0]?.notified).toBe(false);
   });
 
+  it("【修正4・回帰検出用】久原さん複製投稿（GO伺い）を正しい引数で呼ぶ", async () => {
+    // 【経緯】実機で「GO伺い・詰まり連絡・Merge待ち・完了報告・日次ダイジェストの5種別中、
+    // 一部の通知種別だけ複製通知の実装が漏れていた」バグが見つかったため、各種別に
+    // 配線テストを追加して同種の回帰を検出できるようにする（bug-check-lab指摘）。
+    fetchTicketsByState.mockResolvedValueOnce([ticketRow()]);
+    discussTicket.mockResolvedValueOnce(goDiscussion());
+
+    await POST(makeReq());
+
+    expect(notifyKuharaCopy).toHaveBeenCalledWith("GO伺い", ["KUHARA-GO"]);
+  });
+
   it("受け渡しには state=GO待ち のチケットと議論結果を渡す", async () => {
     fetchTicketsByState.mockResolvedValueOnce([ticketRow()]);
     const d = goDiscussion();

@@ -46,7 +46,14 @@ vi.mock("@/lib/handoff", () => ({
   handoffFyiToSanada: (...a: unknown[]) => handoffFyiToSanada(...(a as [])),
 }));
 
-import { notifyStuckOnce, hasStuckMarker, STUCK_MARKER_HEADING, buildStuckText } from "../notify";
+import {
+  notifyStuckOnce,
+  notifyReviewOnce,
+  hasStuckMarker,
+  STUCK_MARKER_HEADING,
+  REVIEW_MARKER_HEADING,
+  buildStuckText,
+} from "../notify";
 import type { TicketRow } from "../tickets";
 
 const ticket: TicketRow = {
@@ -231,6 +238,66 @@ describe("lib/notify 詰まり連絡の de-dup", () => {
     expect(notifyKuharaCopy).toHaveBeenCalledWith("詰まり連絡", ["KUHARA-STUCK"]);
     expect(sent).toBe(true);
     expect(handoffFyiToSanada).toHaveBeenCalledTimes(1);
+  });
+
+  it("【修正4・回帰検出用】本送信（handoff）が失敗したら久原さん複製投稿は呼ばない（重複送信防止・2026-08-22修正）", async () => {
+    // 【修正前の欠陥】複製投稿は本送信成功の確認より前に呼ばれていたため、本送信が失敗する
+    // たびに（＝de-dupマーカーが付かず次回スイープで再試行されるたびに）久原さんだけ同じ
+    // 内容を何度も受け取っていた。本送信が失敗した今回は複製投稿自体が呼ばれてはいけない。
+    handoffFyiToSanada.mockResolvedValue(false);
+    hasDiscussionHeading.mockResolvedValue(false);
+
+    const sent = await notifyStuckOnce(ticket, "理由");
+
+    expect(sent).toBe(false);
+    expect(notifyKuharaCopy).not.toHaveBeenCalled();
+  });
+});
+
+describe("lib/notify Merge待ち（レビュー）連絡の de-dup", () => {
+  const prUrl = "https://github.com/x/y/pull/1";
+  const detail = "自動マージ条件を満たさず";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    lineEnabled.mockReturnValue(true);
+    notifySlackAlert.mockResolvedValue(true);
+    notifyKuharaCopy.mockResolvedValue(true);
+    handoffEnabled.mockReturnValue(true);
+    handoffFyiToSanada.mockResolvedValue(true);
+    hasDiscussionHeading.mockResolvedValue(false);
+  });
+
+  it("印が無ければ真田handoffで送信し、印（Merge待ち通知済み）を追記し、久原さん複製投稿も呼ぶ", async () => {
+    const sent = await notifyReviewOnce(ticket, prUrl, detail);
+
+    expect(sent).toBe(true);
+    expect(handoffFyiToSanada).toHaveBeenCalledTimes(1);
+    expect(notifyKuharaCopy).toHaveBeenCalledWith("Merge待ち", ["KUHARA-REVIEW"]);
+    expect(appendDiscussionBlocks).toHaveBeenCalledTimes(1);
+    const args = appendDiscussionBlocks.mock.calls[0] as unknown as [string, { heading?: string }[]];
+    expect(args[0]).toBe("page-x");
+    expect(args[1][0].heading).toBe(REVIEW_MARKER_HEADING);
+  });
+
+  it("既に印があれば送らない（handoff・久原さん複製投稿ともに呼ばれない）", async () => {
+    hasDiscussionHeading.mockResolvedValue(true);
+
+    const sent = await notifyReviewOnce(ticket, prUrl, detail);
+
+    expect(sent).toBe(false);
+    expect(handoffFyiToSanada).not.toHaveBeenCalled();
+    expect(notifyKuharaCopy).not.toHaveBeenCalled();
+  });
+
+  it("【修正4・回帰検出用】本送信（handoff）が失敗したら久原さん複製投稿は呼ばない（重複送信防止・2026-08-22修正）", async () => {
+    handoffFyiToSanada.mockResolvedValue(false);
+
+    const sent = await notifyReviewOnce(ticket, prUrl, detail);
+
+    expect(sent).toBe(false);
+    expect(notifyKuharaCopy).not.toHaveBeenCalled();
+    expect(appendDiscussionBlocks).not.toHaveBeenCalled();
   });
 });
 

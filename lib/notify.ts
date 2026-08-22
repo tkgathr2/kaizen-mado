@@ -131,13 +131,16 @@ export async function notifyStuckOnce(
   // 既に通知済みなら送らない（連打防止）。
   if (await hasStuckMarker(ticket.pageId)) return false;
 
-  // 久原さん複製投稿（ベストエフォート・失敗しても本来のLINE/handoff通知には一切影響しない）。
-  await notifyKuharaCopy("詰まり連絡", buildKuharaStuckText(ticket, reason)).catch(() => false);
-
   const sent = await sendFyi(ticket.ticketId, buildStuckText(ticket, reason), {
     awaitsReply: true,
   });
   if (!sent) return false;
+
+  // 久原さん複製投稿（ベストエフォート・失敗しても本来のLINE/handoff通知には一切影響しない）。
+  // 【2026-08-22 bug-check-lab指摘修正】旧実装は本送信（sendFyi）より前に複製投稿していたため、
+  // 本送信が失敗してde-dupマーカーが記帳されないたびに（＝次回スイープで再試行されるたびに）
+  // 久原さんだけ同じ内容を何度も受け取っていた。本送信の成功を確認した後に移す。
+  await notifyKuharaCopy("詰まり連絡", buildKuharaStuckText(ticket, reason)).catch(() => false);
 
   // 送れたときだけ印を残す（送信失敗なら印を残さず、次回再試行できるようにする）。
   await appendDiscussionBlocks(ticket.pageId, [
@@ -182,14 +185,16 @@ export async function notifyReviewOnce(
   if (!lineEnabled() && !handoffEnabled()) return false;
   if (await hasMarker(ticket.pageId, REVIEW_MARKER_HEADING)) return false;
 
+  const sent = await sendFyi(ticket.ticketId, buildReviewText(ticket, prUrl, detail));
+  if (!sent) return false;
+
   // 久原さん複製投稿（ベストエフォート・失敗しても本来のLINE/handoff通知には一切影響しない）。
+  // 【2026-08-22 bug-check-lab指摘修正】notifyStuckOnce と同じ理由で本送信成功後に移す
+  // （本送信失敗の再試行のたびに久原さんだけ複製が連打されるのを防ぐ）。
   await notifyKuharaCopy(
     "Merge待ち",
     buildKuharaReviewText(ticket, prUrl, detail)
   ).catch(() => false);
-
-  const sent = await sendFyi(ticket.ticketId, buildReviewText(ticket, prUrl, detail));
-  if (!sent) return false;
 
   await appendDiscussionBlocks(ticket.pageId, [
     {
