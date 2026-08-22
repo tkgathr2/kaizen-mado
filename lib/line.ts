@@ -369,6 +369,40 @@ export type KuharaNotifyKind =
 /** 久原さんへのメンション用Slack user_id（AI・DX顧問候補）。mention-hisho側の実装と揃える。 */
 const KUHARA_SLACK_USER_ID = "U0BLFU47BS9";
 
+// ── 秘匿情報マスキング（複製投稿の"入口"で一括適用） ──
+// notifyKuharaCopy に渡る summaryLines には、外部実行ジョブの失敗理由
+// （app/api/execute/callback/route.ts の detail・isInfraError が分類する認証/権限/設定系
+// エラー文字列）がそのまま含まれる経路があり、トークンやBearer値等が混入する可能性がある
+// 生の文字列が、NDA未締結の社外（久原さん）へ無検閲で転送されるおそれがあった
+// （bug-check-lab指摘・2026-08-22）。個別のビルダー関数ではなく notifyKuharaCopy の入口に
+// 置くことで、将来通知種別が増えても自動的に保護される。
+// 兄弟実装（mention-hisho lib/line.ts の redactSecrets）と同じ考え方
+// （英数字+記号の長い塊をトークンとみなしてマスク）を踏襲しつつ、広域正規表現が
+// NotionページID（32桁hex）や長いURLパスも巻き込んで壊す副作用が兄弟実装側で指摘された
+// ため、先にURLをプレースホルダへ退避してから適用し、あとで復元する（URLは元々リンクとして
+// 機能する必要があるため保護する）。過度に凝る必要はなく、安全側（多少の過剰マスクは許容・
+// 秘密を漏らさないことを優先）に倒す。
+const REDACT_URL_RE = /https?:\/\/[^\s]+/g;
+// 24文字以上の英数字＋アンダースコア／ハイフンの塊をトークンとみなす。
+const REDACT_TOKEN_RE = /\b[A-Za-z0-9_-]{24,}\b/g;
+
+/** 秘匿情報（トークン等）らしき文字列を [REDACTED] に置換する（fail-safe・入口専用）。 */
+export function redactSecrets(s: string | null | undefined): string {
+  const t = s || "";
+  if (!t) return t;
+  const urls: string[] = [];
+  const placeheld = t.replace(REDACT_URL_RE, (m) => {
+    urls.push(m);
+    return ` URL${urls.length - 1} `;
+  });
+  const redacted = placeheld.replace(REDACT_TOKEN_RE, "[REDACTED]");
+  return redacted.replace(/ URL(\d+) /g, (_m, i) => urls[Number(i)] ?? "");
+}
+
+/** persona-relay への複製投稿fetchのタイムアウト（ms）。handoff.ts の TIMEOUT_MS と同じ値。
+ * リトライは不要（notifyKuharaCopy自体が呼び出し元から必ず .catch() で隔離されるfail-safe）。 */
+const KUHARA_RELAY_TIMEOUT_MS = 10_000;
+
 /**
  * 社長宛LINE通知と同じ内容の要約を、久原さん閲覧用チャンネルへ複製投稿する（ベストエフォート）。
  * 失敗しても false を返すだけで例外は投げない（呼び出し元の本来の通知処理には一切影響しない）。
@@ -381,6 +415,9 @@ export async function notifyKuharaCopy(
 ): Promise<boolean> {
   const relay = kuharaChannelRelay();
   if (!relay) return false;
+  const safeLines = summaryLines.map((l) => redactSecrets(l));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), KUHARA_RELAY_TIMEOUT_MS);
   try {
     const res = await fetch(`${relay.url}/send`, {
       method: "POST",
@@ -394,13 +431,16 @@ export async function notifyKuharaCopy(
         text: [
           `<@${KUHARA_SLACK_USER_ID}> 📋 カイゼンくん通知（複製）／${kind}`,
           ``,
-          ...summaryLines,
+          ...safeLines,
         ].join("\n"),
       }),
+      signal: controller.signal,
     });
     return res.ok;
   } catch {
     return false;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -832,6 +872,13 @@ export function buildInfraNoticeText(
  * 送信成功時は応答の sentMessages[].id を「引用返信→チケット」対応として記録する
  * （社長がこの提案を引用返信で操作できるように）。 */
 export async function pushProposal(ticket: TicketRow, d: DiscussResult): Promise<boolean> {
+  // 久原さん複製投稿（ベストエフォート）。【2026-08-22 bug-check-lab指摘修正】旧実装は
+  // 下の `if (!lineEnabled()) return false;` より後に置かれていたため、LINE未設定時に
+  // 複製投稿ごと落ちていた。複製投稿の送信先（persona-relay）はLINEの鍵に依存しないため、
+  // 他の呼び出し箇所（lib/notify.ts 等）と同様、主送信の可否に複製投稿を従属させない。
+  // buildKuharaGoText は reporter を使わないため、人名解決（resolveReporterDisplay）の前の
+  // 生ticketで足りる。
+  await notifyKuharaCopy("GO伺い", buildKuharaGoText(ticket, d)).catch(() => false);
   if (!lineEnabled()) return false;
   // 経路（Slack/サイト）は人名解決の"前"の生reporterで判定する。resolveReporterDisplay 後は
   // "高木豊大" 等に解決され "Slack:" 接頭辞が消えるため、解決後に判定すると常にサイト扱いになる
@@ -841,8 +888,6 @@ export async function pushProposal(ticket: TicketRow, d: DiscussResult): Promise
   // 解決に失敗しても buildProposalText 側で元の文字列にフォールバックされる（fail-safe）。
   const reporterDisplay = await resolveReporterDisplay(ticket.reporter);
   const ticketForText = { ...ticket, reporter: reporterDisplay };
-  // 久原さん複製投稿（ベストエフォート・失敗しても本来のLINE通知には一切影響しない）。
-  await notifyKuharaCopy("GO伺い", buildKuharaGoText(ticketForText, d)).catch(() => false);
   const res = await postLine(LINE_PUSH_ENDPOINT, {
     to: targetUserId(),
     messages: [

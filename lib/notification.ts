@@ -383,8 +383,6 @@ export async function sendBatchNotifications(
   //（LINE 5000字上限で 400 になるのを絶対に避ける）。
   const body = buildDigestText(items).slice(0, 4900);
   console.log(`[notification] digest送信 (${items.length}件)`);
-  // 久原さん複製投稿（ベストエフォート・失敗しても本来のダイジェスト送信には一切影響しない）。
-  await notifyKuharaCopy("日次ダイジェスト", buildKuharaDigestText(items)).catch(() => false);
   // ダイジェストは複数チケットの束ねなので、真田handoffの冪等キー（ticketId単位）には
   // 「digest:<日付>」という合成IDを使う（同日の再送だけ重複扱いにする）。
   const digestId = `digest:${new Date().toISOString().slice(0, 10)}`;
@@ -397,8 +395,15 @@ export async function sendBatchNotifications(
       `日次ダイジェストを真田チャネルへ送れませんでした。件数：${items.length}`,
       "⚠️ 日次ダイジェストが真田チャネルへ送れませんでした"
     ).catch(() => false);
+    return false;
   }
-  return handed;
+  // 久原さん複製投稿（ベストエフォート・失敗しても本来のダイジェスト送信結果には一切影響しない）。
+  // 【2026-08-22 bug-check-lab指摘修正】旧実装は handoffFyiToSanada の成否を待たず先に
+  // 複製投稿していたため、handed===false のたびに呼び出し元（runDailyNotificationBatch）が
+  // キューを消費せず翌日以降に同じ項目を再試行し、久原さんだけ複製が連打されていた。
+  // 本送信の成功を確認した後に移す。
+  await notifyKuharaCopy("日次ダイジェスト", buildKuharaDigestText(items)).catch(() => false);
+  return true;
 }
 
 export interface BatchResult {

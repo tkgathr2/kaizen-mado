@@ -268,6 +268,15 @@ describe("/api/execute/callback merged経路の完了報告", () => {
     expect(detail).toContain("KZ-17");
     expect(detail).toContain("merged-text");
   });
+
+  it("【修正4・回帰検出用】久原さん複製投稿（完了報告）を正しい引数で呼ぶ", async () => {
+    // 【経緯】実機で「GO伺い・詰まり連絡・Merge待ち・完了報告・日次ダイジェストの5種別中、
+    // 一部の通知種別だけ複製通知の実装が漏れていた」バグが見つかったため、各種別に
+    // 配線テストを追加して同種の回帰を検出できるようにする（bug-check-lab指摘）。
+    handoffFyiToSanada.mockResolvedValue(true);
+    await POST(makeReq({ pageId: "page-1", ticketId: "KZ-17", result: "merged", prUrl: "https://x/pr/1" }));
+    expect(notifyKuharaCopy).toHaveBeenCalledWith("完了報告", ["KUHARA-MERGED"]);
+  });
 });
 
 describe("/api/execute/callback review経路のPR URL記録（stallカード対応・2026-08-15）", () => {
