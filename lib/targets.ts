@@ -90,6 +90,9 @@ export const TARGETS: TargetMeta[] = [
   { system: "らくらく契約くん", repo: null, healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
   // 巡回くん＝Indeed公開ページ巡回ツール（テレアポリスト自動収集・Node.js/Railway）。https://junkai.takagi.bz
   { system: "巡回くん", repo: "tkgathr2/junkai-kun", healthUrl: "https://junkai.takagi.bz", forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
+  // 巡回くん For tsunagee＝提携求人(Tancee/トレマチ/トクテイバンク/Givers Network)収集+管理画面。Node.js/Railway。
+  // 管理画面は全ルートGoogle認証/Basic認証必須のため、認証不要のhealthチェック専用エンドポイントが無くhealthUrlはnull。
+  { system: "巡回くん For tsunagee", repo: "tkgathr2/junkai-tsunagee", healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
   // 見積もりシステム＝見積もり自動化システム（mitsumori-app・自前Next.jsアプリ）。
   // 2026-06-19 フェーズ1本番化（Vercel）。会社×区分×人数×日数で金額自動計算。
   { system: "見積もりシステム", repo: "tkgathr2/mitsumori-app", healthUrl: "https://mitsumori-app-pied.vercel.app", forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
