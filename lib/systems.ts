@@ -16,6 +16,7 @@ export const SYSTEMS: { slug: string; name: string }[] = [
   { slug: "seiko", name: "seiko" },  // 旧seiko（tkgathr2/seiko・MF系）。請求書仕分けは下の seiko-chan
   { slug: "seiko-chan", name: "聖子ちゃん（請求書仕分け）" },  // tkgathr2/seiko-chan（Gmail請求書→仕分け→Slack通知）
   { slug: "junkai", name: "巡回くん" },
+  { slug: "junkai-tsunagee", name: "巡回くん For tsunagee" },
   { slug: "kaizen", name: "カイゼンくん本体" },
   { slug: "aio-checker", name: "AIOダッシュボードくん" },
   { slug: "saiyo-kanri", name: "採用管理システム" },
