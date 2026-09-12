@@ -143,6 +143,10 @@ export const TARGETS: TargetMeta[] = [
   // /healthz だけは死活監視用に認証対象外で 200 を返す（2026-07-26 curl実測：200 / application/json）。
   // 業務データは含まず {"status":"ok",...} のみ返すため healthUrl として安全に使える。
   { system: "AI・DXラボ CSチーム", repo: "tkgathr2/ai-dx-cs-team", healthUrl: "https://ai-dx-cs-team-production.up.railway.app/healthz", forbiddenPaths: PII_HEAVY_FORBIDDEN, autoEligible: true },
+  // 名刺管理くん＝Eight(Sansan)のAPI/MCP非対応を解決する社内向け名刺管理アプリ（Next.js+Railway Postgres+Vercel）。
+  // 氏名・連絡先等の名刺情報を恒常保有するため PII_HEAVY_FORBIDDEN。本番= https://meishi.takagi.bz
+  // 全ページGoogle認証必須のため /login（未ログイン200）をhealthUrlとして使用。
+  { system: "名刺管理くん", repo: "tkgathr2/meishi", healthUrl: "https://meishi.takagi.bz/login", forbiddenPaths: PII_HEAVY_FORBIDDEN, autoEligible: true },
   { system: "その他", repo: null, healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
 ];
 
