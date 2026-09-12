@@ -77,6 +77,9 @@ const PII_HEAVY_FORBIDDEN = [
 // （execute側で再判定して止めるのをやめた）。止まるのは repo:null（リポ未設定）のときだけ。
 // 提案(GO伺い)フェーズでは preGate が機微・新機能を見て社長にGO伺いを出す挙動は維持。
 export const TARGETS: TargetMeta[] = [
+  // Tメール（Gmail仕分けレイヤー・2026-09-12着手）。C:\dev\tmailにローカルscaffold済み・GitHub未push。
+  // Gmail本文・refresh_tokenを扱うためPII_HEAVY_FORBIDDEN。push後にrepo/healthUrlを更新すること。
+  { system: "Tメール", repo: null, healthUrl: null, forbiddenPaths: PII_HEAVY_FORBIDDEN, autoEligible: true },
   // 履歴書メーカー（在留カードOCR→履歴書PDF）。Next.js／Vercel本番。
   { system: "履歴書メーカー", repo: "tkgathr2/resume-maker", healthUrl: "https://rirekisyo.takagi.bz/auth/signin", forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
   { system: "プロレポ", repo: null, healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
