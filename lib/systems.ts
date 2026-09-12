@@ -2,7 +2,7 @@
 // slug（URLの ?sys= で使う短い識別子）→ 正式名（Notionの「対象システム」selectの値）
 
 export const SYSTEMS: { slug: string; name: string }[] = [
-  { slug: "tmail", name: "Tメール" },  // Gmail仕分けレイヤー（V1開発中・2026-09-12）。Afterボタン→Gmail実フィルタ自動作成
+  { slug: "tmail", name: "Tメール" },  // Gmail仕分けレイヤー（V1本番稼働・2026-09-12）。Afterボタン→Gmail実フィルタ自動作成
   { slug: "rirekisyo", name: "履歴書メーカー" },
   { slug: "prorepo", name: "プロレポ" },
   { slug: "sterepo", name: "ステレポ" },
