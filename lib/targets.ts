@@ -147,6 +147,10 @@ export const TARGETS: TargetMeta[] = [
   // 氏名・連絡先等の名刺情報を恒常保有するため PII_HEAVY_FORBIDDEN。本番= https://meishi.takagi.bz
   // 全ページGoogle認証必須のため /login（未ログイン200）をhealthUrlとして使用。
   { system: "名刺管理くん", repo: "tkgathr2/meishi", healthUrl: "https://meishi.takagi.bz/login", forbiddenPaths: PII_HEAVY_FORBIDDEN, autoEligible: true },
+  // あつめるくん＝Claude Codeの作業記録・会議をBacklogに集め、ミエルカくんが日報/週報をSlackへ届ける（Next.js+Railway Postgres+worker）。
+  // 作業要約という社内の業務情報を恒常保有するため PII_HEAVY_FORBIDDEN。本番= https://atsumeru.aidx.bz
+  // /api/health は未ログインで 200 を返す（{"status":"ok","db":"ok"…}）ため healthUrl に使う。
+  { system: "あつめるくん", repo: "tkgathr2/atsumeru", healthUrl: "https://atsumeru.aidx.bz/api/health", forbiddenPaths: PII_HEAVY_FORBIDDEN, autoEligible: true },
   { system: "その他", repo: null, healthUrl: null, forbiddenPaths: COMMON_FORBIDDEN, autoEligible: true },
 ];
 
