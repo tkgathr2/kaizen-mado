@@ -39,6 +39,7 @@ export const SYSTEMS: { slug: string; name: string }[] = [
   { slug: "rakuraku-shiwake", name: "ラクラク仕訳くん" },  // tkgathr2/rakuraku-shiwake（MF ME自動仕訳・周栄システム）
   { slug: "ai-dx-cs-team", name: "AI・DXラボ CSチーム" },  // tkgathr2/ai-dx-cs-team（HO-224・顧問先CSリレーションズのLINEグループ常駐Bot＋管制盤）
   { slug: "meishi", name: "名刺管理くん" },  // tkgathr2/meishi（Eight API/MCP非対応解決の社内名刺管理アプリ）https://meishi.takagi.bz
+  { slug: "atsumeru", name: "あつめるくん" },  // tkgathr2/atsumeru（Claude Codeの作業記録とミーティングをBacklogへ集める・ミエルカくん日報）https://atsumeru.aidx.bz
   { slug: "other", name: "その他" },
 ];
 
